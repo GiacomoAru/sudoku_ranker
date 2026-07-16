@@ -167,7 +167,10 @@ def plot_difficulty_chain(analysis, figsize=(11, 4)):
     plt.show()
 
 
-def gallery(analyses, ncols=3, figsize_per_cell=(3.4, 4.0)):
+def gallery(analyses, 
+            solved=False,
+            ncols=3, 
+            figsize_per_cell=(3.4, 4.0)):
     """Show the solved grid of several analysed puzzles side by side, with
     their difficulty label."""
     n = len(analyses)
@@ -180,7 +183,10 @@ def gallery(analyses, ncols=3, figsize_per_cell=(3.4, 4.0)):
     for i, res in enumerate(analyses):
         ax = axes[i]
         given_mask = res['original'] != 0
-        draw_grid(res['solved_grid'], ax=ax, given_mask=given_mask)
+        if solved:
+            draw_grid(res['solved_grid'], ax=ax, given_mask=given_mask)
+        else:
+            draw_grid(res['original'], ax=ax, given_mask=given_mask)
         g = res['grading']
         subtitle = f"{res['name']}\n{g['label']} (max L{g['max_difficulty']}, {g.get('n_steps', 0)} step)"
         ax.set_title(subtitle, fontsize=9)
