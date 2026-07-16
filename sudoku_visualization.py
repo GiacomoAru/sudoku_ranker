@@ -28,14 +28,69 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import numpy as np
 import pandas as pd
+from matplotlib.ticker import MaxNLocator
 
 from sudoku_techniques import _TECHNIQUE_ORDER
 
 DIFF_COLORS = {
-    1: '#8ecae6', 2: '#95d5b2', 3: '#ffd166',
-    4: '#f4a261', 5: '#e76f51', 6: '#9d0208',
+    1: '#8ecae6',
+    2: '#95d5b2',
+    3: '#ffd166',
+    4: '#f4a261',
+    5: '#e76f51',
 }
-DIFF_LABEL_SHORT = {1: 'L1', 2: 'L2', 3: 'L3', 4: 'L4', 5: 'L5', 6: 'L6'}
+DIFF_LABEL_SHORT = {
+    1: 'L1',
+    2: 'L2',
+    3: 'L3',
+    4: 'L4',
+    5: 'L5',
+}
+
+
+def _same_technique_instances(move):
+    """Numero di istanze disponibili della tecnica scelta nello step."""
+    return max(
+        int(
+            move.get(
+                "applicable_by_technique",
+                {},
+            ).get(
+                move.get("technique"),
+                1,
+            )
+        ),
+        1,
+    )
+
+
+def _comparable_alternatives(chain):
+    """
+    Restituisce un conteggio di alternative confrontabile tra tutti gli step.
+
+    Se ogni step contiene ``n_best_alternatives``, usa le mosse disponibili
+    alla stessa difficoltà minima. Altrimenti usa il numero di istanze della
+    tecnica effettivamente scelta.
+    """
+    use_best_alternatives = all(
+        move.get("n_best_alternatives") is not None
+        for move in chain
+    )
+
+    if use_best_alternatives:
+        values = [
+            max(int(move["n_best_alternatives"]), 1)
+            for move in chain
+        ]
+        label = "Alternative alla stessa difficoltà"
+    else:
+        values = [
+            _same_technique_instances(move)
+            for move in chain
+        ]
+        label = "Istanze della tecnica scelta"
+
+    return values, label
 
 
 def draw_grid(grid, ax=None, highlight=None, candidates=None,
@@ -97,71 +152,263 @@ def draw_grid(grid, ax=None, highlight=None, candidates=None,
 
 
 def draw_step(analysis, step_index, figsize=(5.2, 5.2)):
-    """Draw the grid state right after a given step in the chain, with the
-    technique's pattern highlighted, plus a caption describing the move."""
-    chain = analysis['chain']
+    """Mostra la griglia prima dello step e le alternative disponibili."""
+    chain = analysis["chain"]
+
     if not chain:
-        print("Nessun passaggio registrato (il puzzle era gia risolto o bloccato subito).")
+        print(
+            "Nessun passaggio registrato "
+            "(il puzzle era gia risolto o bloccato subito)."
+        )
         return
+
     step_index = max(0, min(step_index, len(chain) - 1))
     move = chain[step_index]
 
     if step_index == 0:
-        grid_before = analysis['original']
+        grid_before = analysis["original"]
     else:
-        grid_before = chain[step_index - 1]['grid_after']
+        grid_before = chain[step_index - 1]["grid_after"]
+
+    technique_instances = _same_technique_instances(move)
+    other_technique_instances = max(technique_instances - 1, 0)
+
+    alternatives_text = (
+        f"Altre istanze della stessa tecnica: "
+        f"{other_technique_instances}"
+    )
+
+    if move.get("n_best_alternatives") is not None:
+        other_best_alternatives = max(
+            int(move["n_best_alternatives"]) - 1,
+            0,
+        )
+        alternatives_text += (
+            f" | Altre mosse alla stessa difficoltà: "
+            f"{other_best_alternatives}"
+        )
 
     fig, ax = plt.subplots(figsize=figsize)
-    draw_grid(grid_before, ax=ax, highlight=move['highlight'])
-    caption = (f"Step {move['step']}/{len(chain)} - {move['technique']} "
-               f"(difficolta {move['difficulty']})\n{move['description']}")
-    ax.text(4.5, 9.55, caption, ha='center', va='top', fontsize=9, wrap=True)
+    draw_grid(
+        grid_before,
+        ax=ax,
+        highlight=move["highlight"],
+    )
+
+    caption = (
+        f"Step {move['step']}/{len(chain)} - "
+        f"{move['technique']} "
+        f"(difficolta {move['difficulty']})\n"
+        f"{alternatives_text}\n"
+        f"{move['description']}"
+    )
+
+    ax.text(
+        4.5,
+        9.55,
+        caption,
+        ha="center",
+        va="top",
+        fontsize=9,
+        wrap=True,
+    )
+
     plt.tight_layout()
     plt.show()
 
 
-def plot_difficulty_chain(analysis, figsize=(11, 4)):
-    """Plot the difficulty level used at every step of the solving chain,
-    colored by technique. This is the 'bidimensional' view of the chain:
-    x = step number (progress through the solve), y = difficulty of the
-    technique needed at that point, color = technique family."""
-    chain = analysis['chain']
+def plot_difficulty_chain(analysis, figsize=(12, 4.6)):
+    """
+    Mostra l'andamento della difficoltà e le alternative disponibili.
+
+    Il colore dei punti identifica la famiglia della tecnica. La linea sul
+    secondo asse mostra quante alternative comparabili erano disponibili:
+    preferibilmente quelle alla stessa difficoltà minima, oppure, come
+    fallback, le istanze della tecnica scelta.
+    """
+    chain = analysis["chain"]
+
     if not chain:
         print("Catena vuota: nulla da visualizzare.")
         return
 
-    steps = [m['step'] for m in chain]
-    diffs = [m['difficulty'] for m in chain]
-    families = [m['family'] for m in chain]
-    fam_list = sorted(set(families))
-    cmap = plt.get_cmap('tab10')
-    fam_color = {f: cmap(i % 10) for i, f in enumerate(fam_list)}
-    colors = [fam_color[f] for f in families]
+    steps = [move["step"] for move in chain]
+    diffs = [float(move["difficulty"]) for move in chain]
+    families = [move["family"] for move in chain]
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize, gridspec_kw={'width_ratios': [2.4, 1]})
+    alternative_counts, alternative_label = _comparable_alternatives(
+        chain
+    )
 
-    ax1.scatter(steps, diffs, c=colors, s=45, zorder=3, edgecolor='black', linewidth=0.4)
-    ax1.plot(steps, diffs, color='#cccccc', linewidth=1, zorder=1)
-    ax1.set_xlabel('Step di risoluzione')
-    ax1.set_ylabel('Difficolta della tecnica usata')
-    ax1.set_yticks(range(1, 7))
-    ax1.set_ylim(0.5, 6.5)
-    ax1.set_title(f"Catena logica ({analysis['name']}) - {analysis['grading']['label']}")
-    ax1.grid(alpha=0.3)
+    family_list = sorted(set(families))
+    cmap = plt.get_cmap("tab10")
+    family_color = {
+        family: cmap(index % 10)
+        for index, family in enumerate(family_list)
+    }
+    point_colors = [
+        family_color[family]
+        for family in families
+    ]
 
-    handles = [plt.Line2D([0], [0], marker='o', color='w', label=f,
-                           markerfacecolor=fam_color[f], markersize=8, markeredgecolor='black')
-               for f in fam_list]
-    ax1.legend(handles=handles, loc='upper left', fontsize=7, ncol=1,
-               bbox_to_anchor=(1.02, 1.0), borderaxespad=0)
+    fig, (ax1, ax2) = plt.subplots(
+        1,
+        2,
+        figsize=figsize,
+        gridspec_kw={"width_ratios": [2.6, 1]},
+    )
 
-    hist = analysis['grading']['histogram']
-    levels = list(range(1, 7))
-    counts = [hist.get(l, 0) for l in levels]
-    bar_colors = [DIFF_COLORS[l] for l in levels]
-    ax2.bar([DIFF_LABEL_SHORT[l] for l in levels], counts, color=bar_colors, edgecolor='black')
-    ax2.set_title('Passaggi per livello')
-    ax2.set_ylabel('Numero di step')
+    ax1.plot(
+        steps,
+        diffs,
+        linewidth=0.9,
+        alpha=0.45,
+        zorder=1,
+    )
+    ax1.scatter(
+        steps,
+        diffs,
+        c=point_colors,
+        s=30,
+        zorder=3,
+        edgecolor="black",
+        linewidth=0.35,
+    )
+
+    min_difficulty = max(
+        1.0,
+        np.floor(min(diffs) * 2) / 2,
+    )
+    max_difficulty = min(
+        5.0,
+        np.ceil(max(diffs) * 2) / 2,
+    )
+    difficulty_ticks = np.arange(
+        min_difficulty,
+        max_difficulty + 0.25,
+        0.5,
+    )
+
+    ax1.set_xlabel("Step di risoluzione")
+    ax1.set_ylabel("Difficoltà della tecnica usata")
+    ax1.set_yticks(difficulty_ticks)
+    ax1.set_ylim(
+        max(0.75, min_difficulty - 0.25),
+        min(5.25, max_difficulty + 0.25),
+    )
+    ax1.set_title(
+        f"Catena logica ({analysis['name']}) - "
+        f"{analysis['grading']['label']}"
+    )
+    ax1.grid(
+        axis="both",
+        alpha=0.22,
+        linewidth=0.7,
+    )
+
+    alternative_axis = ax1.twinx()
+    alternative_line, = alternative_axis.plot(
+        steps,
+        alternative_counts,
+        marker=".",
+        markersize=4,
+        linewidth=1,
+        alpha=0.55,
+        zorder=2,
+        label=alternative_label,
+    )
+    alternative_axis.fill_between(
+        steps,
+        alternative_counts,
+        0,
+        alpha=0.05,
+    )
+    alternative_axis.set_ylabel(alternative_label)
+    alternative_axis.set_ylim(
+        0,
+        max(alternative_counts) + 1,
+    )
+    alternative_axis.yaxis.set_major_locator(
+        MaxNLocator(integer=True)
+    )
+
+    family_handles = [
+        plt.Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="w",
+            label=family,
+            markerfacecolor=family_color[family],
+            markersize=7,
+            markeredgecolor="black",
+        )
+        for family in family_list
+    ]
+
+    family_legend = ax1.legend(
+        handles=family_handles,
+        loc="upper left",
+        fontsize=7,
+        ncol=1,
+        frameon=True,
+    )
+    ax1.add_artist(family_legend)
+
+    alternative_axis.legend(
+        handles=[alternative_line],
+        loc="upper right",
+        fontsize=7,
+        frameon=True,
+    )
+
+    difficulty_values = sorted(set(diffs))
+    counts = [
+        sum(
+            np.isclose(value, difficulty)
+            for value in diffs
+        )
+        for difficulty in difficulty_values
+    ]
+    labels = [
+        f"L{difficulty:g}"
+        for difficulty in difficulty_values
+    ]
+
+    histogram_cmap = plt.get_cmap("YlOrRd")
+    bar_colors = [
+        histogram_cmap(
+            np.clip(
+                (difficulty - 1.0) / 4.0,
+                0.0,
+                1.0,
+            )
+        )
+        for difficulty in difficulty_values
+    ]
+
+    ax2.bar(
+        labels,
+        counts,
+        color=bar_colors,
+        edgecolor="black",
+        linewidth=0.6,
+    )
+    ax2.set_title("Passaggi per difficoltà")
+    ax2.set_xlabel("Difficoltà")
+    ax2.set_ylabel("Numero di step")
+    ax2.yaxis.set_major_locator(
+        MaxNLocator(integer=True)
+    )
+    ax2.grid(
+        axis="y",
+        alpha=0.22,
+        linewidth=0.7,
+    )
+    ax2.tick_params(
+        axis="x",
+        labelrotation=45,
+    )
 
     plt.tight_layout()
     plt.show()
@@ -313,22 +560,25 @@ def analyses_summary_dataframe(analyses):
             "nome": analysis["name"],
             "stato": analysis["status"],
             "difficolta": grading["label"],
-            "difficolta_massima": grading["max_difficulty"],
-            "livello_massimo": grading.get(
-                "max_level",
-                int(grading["max_difficulty"]),
-            ),
-            "punteggio": grading.get(
+            "carico": grading.get(
                 "workload_score",
                 grading.get("score", 0),
             ),
+            "difficolta_percepita": grading.get(
+                "perceived_difficulty",
+                0,
+            ),
+            "difficolta_massima": grading["max_difficulty"],
             "numero_step": grading.get(
                 "n_steps",
                 len(analysis["chain"]),
             ),
-            "step_massimi": grading.get("hardest_steps"),
-            "step_non_banali": grading.get("nontrivial_steps"),
-            "step_avanzati": grading.get("advanced_steps"),
+            "step_non_banali": grading.get(
+                "nontrivial_steps"
+            ),
+            "step_avanzati": grading.get(
+                "advanced_steps"
+            ),
             "solvibile_verificato": analysis.get(
                 "backtracking_verified_solvable"
             ),

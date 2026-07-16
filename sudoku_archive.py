@@ -21,7 +21,7 @@ PUZZLE_SCHEMA_VERSION = 1
 
 # Incrementare questo numero quando cambia il funzionamento del solver
 # o il formato dell'analisi. Le vecchie analisi verranno ricalcolate.
-ANALYSIS_VERSION = 2
+ANALYSIS_VERSION = 3
 
 # Evita anche letture ripetute dal disco durante la stessa esecuzione.
 _ANALYSIS_MEMORY_CACHE = {}
