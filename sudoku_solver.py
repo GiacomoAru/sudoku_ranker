@@ -35,52 +35,61 @@ import sudoku_techniques as st
 
 
 from collections import Counter
-'''from sudoku_data_structure import *
-from sudoku_techniques import *
 
-from collections import Counter
-
-TECHNIQUE_DIFFICULTY = {
-    "Naked Single": 1.0,
-    "Hidden Single": 1.2,
-
-    "Pointing": 2.0,
-    "Claiming": 2.2,
-    "Naked Pair": 2.0,
-    "Hidden Pair": 2.5,
-
-    "Naked Triple": 3.0,
-    "X-Wing": 3.5,
-    "Unique Rectangle Type 1": 3.5,
-
-    "Naked Quadruple": 4.0,
-    "Hidden Triple": 4.0,
-    "Y-Wing": 4.0,
-    "XYZ-Wing": 4.5,
-    "Swordfish": 4.5,
-
-    "Hidden Quadruple": 5.0,
-    "Jellyfish": 5.0,
-    
-    # fixed priority used only to break ties between moves of equal difficulty,
-    # so that e.g. a Naked Pair is always preferred over a Hidden Pair when both
-    # are difficulty 2 and both are available in the same step.
-    _TECHNIQUE_ORDER = [
-        'Naked Single', 'Hidden Single', 'Pointing', 'Claiming',
-        'Naked Pair', 'Hidden Pair', 'Unique Rectangle Type 1',
-        'Naked Triple', 'X-Wing', 'Naked Quadruple', 'Hidden Triple',
-        'Y-Wing', 'XYZ-Wing', 'Swordfish', 'Hidden Quadruple', 'Jellyfish',
-    ]
-}'''
+DIFFICULTY_LABEL = {
+    1: "Fondamentale",
+    2: "Facile",
+    3: "Intermedio",
+    4: "Avanzato",
+    5: "Esperto",
+}
+DIFFICULTY_WORKLOAD_WEIGHT = {
+    1: 0,
+    2: 1,
+    3: 3,
+    4: 8,
+    5: 20,
+}
+_TECHNIQUE_RANK = {
+    technique: index
+    for index, technique in enumerate(st._TECHNIQUE_ORDER)
+}
 
 
 
+def _difficulty_score(move):
+    """
+    Restituisce la difficoltà precisa della tecnica.
 
+    Usa TECHNIQUE_DIFFICULTY come fonte principale e il valore contenuto
+    nella mossa solamente come fallback.
+    """
+    return float(
+        st.TECHNIQUE_DIFFICULTY.get(
+            move["technique"],
+            move.get("difficulty", 99),
+        )
+    )
+def _difficulty_level(move):
+    """
+    Converte il punteggio preciso nella categoria generale 1-5.
+
+    Esempi:
+    1.2 -> livello 1
+    3.5 -> livello 3
+    4.7 -> livello 4
+    """
+    return int(_difficulty_score(move))
 def _tie_rank(move):
-    try:
-        return st._TECHNIQUE_ORDER.index(move['technique'])
-    except ValueError:
-        return len(st._TECHNIQUE_ORDER)
+    return _TECHNIQUE_RANK.get(
+        move["technique"],
+        len(_TECHNIQUE_RANK),
+    )
+def _move_sort_key(move):
+    return (
+        _difficulty_score(move),
+        _tie_rank(move),
+    )
 
 
 def collect_all_moves(state, early_stop=True):
@@ -95,7 +104,7 @@ def collect_all_moves(state, early_stop=True):
         found = fn(state)
         if found:
             moves.extend(found)
-            local_min = min(m['difficulty'] for m in found)
+            local_min = min(_difficulty_score(move) for move in found)
             best_diff = local_min if best_diff is None else min(best_diff, local_min)
     return moves
 
@@ -139,58 +148,123 @@ def solve_and_log(grid, max_steps=2000, verbose=False):
             Counter(move["technique"] for move in moves)
         )
 
-        moves.sort(
-            key=lambda move: (
-                move["difficulty"],
-                _tie_rank(move),
-            )
-        )
+        moves.sort(key=_move_sort_key)
 
         chosen = moves[0]
+        chosen_score = _difficulty_score(chosen)
+        chosen_level = int(chosen_score)
         n_alternatives = len(moves)
 
         apply_move(state, chosen)
         step_no += 1
-
+        
         record = dict(chosen)
-        record['step'] = step_no
-        record['n_alternatives'] = n_alternatives
-        record['grid_after'] = state.grid.copy()
+        record["step"] = step_no
+        record["n_alternatives"] = n_alternatives
+        record["grid_after"] = state.grid.copy()
         record["applicable_by_technique"] = applicable_by_technique
+
+        record["difficulty"] = chosen_score
+        record["difficulty_level"] = chosen_level
+
         chain.append(record)
 
         if verbose:
-            print(f"[{step_no:03d}] {chosen['technique']:<26} "
-                  f"(diff {chosen['difficulty']})  {chosen['description']}")
+            print(
+                f"[{step_no:03d}] "
+                f"{chosen['technique']:<30} "
+                f"(diff {chosen_score:.1f}) "
+                f"{chosen['description']}"
+            )
 
     status = 'solved' if state.is_solved() else 'stuck'
     return state, chain, status
 
 
 def grade_difficulty(chain, status):
-    """Turn a solving chain into a difficulty rating."""
+    """Valuta il livello tecnico richiesto e il carico di risoluzione."""
     if not chain:
-        return {'label': 'N/A', 'max_difficulty': 0, 'score': 0,
-                'histogram': {}, 'status': status}
+        return {
+            "label": "N/A",
+            "max_difficulty": 0,
+            "max_level": 0,
+            "score": 0,
+            "workload_score": 0,
+            "histogram": {},
+            "status": status,
+            "n_steps": 0,
+        }
 
-    diffs = [m['difficulty'] for m in chain]
-    histogram = {lvl: diffs.count(lvl) for lvl in range(1, 7)}
-    max_diff = max(diffs)
+    difficulty_scores = [
+        float(
+            move.get(
+                "difficulty",
+                st.TECHNIQUE_DIFFICULTY.get(
+                    move["technique"],
+                    99,
+                ),
+            )
+        )
+        for move in chain
+    ]
 
-    # weighted score: rewards both the hardest technique required and how
-    # often non-trivial techniques were needed, so two puzzles that both
-    # peak at "Hard" but differ in how many hard steps they needed don't
-    # get graded identically.
-    score = sum(lvl * count for lvl, count in histogram.items()) / len(diffs)
+    difficulty_levels = [
+        int(score)
+        for score in difficulty_scores
+    ]
 
-    if status != 'solved':
-        label = 'Estremo (richiede tecniche non implementate: catene forzanti / AIC)'
+    histogram = {
+        level: difficulty_levels.count(level)
+        for level in range(1, 6)
+    }
+
+    max_difficulty = max(difficulty_scores)
+    max_level = int(max_difficulty)
+
+    hardest_steps = sum(
+        score == max_difficulty
+        for score in difficulty_scores
+    )
+
+    nontrivial_steps = sum(
+        level >= 2
+        for level in difficulty_levels
+    )
+
+    advanced_steps = sum(
+        level >= 4
+        for level in difficulty_levels
+    )
+
+    workload_score = sum(
+        DIFFICULTY_WORKLOAD_WEIGHT[level]
+        for level in difficulty_levels
+    )
+
+    if status == "solved":
+        label = DIFFICULTY_LABEL.get(
+            max_level,
+            "Sconosciuto",
+        )
     else:
-        label = st.DIFFICULTY_LABEL.get(max_diff, '?')
+        label = "Oltre la copertura del solver"
 
     return {
-        'label': label, 'max_difficulty': max_diff, 'score': round(score, 2),
-        'histogram': histogram, 'status': status, 'n_steps': len(chain),
+        "label": label,
+        "max_difficulty": max_difficulty,
+        "max_level": max_level,
+
+        # Mantenuto per compatibilità con il notebook.
+        "score": workload_score,
+        "workload_score": workload_score,
+
+        "histogram": histogram,
+        "status": status,
+        "n_steps": len(chain),
+
+        "hardest_steps": hardest_steps,
+        "nontrivial_steps": nontrivial_steps,
+        "advanced_steps": advanced_steps,
     }
 
 

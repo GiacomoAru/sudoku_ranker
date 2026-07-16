@@ -400,6 +400,26 @@ def list_sudokus():
     )
 
 
+def parse_sudoku(text):
+    cleaned = "".join(text.split()).replace(".", "0")
+
+    if len(cleaned) != 81:
+        raise ValueError(
+            f"Il Sudoku deve contenere 81 celle, trovate {len(cleaned)}."
+        )
+
+    if not cleaned.isdigit():
+        raise ValueError(
+            "Il Sudoku può contenere solo cifre e punti."
+        )
+
+    grid = np.array(
+        [int(char) for char in cleaned],
+        dtype=int,
+    ).reshape(9, 9)
+
+    return grid
+
 # ---------------------------------------------------------------------------
 # Salvataggio e caricamento delle analisi
 # ---------------------------------------------------------------------------

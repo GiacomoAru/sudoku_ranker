@@ -27,6 +27,7 @@ out a gallery of several analysed puzzles.
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import numpy as np
+import pandas as pd
 
 from sudoku_techniques import _TECHNIQUE_ORDER
 
@@ -166,7 +167,7 @@ def plot_difficulty_chain(analysis, figsize=(11, 4)):
     plt.show()
 
 
-def gallery(analyses, ncols=3, figsize_per_cell=(3.4, 3.6)):
+def gallery(analyses, ncols=3, figsize_per_cell=(3.4, 4.0)):
     """Show the solved grid of several analysed puzzles side by side, with
     their difficulty label."""
     n = len(analyses)
@@ -192,7 +193,6 @@ def gallery(analyses, ncols=3, figsize_per_cell=(3.4, 3.6)):
 
 
 def summary_dataframe(analysis):
-    import pandas as pd
     rows = []
     for m in analysis['chain']:
         rows.append({
@@ -201,6 +201,7 @@ def summary_dataframe(analysis):
             'descrizione': m['description'],
         })
     return pd.DataFrame(rows)
+
 
 def plot_technique_activity(
     analysis,
@@ -293,3 +294,38 @@ def plot_technique_activity(
 
     plt.tight_layout()
     plt.show()
+    
+    
+def analyses_summary_dataframe(analyses):
+    """Crea il riepilogo sintetico di una lista di analisi Sudoku."""
+    rows = []
+
+    for analysis in analyses:
+        grading = analysis["grading"]
+
+        rows.append({
+            "nome": analysis["name"],
+            "stato": analysis["status"],
+            "difficolta": grading["label"],
+            "difficolta_massima": grading["max_difficulty"],
+            "livello_massimo": grading.get(
+                "max_level",
+                int(grading["max_difficulty"]),
+            ),
+            "punteggio": grading.get(
+                "workload_score",
+                grading.get("score", 0),
+            ),
+            "numero_step": grading.get(
+                "n_steps",
+                len(analysis["chain"]),
+            ),
+            "step_massimi": grading.get("hardest_steps"),
+            "step_non_banali": grading.get("nontrivial_steps"),
+            "step_avanzati": grading.get("advanced_steps"),
+            "solvibile_verificato": analysis.get(
+                "backtracking_verified_solvable"
+            ),
+        })
+
+    return pd.DataFrame(rows)

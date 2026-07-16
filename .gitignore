@@ -2,3 +2,4 @@
 /.vscode
 /sudoku.code-workspace
 /sudoku_data
+/__pycache__
