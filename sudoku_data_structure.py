@@ -124,6 +124,7 @@ class SudokuState:
         assert len(s) == 81, f"expected 81 chars, got {len(s)}"
         digits = [int(ch) for ch in s]
         return SudokuState(np.array(digits).reshape(9, 9))
+    
 
 
 def backtracking_solve(grid):

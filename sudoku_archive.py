@@ -40,7 +40,7 @@ def _current_timestamp():
     return datetime.now(timezone.utc).isoformat()
 
 
-def _normalise_sudoku_grid(grid):
+def normalise_sudoku_grid(grid):
     """Converte stringhe, array e SudokuState in un array NumPy 9x9."""
     if isinstance(grid, sds.SudokuState):
         grid = grid.grid
@@ -76,7 +76,7 @@ def _normalise_sudoku_grid(grid):
 
 
 def _grid_to_string(grid):
-    grid = _normalise_sudoku_grid(grid)
+    grid = normalise_sudoku_grid(grid)
     return "".join(str(int(value)) for value in grid.flat)
 
 
@@ -213,7 +213,7 @@ def _restore_move(move):
 
     for field in ("grid_before", "grid_after"):
         if restored.get(field) is not None:
-            restored[field] = _normalise_sudoku_grid(restored[field])
+            restored[field] = normalise_sudoku_grid(restored[field])
 
     for field in ("candidates_before", "candidates_after"):
         if field in restored:
@@ -225,11 +225,11 @@ def _restore_move(move):
 def _restore_analysis(data):
     analysis = dict(data)
 
-    analysis["original"] = _normalise_sudoku_grid(
+    analysis["original"] = normalise_sudoku_grid(
         analysis["original"]
     )
 
-    analysis["solved_grid"] = _normalise_sudoku_grid(
+    analysis["solved_grid"] = normalise_sudoku_grid(
         analysis["solved_grid"]
     )
 
@@ -311,7 +311,7 @@ def save_sudoku(grid, name=None, metadata=None):
     """
     _ensure_sudoku_directories()
 
-    grid = _normalise_sudoku_grid(grid)
+    grid = normalise_sudoku_grid(grid)
     puzzle_id = sudoku_id(grid)
     path = _puzzle_path(puzzle_id)
 
@@ -351,6 +351,67 @@ def save_sudoku(grid, name=None, metadata=None):
     }
 
 
+def save_with_standard_nomenclature(
+    grid,
+    provenience,
+    tag,
+    difficulty,
+    metadata=None,
+):
+    """
+    Salva un Sudoku con nome:
+
+        provenience_difficulty_index
+
+    L'indice viene calcolato esclusivamente dai nomi già esistenti.
+
+    Se la stessa griglia è già salvata, restituisce il record esistente
+    senza modificarne nome o metadati.
+    """
+    _ensure_sudoku_directories()
+
+    puzzle_id = sudoku_id(grid)
+    existing_path = _puzzle_path(puzzle_id)
+
+    if existing_path.exists():
+        return load_sudoku(existing_path)
+
+    prefix = f"{provenience}_{difficulty}_"
+    highest_index = -1
+
+    for path in SUDOKU_PUZZLES_DIR.glob("*.json"):
+        payload = _read_json(path)
+        name = str(payload.get("name", ""))
+
+        if not name.startswith(prefix):
+            continue
+
+        index_text = name[len(prefix):]
+
+        if index_text.isdigit():
+            highest_index = max(
+                highest_index,
+                int(index_text),
+            )
+
+    index = highest_index + 1
+    name = f"{provenience}_{difficulty}_{index}"
+
+    complete_metadata = dict(metadata or {})
+    complete_metadata.update({
+        "provenience": provenience,
+        "tag": tag,
+        "difficulty": difficulty,
+        "index": index,
+    })
+
+    return save_sudoku(
+        grid,
+        name=name,
+        metadata=complete_metadata,
+    )
+    
+
 def load_sudoku(reference):
     """
     Carica un Sudoku tramite identificatore, nome o percorso.
@@ -368,9 +429,47 @@ def load_sudoku(reference):
 
     return {
         **payload,
-        "grid": _normalise_sudoku_grid(payload["grid"]),
+        "grid": normalise_sudoku_grid(payload["grid"]),
         "path": path,
     }
+
+
+def load_last_sudoku():
+    """
+    Carica il Sudoku salvato o aggiornato più recentemente.
+
+    Restituisce lo stesso dizionario prodotto da load_sudoku().
+    """
+    _ensure_sudoku_directories()
+
+    latest_path = None
+    latest_timestamp = None
+
+    for path in SUDOKU_PUZZLES_DIR.glob("*.json"):
+        payload = _read_json(path)
+        timestamp = payload.get("created_at")
+
+        if timestamp is None:
+            continue
+
+        try:
+            parsed_timestamp = datetime.fromisoformat(timestamp)
+        except (TypeError, ValueError):
+            continue
+
+        if (
+            latest_timestamp is None
+            or parsed_timestamp > latest_timestamp
+        ):
+            latest_timestamp = parsed_timestamp
+            latest_path = path
+
+    if latest_path is None:
+        raise FileNotFoundError(
+            "Non è stato ancora salvato alcun Sudoku."
+        )
+
+    return load_sudoku(latest_path)
 
 
 def list_sudokus():
@@ -400,33 +499,13 @@ def list_sudokus():
     )
 
 
-def parse_sudoku(text):
-    cleaned = "".join(text.split()).replace(".", "0")
-
-    if len(cleaned) != 81:
-        raise ValueError(
-            f"Il Sudoku deve contenere 81 celle, trovate {len(cleaned)}."
-        )
-
-    if not cleaned.isdigit():
-        raise ValueError(
-            "Il Sudoku può contenere solo cifre e punti."
-        )
-
-    grid = np.array(
-        [int(char) for char in cleaned],
-        dtype=int,
-    ).reshape(9, 9)
-
-    return grid
-
 # ---------------------------------------------------------------------------
 # Salvataggio e caricamento delle analisi
 # ---------------------------------------------------------------------------
 
 def save_analysis(analysis):
     """Salva l'analisi nella cartella dedicata al Sudoku."""
-    original = _normalise_sudoku_grid(analysis["original"])
+    original = normalise_sudoku_grid(analysis["original"])
     puzzle_id = sudoku_id(original)
 
     save_sudoku(
@@ -520,7 +599,7 @@ def analyse_puzzle_cached(
         puzzle_id = stored_puzzle["id"]
 
     else:
-        grid = _normalise_sudoku_grid(puzzle)
+        grid = normalise_sudoku_grid(puzzle)
 
         stored_puzzle = save_sudoku(
             grid,

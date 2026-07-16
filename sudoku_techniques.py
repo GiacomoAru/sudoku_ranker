@@ -53,7 +53,7 @@ from sudoku_data_structure import *
 TECHNIQUE_DIFFICULTY = {
     # Inserimenti diretti
     "Naked Single": 1.0,
-    "Hidden Single": 1.2,
+    "Hidden Single": 1.25,
 
     # Intersezioni e coppie
     "Naked Pair": 2.0,
@@ -141,8 +141,6 @@ _TECHNIQUE_ORDER = [
     "Hidden Quadruple",
     "Jellyfish",
 ]
-
-
 
 
 def _elim_move(technique, family, difficulty, description, eliminations, primary, state):

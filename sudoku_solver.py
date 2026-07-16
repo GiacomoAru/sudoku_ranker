@@ -70,16 +70,6 @@ def _difficulty_score(move):
             move.get("difficulty", 99),
         )
     )
-def _difficulty_level(move):
-    """
-    Converte il punteggio preciso nella categoria generale 1-5.
-
-    Esempi:
-    1.2 -> livello 1
-    3.5 -> livello 3
-    4.7 -> livello 4
-    """
-    return int(_difficulty_score(move))
 def _tie_rank(move):
     return _TECHNIQUE_RANK.get(
         move["technique"],
@@ -271,15 +261,14 @@ def grade_difficulty(chain, status):
 def analyse_puzzle(grid, name=None):
     """Convenience wrapper: solve, grade, and package everything needed for
     later reporting/visualisation into one dict."""
-    import numpy as np
+
     original = sds.SudokuState(grid).grid.copy()
     state, chain, status = solve_and_log(grid)
     grading = grade_difficulty(chain, status)
 
-    verified = None
-    if status != 'solved':
-        bt = sds.backtracking_solve(original)
-        verified = bt is not None
+
+    bt = sds.backtracking_solve(original)
+    verified = bt is not None
 
     return {
         'name': name or 'puzzle',
