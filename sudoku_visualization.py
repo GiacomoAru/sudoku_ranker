@@ -275,27 +275,12 @@ def plot_difficulty_chain(analysis, figsize=(12, 4.6)):
         linewidth=0.35,
     )
 
-    min_difficulty = max(
-        1.0,
-        np.floor(min(diffs) * 2) / 2,
-    )
-    max_difficulty = min(
-        5.0,
-        np.ceil(max(diffs) * 2) / 2,
-    )
-    difficulty_ticks = np.arange(
-        min_difficulty,
-        max_difficulty + 0.25,
-        0.5,
-    )
-
     ax1.set_xlabel("Step di risoluzione")
     ax1.set_ylabel("Difficoltà della tecnica usata")
+    difficulty_ticks = np.arange(1.0, 5.01, 0.5)
+
     ax1.set_yticks(difficulty_ticks)
-    ax1.set_ylim(
-        max(0.75, min_difficulty - 0.25),
-        min(5.25, max_difficulty + 0.25),
-    )
+    ax1.set_ylim(0.75, 5.25)
     ax1.set_title(
         f"Catena logica ({analysis['name']}) - "
         f"{analysis['grading']['label']}"
@@ -324,9 +309,10 @@ def plot_difficulty_chain(analysis, figsize=(12, 4.6)):
         alpha=0.05,
     )
     alternative_axis.set_ylabel(alternative_label)
+    alternative_top = max(alternative_counts) + 1
     alternative_axis.set_ylim(
-        0,
-        max(alternative_counts) + 1,
+        (18 - alternative_top) / 17,
+        alternative_top,
     )
     alternative_axis.yaxis.set_major_locator(
         MaxNLocator(integer=True)
@@ -362,14 +348,23 @@ def plot_difficulty_chain(analysis, figsize=(12, 4.6)):
         frameon=True,
     )
 
-    difficulty_values = sorted(set(diffs))
+    # Nove barre fisse: L1, L1.5, ..., L5.
+    difficulty_values = np.arange(1.0, 5.01, 0.5)
+
+    # Assegna ogni difficoltà al mezzo punto più vicino.
+    rounded_diffs = [
+        round(difficulty * 2) / 2
+        for difficulty in diffs
+    ]
+
     counts = [
         sum(
             np.isclose(value, difficulty)
-            for value in diffs
+            for value in rounded_diffs
         )
         for difficulty in difficulty_values
     ]
+
     labels = [
         f"L{difficulty:g}"
         for difficulty in difficulty_values
@@ -388,23 +383,37 @@ def plot_difficulty_chain(analysis, figsize=(12, 4.6)):
     ]
 
     ax2.bar(
-        labels,
+        difficulty_values,
         counts,
+        width=0.38,
         color=bar_colors,
         edgecolor="black",
         linewidth=0.6,
     )
+
+    ax2.set_xticks(difficulty_values)
+    ax2.set_xticklabels(
+        labels,
+        rotation=45,
+        ha="right",
+    )
+
+    ax2.set_xlim(0.7, 5.3)
     ax2.set_title("Passaggi per difficoltà")
     ax2.set_xlabel("Difficoltà")
     ax2.set_ylabel("Numero di step")
+
     ax2.yaxis.set_major_locator(
         MaxNLocator(integer=True)
     )
+
     ax2.grid(
         axis="y",
         alpha=0.22,
         linewidth=0.7,
     )
+
+    ax2.set_axisbelow(True)
     ax2.tick_params(
         axis="x",
         labelrotation=45,

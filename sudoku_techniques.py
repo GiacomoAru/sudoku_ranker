@@ -53,7 +53,7 @@ from sudoku_data_structure import *
 TECHNIQUE_DIFFICULTY = {
     # Inserimenti diretti
     "Naked Single": 1.0,
-    "Hidden Single": 1.25,
+    "Hidden Single": 1.5,
 
     # Intersezioni e coppie
     "Naked Pair": 2.0,

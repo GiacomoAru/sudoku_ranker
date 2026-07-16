@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import random
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -472,31 +473,189 @@ def load_last_sudoku():
     return load_sudoku(latest_path)
 
 
-def list_sudokus():
-    """Restituisce l'elenco sintetico dei Sudoku salvati."""
+def list_sudokus(
+    number=None,
+    method="all",
+    comparison_value=0,
+):
+    """
+    Restituisce un elenco sintetico dei Sudoku salvati.
+
+    Parametri
+    ----------
+    number:
+        Numero massimo di risultati. Con ``None`` restituisce tutti
+        i risultati compatibili.
+
+    method:
+        Criterio di selezione:
+
+        - ``"all"``: tutti, ordinati per nome;
+        - ``"random"``: selezione casuale;
+        - ``"latest"``: i più recenti;
+        - una chiave numerica di ``grading``, per esempio
+          ``"perceived_difficulty"``, ``"workload_score"`` oppure
+          ``"max_difficulty"``.
+
+    comparison_value:
+        Valore-obiettivo usato solamente quando ``method`` è una chiave
+        numerica di difficoltà. Negli altri casi viene ignorato.
+    """
     _ensure_sudoku_directories()
+
+    if number is not None:
+        if isinstance(number, bool) or not isinstance(number, int):
+            raise TypeError(
+                "number deve essere un intero positivo oppure None."
+            )
+
+        if number <= 0:
+            raise ValueError(
+                "number deve essere maggiore di zero."
+            )
+
+    if not isinstance(method, str):
+        raise TypeError(
+            "method deve essere una stringa."
+        )
+
+    method = method.casefold()
+
+    standard_methods = {
+        "all",
+        "random",
+        "latest",
+    }
 
     results = []
 
     for path in SUDOKU_PUZZLES_DIR.glob("*.json"):
         payload = _read_json(path)
         puzzle_id = payload["id"]
+        analysis_path = _analysis_path(puzzle_id)
 
-        results.append({
+        grading = {}
+        analysis_is_current = False
+
+        if analysis_path.exists():
+            try:
+                analysis_payload = _read_json(analysis_path)
+
+                analysis_is_current = (
+                    analysis_payload.get("puzzle_id") == puzzle_id
+                    and analysis_payload.get(
+                        "analysis_version"
+                    ) == ANALYSIS_VERSION
+                )
+
+                if analysis_is_current:
+                    grading = (
+                        analysis_payload
+                        .get("analysis", {})
+                        .get("grading", {})
+                    )
+
+            except (
+                OSError,
+                ValueError,
+                TypeError,
+                json.JSONDecodeError,
+            ):
+                analysis_is_current = False
+                grading = {}
+
+        result = {
             "id": puzzle_id,
             "name": payload.get("name"),
             "clues": payload.get("clues"),
-            "analysed": _analysis_path(puzzle_id).exists(),
+            "analysed": analysis_is_current,
+            "created_at": payload.get("created_at"),
             "updated_at": payload.get("updated_at"),
-        })
+        }
 
-    return sorted(
-        results,
-        key=lambda item: (
-            str(item["name"]).casefold(),
-            item["id"],
-        ),
-    )
+        if analysis_is_current:
+            result.update({
+                key: value
+                for key, value in grading.items()
+                if isinstance(
+                    value,
+                    (int, float, np.integer, np.floating),
+                )
+                and not isinstance(value, bool)
+            })
+
+        results.append(result)
+
+    if method == "random":
+        random.shuffle(results)
+
+    elif method == "latest":
+        def timestamp_key(item):
+            timestamp = (
+                item.get("created_at")
+                or item.get("updated_at")
+                or ""
+            )
+
+            try:
+                return datetime.fromisoformat(timestamp)
+            except (TypeError, ValueError):
+                return datetime.min.replace(
+                    tzinfo=timezone.utc
+                )
+
+        results.sort(
+            key=timestamp_key,
+            reverse=True,
+        )
+
+    elif method == "all":
+        results.sort(
+            key=lambda item: (
+                str(item["name"]).casefold(),
+                item["id"],
+            )
+        )
+
+    else:
+        if isinstance(comparison_value, bool) or not isinstance(
+            comparison_value,
+            (int, float, np.integer, np.floating),
+        ):
+            raise TypeError(
+                "comparison_value deve essere numerico."
+            )
+
+        comparable_results = [
+            item
+            for item in results
+            if method in item
+        ]
+
+        if not comparable_results:
+            raise ValueError(
+                f"Nessuna analisi contiene una chiave numerica "
+                f"{method!r}."
+            )
+
+        target = float(comparison_value)
+
+        comparable_results.sort(
+            key=lambda item: (
+                abs(float(item[method]) - target),
+                float(item[method]),
+                str(item["name"]).casefold(),
+                item["id"],
+            )
+        )
+
+        results = comparable_results
+
+    if number is not None:
+        results = results[:number]
+
+    return results
+
 
 
 # ---------------------------------------------------------------------------
