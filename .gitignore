@@ -1,5 +1,6 @@
-/.venv
-/.vscode
-/sudoku.code-workspace
-/sudoku_data
-/__pycache__
+.venv/
+.vscode/
+sudoku.code-workspace
+sudoku_data/
+__pycache__/
+*.py[cod]
