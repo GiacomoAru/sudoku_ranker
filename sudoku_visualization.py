@@ -122,7 +122,8 @@ def draw_grid(grid, ax=None, highlight=None, candidates=None,
         ax.add_patch(patches.Rectangle((c, r), 1, 1, facecolor='#ffe28a', zorder=0))
     for (r, c) in secondary:
         ax.add_patch(patches.Rectangle((c, r), 1, 1, facecolor='#ffc2c2', zorder=0))
-
+    
+    
     for i in range(10):
         lw = 2.2 if i % 3 == 0 else 0.6
         ax.axhline(i, color='black', linewidth=lw, zorder=2)
@@ -217,7 +218,7 @@ def draw_step(analysis, step_index, figsize=(5.2, 5.2)):
     plt.show()
 
 
-def plot_difficulty_chain(analysis, figsize=(12, 4.6)):
+def plot_difficulty_chain(analysis, figsize=(13, 4.6)):
     """
     Mostra l'andamento della difficoltà e le alternative disponibili.
 
@@ -255,7 +256,7 @@ def plot_difficulty_chain(analysis, figsize=(12, 4.6)):
         1,
         2,
         figsize=figsize,
-        gridspec_kw={"width_ratios": [2.6, 1]},
+        gridspec_kw={"width_ratios": [2, 1]},
     )
 
     ax1.plot(
@@ -277,10 +278,11 @@ def plot_difficulty_chain(analysis, figsize=(12, 4.6)):
 
     ax1.set_xlabel("Step di risoluzione")
     ax1.set_ylabel("Difficoltà della tecnica usata")
-    difficulty_ticks = np.arange(1.0, 5.01, 0.5)
-
+    difficulty_ticks = sorted(set(diffs))
+    difficulty_top = max(5.0, max(difficulty_ticks))
     ax1.set_yticks(difficulty_ticks)
-    ax1.set_ylim(0.75, 5.25)
+    ax1.set_yticklabels([f"SE {value:g}" for value in difficulty_ticks])
+    ax1.set_ylim(0.75, difficulty_top + 0.25)
     ax1.set_title(
         f"Catena logica ({analysis['name']}) - "
         f"{analysis['grading']['label']}"
@@ -348,25 +350,20 @@ def plot_difficulty_chain(analysis, figsize=(12, 4.6)):
         frameon=True,
     )
 
-    # Nove barre fisse: L1, L1.5, ..., L5.
-    difficulty_values = np.arange(1.0, 5.01, 0.5)
-
-    # Assegna ogni difficoltà al mezzo punto più vicino.
-    rounded_diffs = [
-        round(difficulty * 2) / 2
-        for difficulty in diffs
-    ]
+    # Una barra per ogni rating SE effettivamente usato. I decimi (1.2, 2.3,
+    # 3.4...) non vengono arrotondati a generici mezzi livelli.
+    difficulty_values = np.array(sorted(set(diffs)))
 
     counts = [
         sum(
             np.isclose(value, difficulty)
-            for value in rounded_diffs
+            for value in diffs
         )
         for difficulty in difficulty_values
     ]
 
     labels = [
-        f"L{difficulty:g}"
+        f"SE {difficulty:g}"
         for difficulty in difficulty_values
     ]
 
@@ -374,7 +371,7 @@ def plot_difficulty_chain(analysis, figsize=(12, 4.6)):
     bar_colors = [
         histogram_cmap(
             np.clip(
-                (difficulty - 1.0) / 4.0,
+                (difficulty - 1.0) / max(difficulty_top - 1.0, 1.0),
                 0.0,
                 1.0,
             )
@@ -385,7 +382,7 @@ def plot_difficulty_chain(analysis, figsize=(12, 4.6)):
     ax2.bar(
         difficulty_values,
         counts,
-        width=0.38,
+        width=min(0.38, max(0.08, difficulty_top / 25)),
         color=bar_colors,
         edgecolor="black",
         linewidth=0.6,
@@ -398,7 +395,7 @@ def plot_difficulty_chain(analysis, figsize=(12, 4.6)):
         ha="right",
     )
 
-    ax2.set_xlim(0.7, 5.3)
+    ax2.set_xlim(0.7, difficulty_top + 0.3)
     ax2.set_title("Passaggi per difficoltà")
     ax2.set_xlabel("Difficoltà")
     ax2.set_ylabel("Numero di step")
@@ -590,6 +587,9 @@ def analyses_summary_dataframe(analyses):
             ),
             "solvibile_verificato": analysis.get(
                 "backtracking_verified_solvable"
+            ),
+            "id": analysis.get(
+                "puzzle_id"
             ),
         })
 

@@ -2,26 +2,17 @@
 ## 2. Libreria delle tecniche
 
 Ogni funzione analizza lo stato corrente e restituisce **tutte** le istanze
-di quella tecnica al momento applicabili (può essercene più di una nella
-stessa griglia). Ogni mossa porta con sé: nome, famiglia, difficoltà (presa
-dalla tabella del documento), una descrizione testuale, le celle da
-compilare o le eliminazioni da fare, e le celle da evidenziare per la
-visualizzazione.
+applicabili della tecnica. Le difficoltà sono espresse nella scala classica
+Sudoku Explainer 1.2.1 (SE), non in livelli generici da 1 a 5.
 
-Le difficoltà seguono esattamente la scala del documento:
+La tassonomia resta volutamente granulare: pattern moderni come Skyscraper,
+Two-String Kite e W-Wing conservano il proprio nome, ma ricevono il rating
+della famiglia SE equivalente (Forcing X-Chain o Forcing Chain).
 
-| Tecnica | Difficoltà |
-|---|---|
-| Naked/Hidden Single | 1 |
-| Pointing, Claiming, Naked Pair, Hidden Pair (in box) | 2 |
-| Hidden Pair (riga/colonna), Naked Triple, Unique Rectangle T1, X-Wing, Skyscraper, Two-String Kite | 3 |
-| Naked Quadruple, Hidden Triple, Y-Wing, XYZ-Wing, W-Wing, UR T2/T4, BUG+1, Swordfish | 4 |
-| Hidden Quadruple, Jellyfish, UR T3/T5 | 5 |
-
-Il registro `TECHNIQUE_FUNCS` in fondo associa ad ogni funzione la sua
-difficoltà minima possibile: il motore risolutivo lo usa per **non
-eseguire tecniche inutilmente costose** quando una mossa più semplice è già
-stata trovata (vedi sezione 3).
+Il registro `TECHNIQUE_FUNCS` in fondo è ordinato per rating SE minimo. Le
+tecniche basate su catene generali, Nishio e forcing dinamiche non sono
+registrate: richiedono un motore di inferenza dedicato, distinto dai
+rilevatori locali contenuti in questo modulo.
 '''
 
 """
@@ -34,7 +25,7 @@ Move dict schema:
 {
     'technique': str,           # display name, matches the taxonomy document
     'family': str,              # broader family, for reporting
-    'difficulty': int,          # 1-6, per the taxonomy document
+    'difficulty': float,        # Sudoku Explainer 1.2.1 rating
     'description': str,         # human readable explanation of this instance
     'placements': [(r,c,v)],    # cells to solve (usually 0 or 1 entries)
     'eliminations': [(r,c,v)],  # candidates to strike out
@@ -51,96 +42,145 @@ from itertools import combinations
 from sudoku_data_structure import *
 
 TECHNIQUE_DIFFICULTY = {
-    # Inserimenti diretti
-    "Naked Single": 1.0,
-    "Hidden Single": 1.5,
+    # Tecniche elementari (scala SE 1.2.1).
+    "Last Value": 1.0,
+    "Hidden Single (Box)": 1.2,
+    "Hidden Single (Row/Column)": 1.5,
+    "Direct Pointing": 1.7,
+    "Direct Claiming": 1.9,
+    "Direct Hidden Pair": 2.0,
+    "Naked Single": 2.3,
+    "Direct Hidden Triplet": 2.5,
+    "Pointing": 2.6,
+    "Claiming": 2.8,
 
-    # Intersezioni e coppie
-    "Naked Pair": 2.0,
-    "Pointing": 2.0,
-    "Claiming": 2.2,
-    "Hidden Pair": 2.5,
-
-    # Pattern intermedi
-    "Naked Triple": 3.0,
-    "Skyscraper": 3.2,
-    "Two-String Kite": 3.3,
-    "X-Wing": 3.5,
-    "Unique Rectangle Type 1": 3.5,
-
-    # Pattern avanzati
-    "Naked Quadruple": 4.0,
+    # Subset e fish.
+    "Naked Pair": 3.0,
+    "X-Wing": 3.2,
+    "Hidden Pair": 3.4,
+    "Naked Triple": 3.6,
+    "Swordfish": 3.8,
     "Hidden Triple": 4.0,
-    "Y-Wing": 4.0,
-    "Unique Rectangle Type 2": 4.0,
-    "BUG+1": 4.0,
 
-    "Unique Rectangle Type 4": 4.2,
-    "W-Wing": 4.2,
+    # Wings. SE chiama normalmente Y-Wing "XY-Wing".
+    "Y-Wing": 4.2,
+    "XYZ-Wing": 4.4,
 
-    "XYZ-Wing": 4.5,
-    "Swordfish": 4.5,
+    # Fascia SE 4.5-5.0. I nomi granulari vengono mantenuti e distribuiti
+    # nella fascia indicativa fornita per i sottotipi.
+    "Unique Rectangle Type 1": 4.5,
+    "Unique Rectangle Type 2": 4.6,
+    "Unique Rectangle Type 3": 4.8,
+    "Unique Rectangle Type 4": 4.9,
+    "Unique Rectangle Type 5": 5.0,
+    "Naked Quadruple": 5.0,
+    "Jellyfish": 5.2,
+    "Hidden Quadruple": 5.4,
+    "BUG+1": 5.6,
+    "BUG Type 2": 5.7,
+    "BUG Type 4": 5.7,
+    "BUG Type 3 (Pair)": 5.8,
+    "BUG Type 3 (Triplet)": 5.9,
+    "BUG Type 3 (Quad)": 6.0,
+    "Aligned Pair Exclusion": 6.2,
 
-    "Unique Rectangle Type 3": 4.7,
-    "Unique Rectangle Type 5": 4.7,
-
-    # Pattern esperti
-    "Hidden Quadruple": 5.0,
-    "Jellyfish": 5.0,
+    # Nomi moderni mantenuti, rating della famiglia SE equivalente.
+    "Skyscraper": 6.6,        # Forcing X-Chain
+    "Two-String Kite": 6.6,  # Forcing X-Chain
+    "W-Wing": 7.0,           # Forcing Chain
 }
+
+# Famiglie SE che richiedono un vero motore di catene/assunzioni. Sono
+# dichiarate esplicitamente per distinguere una lacuna intenzionale da una
+# tecnica locale dimenticata.
+TECHNIQUES_REQUIRING_LOGIC_ENGINE = {
+    "Bidirectional X-Cycle": (6.5, 7.5),
+    "Bidirectional Y-Cycle": (6.5, 7.5),
+    "Forcing X-Chain": (6.6, 7.6),
+    "Forcing Chain": (7.0, 8.0),
+    "Bidirectional Cycle": (7.0, 8.0),
+    "Nishio": (7.5, 8.5),
+    "Cell Forcing Chain": (8.0, 9.0),
+    "Region Forcing Chain": (8.0, 9.0),
+    "Dynamic Forcing Chain": (8.5, 9.5),
+    "Dynamic Forcing Chain Plus": (9.0, 10.0),
+    "Nested Forcing Chain": (9.5, float("inf")),
+}
+
+# La generalizzazione dei rettangoli a Unique Loop di 6+ celle richiede un
+# enumeratore di cicli alternati con validazione delle case. È un componente
+# a grafo dedicato; i rettangoli (loop di quattro celle) restano coperti dai
+# cinque rilevatori granulari già presenti.
+TECHNIQUES_REQUIRING_PATTERN_ENGINE = {
+    "Unique Loop (6+ cells)": (4.6, 5.0),
+}
+
 _TECHNIQUE_ORDER = [
     # 1.0
-    "Naked Single",
+    "Last Value",
 
     # 1.2
-    "Hidden Single",
+    "Hidden Single (Box)",
 
-    # 2.0
-    "Naked Pair",
+    # 1.5
+    "Hidden Single (Row/Column)",
+
+    # 1.7-2.0
+    "Direct Pointing",
+    "Direct Claiming",
+    "Direct Hidden Pair",
+
+    # 2.3-2.8
+    "Naked Single",
+    "Direct Hidden Triplet",
     "Pointing",
-
-    # 2.2
     "Claiming",
 
-    # 2.5
-    "Hidden Pair",
-
-    # 3.0
-    "Naked Triple",
-
-    # 3.2
-    "Skyscraper",
-
-    # 3.3
-    "Two-String Kite",
-
-    # 3.5
+    # 3.0-4.0
+    "Naked Pair",
     "X-Wing",
-    "Unique Rectangle Type 1",
-
-    # 4.0
-    "Naked Quadruple",
-    "Hidden Triple",
-    "Y-Wing",
-    "Unique Rectangle Type 2",
-    "BUG+1",
-
-    # 4.2
-    "Unique Rectangle Type 4",
-    "W-Wing",
-
-    # 4.5
-    "XYZ-Wing",
+    "Hidden Pair",
+    "Naked Triple",
     "Swordfish",
+    "Hidden Triple",
 
-    # 4.7
+    # 4.2-4.4
+    "Y-Wing",
+    "XYZ-Wing",
+
+    # 4.5-5.6
+    "Unique Rectangle Type 1",
+    "Unique Rectangle Type 2",
     "Unique Rectangle Type 3",
+    "Unique Rectangle Type 4",
     "Unique Rectangle Type 5",
-
-    # 5.0
-    "Hidden Quadruple",
+    "Naked Quadruple",
     "Jellyfish",
+    "Hidden Quadruple",
+    "BUG+1",
+    "BUG Type 2",
+    "BUG Type 4",
+    "BUG Type 3 (Pair)",
+    "BUG Type 3 (Triplet)",
+    "BUG Type 3 (Quad)",
+
+    # Tecniche locali oltre la fascia BUG.
+    "Aligned Pair Exclusion",
+
+    # Specializzazioni di catene già implementate come pattern autonomi.
+    "Skyscraper",
+    "Two-String Kite",
+    "W-Wing",
 ]
+
+
+def _canonical_difficulty(technique, fallback=None):
+    """Restituisce il rating SE canonico della tecnica."""
+    if technique in TECHNIQUE_DIFFICULTY:
+        return float(TECHNIQUE_DIFFICULTY[technique])
+    if fallback is None:
+        raise KeyError(f"Rating SE mancante per {technique!r}")
+    return float(fallback)
 
 
 def _elim_move(technique, family, difficulty, description, eliminations, primary, state):
@@ -150,7 +190,8 @@ def _elim_move(technique, family, difficulty, description, eliminations, primary
         return None
     secondary = sorted(set((r, c) for (r, c, v) in real))
     return {
-        'technique': technique, 'family': family, 'difficulty': difficulty,
+        'technique': technique, 'family': family,
+        'difficulty': _canonical_difficulty(technique, difficulty),
         'description': description, 'placements': [], 'eliminations': real,
         'highlight': {'primary': primary, 'secondary': secondary},
     }
@@ -158,13 +199,63 @@ def _elim_move(technique, family, difficulty, description, eliminations, primary
 
 def _place_move(technique, family, difficulty, description, r, c, v, primary=None):
     return {
-        'technique': technique, 'family': family, 'difficulty': difficulty,
+        'technique': technique, 'family': family,
+        'difficulty': _canonical_difficulty(technique, difficulty),
         'description': description, 'placements': [(r, c, v)], 'eliminations': [],
         'highlight': {'primary': primary or [(r, c)], 'secondary': [(r, c)]},
     }
 
 
-# ---------------------------------------------------------------- 1. direct
+def _direct_move(technique, family, difficulty, description, placement,
+                 eliminations, primary, state):
+    """Costruisce una tecnica Direct: eliminazioni e Hidden Single finale."""
+    real = sorted(set(
+        (r, c, v) for r, c, v in eliminations
+        if v in state.candidates[r][c]
+    ))
+    r, c, v = placement
+    secondary = sorted({(r, c)} | {(rr, cc) for rr, cc, _ in real})
+    return {
+        'technique': technique,
+        'family': family,
+        'difficulty': _canonical_difficulty(technique, difficulty),
+        'description': description,
+        'placements': [(r, c, v)],
+        'eliminations': real,
+        'highlight': {
+            'primary': sorted(set(primary)),
+            'secondary': secondary,
+        },
+    }
+
+
+# ---------------------------------------------------------- 1.0 last value
+def last_value(state):
+    """Ultima cella vuota di una riga, colonna o box (SE 1.0)."""
+    moves = []
+    seen = set()
+    for unit, kind in zip(UNITS, UNIT_KINDS):
+        empties = [(r, c) for r, c in unit if state.grid[r, c] == 0]
+        if len(empties) != 1:
+            continue
+        r, c = empties[0]
+        missing = ALL_DIGITS - {int(state.grid[rr, cc]) for rr, cc in unit}
+        if len(missing) != 1:
+            continue
+        value = next(iter(missing))
+        if value not in state.candidates[r][c] or (r, c, value) in seen:
+            continue
+        seen.add((r, c, value))
+        moves.append(_place_move(
+            'Last Value', 'Inserimenti diretti', 1.0,
+            f'R{r+1}C{c+1} è l ultima cella vuota del {kind}: '
+            f'deve contenere {value}.',
+            r, c, value, primary=list(unit),
+        ))
+    return moves
+
+
+# -------------------------------------------------------------- 1.2-2.3
 def naked_single(state):
     moves = []
     for r in range(9):
@@ -173,7 +264,7 @@ def naked_single(state):
             if state.grid[r, c] == 0 and len(cand) == 1:
                 v = next(iter(cand))
                 moves.append(_place_move(
-                    'Naked Single', 'Inserimenti diretti', 1,
+                    'Naked Single', 'Inserimenti diretti', 2.3,
                     f'La cella R{r+1}C{c+1} ha un solo candidato possibile: {v}.',
                     r, c, v))
     return moves
@@ -183,21 +274,165 @@ def hidden_single(state):
     moves = []
     seen = set()
     for u, kind in zip(UNITS, UNIT_KINDS):
+        # Con una sola cella vuota SE classifica la mossa come Last Value.
+        if sum(state.grid[r, c] == 0 for r, c in u) <= 1:
+            continue
         for v in range(1, 10):
             cells = [(r, c) for (r, c) in u if v in state.candidates[r][c]]
             if len(cells) == 1:
                 r, c = cells[0]
-                if (r, c, v) in seen:
+                technique = (
+                    'Hidden Single (Box)'
+                    if kind == 'box'
+                    else 'Hidden Single (Row/Column)'
+                )
+                key = (technique, r, c, v)
+                if key in seen:
                     continue
-                seen.add((r, c, v))
+                seen.add(key)
                 moves.append(_place_move(
-                    'Hidden Single', 'Inserimenti diretti', 1,
+                    technique, 'Inserimenti diretti',
+                    1.2 if kind == 'box' else 1.5,
                     f'Nel {kind} che contiene R{r+1}C{c+1}, il numero {v} puo comparire solo li.',
                     r, c, v, primary=list(u)))
     return moves
 
 
-# ------------------------------------------------------- 2. locked candidate
+# ----------------------------------------------------- 1.7-1.9 direct locking
+def direct_locked_candidates(state):
+    """Pointing/Claiming che producono subito un Hidden Single."""
+    moves = []
+    seen = set()
+
+    # Pointing: un box blocca il candidato su una linea. In un altro box
+    # attraversato dalla stessa linea resta una sola posizione fuori linea.
+    for box_index in range(9):
+        box = UNITS[18 + box_index]
+        for value in range(1, 10):
+            source = [
+                (r, c) for r, c in box
+                if value in state.candidates[r][c]
+            ]
+            if len(source) < 2:
+                continue
+
+            for axis in ('row', 'col'):
+                coordinates = {
+                    r if axis == 'row' else c for r, c in source
+                }
+                if len(coordinates) != 1:
+                    continue
+                coordinate = next(iter(coordinates))
+
+                for other_box_index in range(9):
+                    if other_box_index == box_index:
+                        continue
+                    other_box = UNITS[18 + other_box_index]
+                    if not any(
+                        (r if axis == 'row' else c) == coordinate
+                        for r, c in other_box
+                    ):
+                        continue
+                    positions = [
+                        (r, c) for r, c in other_box
+                        if value in state.candidates[r][c]
+                    ]
+                    if len(positions) <= 1:
+                        continue
+                    removed = [
+                        (r, c) for r, c in positions
+                        if (r if axis == 'row' else c) == coordinate
+                    ]
+                    remaining = [
+                        cell for cell in positions if cell not in removed
+                    ]
+                    if not removed or len(remaining) != 1:
+                        continue
+                    target = remaining[0]
+                    eliminations = [
+                        (r, c, value) for r, c in removed
+                    ]
+                    mv = _direct_move(
+                        'Direct Pointing', 'Intersezioni box/linee', 1.7,
+                        f'Il Pointing del candidato {value} dal box '
+                        f'{box_index+1} elimina le altre posizioni nella '
+                        f'{axis} {coordinate+1} e lascia un Hidden Single in '
+                        f'R{target[0]+1}C{target[1]+1}.',
+                        (target[0], target[1], value), eliminations,
+                        source + positions, state,
+                    )
+                    _append_unique(moves, mv, seen)
+
+    # Claiming: una riga/colonna blocca il candidato in un box. In un'altra
+    # linea dello stesso tipo che attraversa il box resta una sola posizione
+    # esterna al box.
+    for source_kind in ('row', 'col'):
+        source_indexes = (
+            range(9) if source_kind == 'row' else range(9, 18)
+        )
+        for source_index in source_indexes:
+            source_unit = UNITS[source_index]
+            source_number = (
+                source_index + 1
+                if source_kind == 'row'
+                else source_index - 8
+            )
+            for value in range(1, 10):
+                source = [
+                    (r, c) for r, c in source_unit
+                    if value in state.candidates[r][c]
+                ]
+                if len(source) < 2:
+                    continue
+                boxes = {box_of(r, c) for r, c in source}
+                if len(boxes) != 1:
+                    continue
+                box_index = next(iter(boxes))
+                box = UNITS[18 + box_index]
+
+                other_indexes = (
+                    {r for r, _ in box}
+                    if source_kind == 'row'
+                    else {c for _, c in box}
+                )
+                other_indexes.discard(
+                    source_index
+                    if source_kind == 'row'
+                    else source_index - 9
+                )
+                for other in sorted(other_indexes):
+                    other_unit = UNITS[
+                        other if source_kind == 'row' else 9 + other
+                    ]
+                    positions = [
+                        (r, c) for r, c in other_unit
+                        if value in state.candidates[r][c]
+                    ]
+                    if len(positions) <= 1:
+                        continue
+                    removed = [cell for cell in positions if cell in box]
+                    remaining = [cell for cell in positions if cell not in box]
+                    if not removed or len(remaining) != 1:
+                        continue
+                    target = remaining[0]
+                    eliminations = [
+                        (r, c, value) for r, c in removed
+                    ]
+                    mv = _direct_move(
+                        'Direct Claiming', 'Intersezioni box/linee', 1.9,
+                        f'Il Claiming del candidato {value} dalla '
+                        f'{source_kind} {source_number} elimina le altre '
+                        f'posizioni nel box {box_index+1} e lascia un Hidden '
+                        f'Single in R{target[0]+1}C{target[1]+1}.',
+                        (target[0], target[1], value), eliminations,
+                        source + positions, state,
+                    )
+                    _append_unique(moves, mv, seen)
+
+    return moves
+
+
+# ------------------------------------------------------- 2.6-2.8 locked candidate
 def locked_candidates(state):
     moves = []
     # Pointing: within a box, a digit confined to one row/col -> strip from
@@ -249,8 +484,86 @@ def locked_candidates(state):
     return moves
 
 
+# --------------------------------------------------- 2.0/2.5 direct hidden set
+_DIRECT_HIDDEN_NAME = {
+    2: 'Direct Hidden Pair',
+    3: 'Direct Hidden Triplet',
+}
+
+
+def direct_hidden_subset(state, size):
+    """Hidden Pair/Triplet che produce subito un Hidden Single."""
+    if size not in _DIRECT_HIDDEN_NAME:
+        raise ValueError("Una tecnica Direct SE esiste solo per size 2 o 3")
+
+    technique = _DIRECT_HIDDEN_NAME[size]
+    moves = []
+    seen = set()
+
+    for unit, kind in zip(UNITS, UNIT_KINDS):
+        empties = [
+            (r, c) for r, c in unit if state.grid[r, c] == 0
+        ]
+        if len(empties) <= size:
+            continue
+
+        digit_cells = {}
+        for value in range(1, 10):
+            cells = [
+                (r, c) for r, c in unit
+                if value in state.candidates[r][c]
+            ]
+            if 1 <= len(cells) <= size:
+                digit_cells[value] = cells
+
+        for digits in combinations(sorted(digit_cells), size):
+            subset_cells = set()
+            for value in digits:
+                subset_cells.update(digit_cells[value])
+            if len(subset_cells) != size:
+                continue
+
+            eliminations = [
+                (r, c, value)
+                for r, c in subset_cells
+                for value in state.candidates[r][c]
+                if value not in digits
+            ]
+            if not eliminations:
+                continue
+
+            for hidden_value in range(1, 10):
+                if hidden_value in digits:
+                    continue
+                positions = [
+                    (r, c) for r, c in unit
+                    if hidden_value in state.candidates[r][c]
+                ]
+                if len(positions) <= 1:
+                    continue
+                remaining = [
+                    cell for cell in positions if cell not in subset_cells
+                ]
+                if len(remaining) != 1:
+                    continue
+                target = remaining[0]
+                mv = _direct_move(
+                    technique, 'Sottoinsiemi bloccati',
+                    2.0 if size == 2 else 2.5,
+                    f'Nel {kind}, i numeri {list(digits)} formano un '
+                    f'{technique}. Le eliminazioni risultanti lasciano '
+                    f'{hidden_value} come Hidden Single in '
+                    f'R{target[0]+1}C{target[1]+1}.',
+                    (target[0], target[1], hidden_value), eliminations,
+                    list(subset_cells) + [target], state,
+                )
+                _append_unique(moves, mv, seen)
+
+    return moves
+
+
 # --------------------------------------------------------- 3. naked subsets
-_NAKED_DIFF = {2: 2, 3: 3, 4: 4}
+_NAKED_DIFF = {2: 3.0, 3: 3.6, 4: 5.0}
 _NAKED_NAME = {2: 'Naked Pair', 3: 'Naked Triple', 4: 'Naked Quadruple'}
 
 
@@ -280,8 +593,8 @@ def naked_subset(state, size):
 
 
 # -------------------------------------------------------- 4. hidden subsets
-_HIDDEN_DIFF_BOX = {2: 2, 3: 4, 4: 5}
-_HIDDEN_DIFF_LINE = {2: 3, 3: 4, 4: 5}
+_HIDDEN_DIFF_BOX = {2: 3.4, 3: 4.0, 4: 5.4}
+_HIDDEN_DIFF_LINE = {2: 3.4, 3: 4.0, 4: 5.4}
 _HIDDEN_NAME = {2: 'Hidden Pair', 3: 'Hidden Triple', 4: 'Hidden Quadruple'}
 
 
@@ -319,7 +632,7 @@ def hidden_subset(state, size):
 
 # ------------------------------------------------------------------- 5. fish
 _FISH_NAME = {2: 'X-Wing', 3: 'Swordfish', 4: 'Jellyfish'}
-_FISH_DIFF = {2: 3, 3: 4, 4: 5}
+_FISH_DIFF = {2: 3.2, 3: 3.8, 4: 5.2}
 
 
 def fish(state, size):
@@ -1031,31 +1344,290 @@ def bug_plus_one(state):
     )]
 
 
+# ---------------------------------------------------------- 5.7-6.0 BUG 2-4
+def _bug_core(state):
+    """Rimuove virtualmente i candidati extra e valida il deadly pattern."""
+    unsolved = [
+        (r, c) for r in range(9) for c in range(9)
+        if state.grid[r, c] == 0
+    ]
+    if not unsolved or any(
+        len(state.candidates[r][c]) < 2 for r, c in unsolved
+    ):
+        return None
+
+    extra_values = {}
+    for unit in UNITS:
+        for value in range(1, 10):
+            positions = [
+                (r, c) for r, c in unit
+                if value in state.candidates[r][c]
+            ]
+            if len(positions) in (0, 2):
+                continue
+            high_cardinality = [
+                cell for cell in positions
+                if len(state.candidates[cell[0]][cell[1]]) >= 3
+            ]
+            if not high_cardinality:
+                return None
+            # Se più celle sono possibili, un'altra casa deve identificare
+            # univocamente ciascun extra. La validazione finale scarta i casi
+            # rimasti ambigui.
+            if len(high_cardinality) == 1:
+                extra_values.setdefault(high_cardinality[0], set()).add(value)
+
+    if not extra_values:
+        return None
+
+    virtual = {}
+    for cell in unsolved:
+        candidates = set(state.candidates[cell[0]][cell[1]])
+        candidates -= extra_values.get(cell, set())
+        if len(candidates) != 2:
+            return None
+        virtual[cell] = candidates
+
+    for unit in UNITS:
+        for value in range(1, 10):
+            count = sum(value in virtual.get(cell, set()) for cell in unit)
+            if count not in (0, 2):
+                return None
+
+    bug_cells = sorted(extra_values)
+    all_extra_values = set().union(*extra_values.values())
+    common_peers = set(peers(*bug_cells[0]))
+    for cell in bug_cells[1:]:
+        common_peers &= peers(*cell)
+    common_peers -= set(bug_cells)
+
+    return bug_cells, extra_values, all_extra_values, common_peers
+
+
+def bug_types_2_to_4(state):
+    """Rileva le varianti BUG 2, 3 e 4 senza usare assunzioni o catene."""
+    core = _bug_core(state)
+    if core is None:
+        return []
+
+    bug_cells, extra_values, all_extra_values, common_peers = core
+    if len(bug_cells) < 2:
+        return []
+
+    moves = []
+    seen = set()
+
+    # BUG Type 2: tutte le celle BUG condividono lo stesso candidato extra;
+    # almeno una deve assumerlo.
+    if len(all_extra_values) == 1:
+        value = next(iter(all_extra_values))
+        eliminations = [
+            (r, c, value) for r, c in common_peers
+        ]
+        mv = _elim_move(
+            'BUG Type 2', 'Unicita', 5.7,
+            f'Le celle BUG {", ".join(f"R{r+1}C{c+1}" for r, c in bug_cells)} '
+            f'condividono il candidato extra {value}: deve essere vero in '
+            f'almeno una di esse.',
+            eliminations, bug_cells, state,
+        )
+        _append_unique(moves, mv, seen)
+
+    # BUG Type 4: due celle BUG nella stessa casa condividono un unico
+    # candidato non-extra, che resta bloccato fra le due celle.
+    if len(bug_cells) == 2 and _common_units(bug_cells):
+        first, second = bug_cells
+        common_non_extra = (
+            state.candidates[first[0]][first[1]]
+            & state.candidates[second[0]][second[1]]
+        ) - all_extra_values
+        if len(common_non_extra) == 1:
+            locked_value = next(iter(common_non_extra))
+            eliminations = []
+            for cell in bug_cells:
+                removable = (
+                    state.candidates[cell[0]][cell[1]]
+                    - extra_values[cell]
+                    - {locked_value}
+                )
+                eliminations.extend(
+                    (cell[0], cell[1], value) for value in removable
+                )
+            mv = _elim_move(
+                'BUG Type 4', 'Unicita', 5.7,
+                f'Le due celle BUG condividono il candidato non-extra '
+                f'{locked_value}, che rimane bloccato fra loro.',
+                eliminations, bug_cells, state,
+            )
+            _append_unique(moves, mv, seen)
+
+    # BUG Type 3: l'unione degli extra si comporta come una pseudo-cella e,
+    # con altre celle della casa comune, forma un Naked Set.
+    if len(all_extra_values) > 1 and common_peers:
+        type3_names = {
+            2: 'BUG Type 3 (Pair)',
+            3: 'BUG Type 3 (Triplet)',
+            4: 'BUG Type 3 (Quad)',
+        }
+        for _, unit, kind in _common_units(bug_cells):
+            available = [
+                cell for cell in unit
+                if cell in common_peers
+                and state.grid[cell[0], cell[1]] == 0
+            ]
+            for subset_size, technique in type3_names.items():
+                support_count = subset_size - 1
+                if (
+                    len(all_extra_values) > subset_size
+                    or len(available) < support_count
+                ):
+                    continue
+                for support in combinations(available, support_count):
+                    naked_values = set(all_extra_values)
+                    for r, c in support:
+                        naked_values |= state.candidates[r][c]
+                    if len(naked_values) != subset_size:
+                        continue
+                    locked = set(bug_cells) | set(support)
+                    eliminations = [
+                        (r, c, value)
+                        for r, c in unit
+                        if (r, c) not in locked
+                        for value in naked_values
+                    ]
+                    mv = _elim_move(
+                        technique, 'Unicita',
+                        TECHNIQUE_DIFFICULTY[technique],
+                        f'Gli extra BUG {sorted(all_extra_values)} agiscono '
+                        f'come una pseudo-cella e, insieme a '
+                        f'{", ".join(f"R{r+1}C{c+1}" for r, c in support)}, '
+                        f'formano un sottoinsieme bloccato nel {kind}.',
+                        eliminations,
+                        bug_cells + list(support),
+                        state,
+                    )
+                    _append_unique(moves, mv, seen)
+
+    return moves
+
+
+# ---------------------------------------------- 6.2 aligned pair exclusion
+def aligned_pair_exclusion(state):
+    """Aligned Pair Exclusion classica di Sudoku Explainer.
+
+    Per ogni coppia di celle base valuta tutte le coppie di candidati. Una
+    combinazione è vietata se assegna lo stesso valore a celle che si vedono
+    oppure se svuota una cella bivalue che vede entrambe le basi. Un candidato
+    che non compare in alcuna combinazione ammessa può essere eliminato.
+
+    È un controllo combinatorio locale: non usa backtracking né un motore di
+    catene.
+    """
+    moves = []
+    seen = set()
+    bivalue = {
+        (r, c) for r in range(9) for c in range(9)
+        if state.grid[r, c] == 0 and len(state.candidates[r][c]) == 2
+    }
+    base_cells = [
+        (r, c) for r in range(9) for c in range(9)
+        if state.grid[r, c] == 0
+        and len(state.candidates[r][c]) >= 2
+        and not any(
+            len(state.candidates[rr][cc]) == 1
+            for rr, cc in peers(r, c)
+            if state.grid[rr, cc] == 0
+        )
+        and bool(peers(r, c) & bivalue)
+    ]
+
+    excluders = {
+        cell: peers(*cell) & bivalue for cell in base_cells
+    }
+
+    for first, second in combinations(base_cells, 2):
+        common_excluders = excluders[first] & excluders[second]
+        # È la stessa soglia conservativa usata da SE 1.2.1.
+        if len(common_excluders) < 2:
+            continue
+
+        first_values = sorted(state.candidates[first[0]][first[1]])
+        second_values = sorted(state.candidates[second[0]][second[1]])
+        allowed = []
+        relevant_excluders = set()
+
+        for first_value in first_values:
+            for second_value in second_values:
+                if (
+                    first_value == second_value
+                    and second in peers(*first)
+                ):
+                    continue
+
+                assigned = {first_value, second_value}
+                blocking = [
+                    cell for cell in common_excluders
+                    if state.candidates[cell[0]][cell[1]] <= assigned
+                ]
+                if blocking:
+                    relevant_excluders.update(blocking)
+                    continue
+                allowed.append((first_value, second_value))
+
+        eliminations = []
+        for value in first_values:
+            if not any(pair[0] == value for pair in allowed):
+                eliminations.append((first[0], first[1], value))
+        for value in second_values:
+            if not any(pair[1] == value for pair in allowed):
+                eliminations.append((second[0], second[1], value))
+
+        mv = _elim_move(
+            'Aligned Pair Exclusion', 'Exclusion', 6.2,
+            f'Le celle base R{first[0]+1}C{first[1]+1} e '
+            f'R{second[0]+1}C{second[1]+1} condividono celle bivalue '
+            f'vincolanti. I candidati indicati non appartengono ad alcuna '
+            f'combinazione compatibile.',
+            eliminations,
+            [first, second] + sorted(relevant_excluders),
+            state,
+        )
+        _append_unique(moves, mv, seen)
+
+    return moves
+
+
 # --------------------------------------------------------------- registry
-# Simple Coloring, X-Chains, AIC e altre catene generali restano escluse:
-# richiedono un motore a grafo dedicato e una gestione delle inferenze.
+# Le sole famiglie SE escluse sono elencate in
+# TECHNIQUES_REQUIRING_LOGIC_ENGINE e richiedono un motore a grafo/assunzioni.
 TECHNIQUE_FUNCS = [
-    (1, lambda s: naked_single(s)),
-    (1, lambda s: hidden_single(s)),
-    (2, lambda s: locked_candidates(s)),
-    (2, lambda s: naked_subset(s, 2)),
-    (2, lambda s: hidden_subset(s, 2)),
-    (3, lambda s: unique_rectangle_type1(s)),
-    (3, lambda s: naked_subset(s, 3)),
-    (3, lambda s: fish(s, 2)),
-    (3, lambda s: skyscraper(s)),
-    (3, lambda s: two_string_kite(s)),
-    (4, lambda s: naked_subset(s, 4)),
-    (4, lambda s: hidden_subset(s, 3)),
-    (4, lambda s: unique_rectangle_type2(s)),
-    (4, lambda s: unique_rectangle_type4(s)),
-    (4, lambda s: bug_plus_one(s)),
-    (4, lambda s: y_wing(s)),
-    (4, lambda s: xyz_wing(s)),
-    (4, lambda s: w_wing(s)),
-    (4, lambda s: fish(s, 3)),
-    (5, lambda s: unique_rectangle_type3(s)),
-    (5, lambda s: unique_rectangle_type5(s)),
-    (5, lambda s: hidden_subset(s, 4)),
-    (5, lambda s: fish(s, 4)),
+    (1.0, lambda s: last_value(s)),
+    (1.2, lambda s: hidden_single(s)),
+    (1.7, lambda s: direct_locked_candidates(s)),
+    (2.0, lambda s: direct_hidden_subset(s, 2)),
+    (2.3, lambda s: naked_single(s)),
+    (2.5, lambda s: direct_hidden_subset(s, 3)),
+    (2.6, lambda s: locked_candidates(s)),
+    (3.0, lambda s: naked_subset(s, 2)),
+    (3.2, lambda s: fish(s, 2)),
+    (3.4, lambda s: hidden_subset(s, 2)),
+    (3.6, lambda s: naked_subset(s, 3)),
+    (3.8, lambda s: fish(s, 3)),
+    (4.0, lambda s: hidden_subset(s, 3)),
+    (4.2, lambda s: y_wing(s)),
+    (4.4, lambda s: xyz_wing(s)),
+    (4.5, lambda s: unique_rectangle_type1(s)),
+    (4.6, lambda s: unique_rectangle_type2(s)),
+    (4.8, lambda s: unique_rectangle_type3(s)),
+    (4.9, lambda s: unique_rectangle_type4(s)),
+    (5.0, lambda s: unique_rectangle_type5(s)),
+    (5.0, lambda s: naked_subset(s, 4)),
+    (5.2, lambda s: fish(s, 4)),
+    (5.4, lambda s: hidden_subset(s, 4)),
+    (5.6, lambda s: bug_plus_one(s)),
+    (5.7, lambda s: bug_types_2_to_4(s)),
+    (6.2, lambda s: aligned_pair_exclusion(s)),
+    (6.6, lambda s: skyscraper(s)),
+    (6.6, lambda s: two_string_kite(s)),
+    (7.0, lambda s: w_wing(s)),
 ]

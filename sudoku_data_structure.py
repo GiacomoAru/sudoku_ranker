@@ -128,42 +128,101 @@ class SudokuState:
 
 
 def backtracking_solve(grid):
-    """Plain backtracking solver used only to (a) validate puzzles have a
-    unique-ish solution and (b) provide a fallback so the app never gets
-    stuck without an answer, even when a step wasn't found by any
-    human-style technique."""
+    """
+    Risolve il Sudoku con backtracking.
+
+    Priorità:
+    1. sceglie la cella vuota con meno candidati;
+    2. a parità, sceglie quella con più celle vuote tra i peer.
+
+    Restituisce la griglia risolta oppure None.
+    """
     g = np.array(grid, dtype=int).copy()
 
-    def find_empty():
+    def possible_values(r, c):
+        used = (
+            set(g[r, :].tolist())
+            | set(g[:, c].tolist())
+        )
+
+        br = 3 * (r // 3)
+        bc = 3 * (c // 3)
+
+        used |= set(
+            g[br:br + 3, bc:bc + 3]
+            .flatten()
+            .tolist()
+        )
+
+        return ALL_DIGITS - used
+
+    def unsolved_peer_count(r, c):
+        return sum(
+            1
+            for rr, cc in peers(r, c)
+            if g[rr, cc] == 0
+        )
+
+    def find_best_empty():
+        best_position = None
+        best_candidates = None
+        best_peer_count = -1
+
         for r in range(9):
             for c in range(9):
-                if g[r, c] == 0:
-                    return r, c
-        return None
+                if g[r, c] != 0:
+                    continue
 
-    def valid(r, c, v):
-        if v in g[r, :] or v in g[:, c]:
-            return False
-        br, bc = 3 * (r // 3), 3 * (c // 3)
-        if v in g[br:br + 3, bc:bc + 3]:
-            return False
-        return True
+                candidates = possible_values(r, c)
+
+                # Contraddizione immediata.
+                if not candidates:
+                    return (r, c), set()
+
+                peer_count = unsolved_peer_count(r, c)
+
+                if (
+                    best_candidates is None
+                    or len(candidates) < len(best_candidates)
+                    or (
+                        len(candidates) == len(best_candidates)
+                        and peer_count > best_peer_count
+                    )
+                ):
+                    best_position = (r, c)
+                    best_candidates = candidates
+                    best_peer_count = peer_count
+
+                    # Non si può trovare meno di un candidato.
+                    if len(best_candidates) == 1:
+                        return best_position, best_candidates
+
+        return best_position, best_candidates
 
     def solve():
-        pos = find_empty()
-        if pos is None:
+        position, candidates = find_best_empty()
+
+        if position is None:
             return True
-        r, c = pos
-        for v in range(1, 10):
-            if valid(r, c, v):
-                g[r, c] = v
-                if solve():
-                    return True
-                g[r, c] = 0
+
+        if not candidates:
+            return False
+
+        r, c = position
+
+        for value in sorted(candidates):
+            g[r, c] = value
+
+            if solve():
+                return True
+
+            g[r, c] = 0
+
         return False
 
     if solve():
         return g
+
     return None
 
 

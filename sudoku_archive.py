@@ -22,7 +22,7 @@ PUZZLE_SCHEMA_VERSION = 1
 
 # Incrementare questo numero quando cambia il funzionamento del solver
 # o il formato dell'analisi. Le vecchie analisi verranno ricalcolate.
-ANALYSIS_VERSION = 3
+ANALYSIS_VERSION = 5
 
 # Evita anche letture ripetute dal disco durante la stessa esecuzione.
 _ANALYSIS_MEMORY_CACHE = {}
@@ -493,6 +493,8 @@ def list_sudokus(
         - ``"all"``: tutti, ordinati per nome;
         - ``"random"``: selezione casuale;
         - ``"latest"``: i più recenti;
+        - ``"hardest"``: i più difficili;
+        - ``"easiest"``: i più facili;
         - una chiave numerica di ``grading``, per esempio
           ``"perceived_difficulty"``, ``"workload_score"`` oppure
           ``"max_difficulty"``.
@@ -521,10 +523,17 @@ def list_sudokus(
 
     method = method.casefold()
 
+    if method == "hardest":
+        return list_sudokus(number, "perceived_difficulty", 99)
+    elif method == "easiest":
+        return list_sudokus(number, "perceived_difficulty", 0)
+    
     standard_methods = {
         "all",
         "random",
         "latest",
+        "hardesy",
+        "easiest"
     }
 
     results = []
@@ -616,7 +625,7 @@ def list_sudokus(
                 item["id"],
             )
         )
-
+    
     else:
         if isinstance(comparison_value, bool) or not isinstance(
             comparison_value,
