@@ -22,9 +22,14 @@ PUZZLE_SCHEMA_VERSION = 1
 
 # Incrementare questo numero quando cambia il funzionamento del solver
 # o il formato dell'analisi. Le vecchie analisi verranno ricalcolate.
-ANALYSIS_VERSION = 7
+ANALYSIS_VERSION = 8
+
+# La modalità canonica resta deep. Le altre varianti vengono salvate
+# separatamente, senza sovrascrivere l analisi completa.
+DEFAULT_ANALYSIS_MODE = "deep"
 
 # Evita anche letture ripetute dal disco durante la stessa esecuzione.
+# La chiave è (puzzle_id, analysis_variant), non soltanto puzzle_id.
 _ANALYSIS_MEMORY_CACHE = {}
 
 
@@ -114,8 +119,199 @@ def _analysis_directory(puzzle_id):
     return SUDOKU_ANALYSES_DIR / puzzle_id
 
 
-def _analysis_path(puzzle_id):
-    return _analysis_directory(puzzle_id) / "analysis.json"
+def _normalise_analysis_request(
+    analysis_mode=DEFAULT_ANALYSIS_MODE,
+    profile_difficulty_window=None,
+):
+    """Normalizza la variante di analisi richiesta all archivio."""
+    normaliser = getattr(ss, "_normalise_analysis_mode", None)
+
+    if callable(normaliser):
+        mode = normaliser(analysis_mode)
+    else:
+        aliases = getattr(ss, "ANALYSIS_MODE_ALIASES", {})
+        allowed = getattr(
+            ss,
+            "ANALYSIS_MODES",
+            {"deep", "profile", "superficial"},
+        )
+        mode = str(analysis_mode or DEFAULT_ANALYSIS_MODE).strip().lower()
+        mode = aliases.get(mode, mode)
+
+        if mode not in allowed:
+            raise ValueError(
+                f"Modalità di analisi non valida: {analysis_mode!r}."
+            )
+
+    if mode == "profile":
+        if profile_difficulty_window is None:
+            profile_difficulty_window = getattr(
+                ss,
+                "DEFAULT_PROFILE_DIFFICULTY_WINDOW",
+                1.0,
+            )
+
+        window = float(profile_difficulty_window)
+
+        if window < 0:
+            raise ValueError(
+                "profile_difficulty_window deve essere maggiore "
+                "o uguale a zero."
+            )
+    else:
+        window = None
+
+    return mode, window
+
+
+def _profile_window_token(value):
+    """Converte una finestra numerica in una parte di nome stabile."""
+    text = format(float(value), ".12g")
+    return text.replace("-", "m").replace(".", "p")
+
+
+def _analysis_variant(
+    analysis_mode=DEFAULT_ANALYSIS_MODE,
+    profile_difficulty_window=None,
+):
+    mode, window = _normalise_analysis_request(
+        analysis_mode,
+        profile_difficulty_window,
+    )
+
+    if mode == "profile":
+        return f"profile_{_profile_window_token(window)}"
+
+    return mode
+
+
+def _analysis_cache_key(
+    puzzle_id,
+    analysis_mode=DEFAULT_ANALYSIS_MODE,
+    profile_difficulty_window=None,
+):
+    return (
+        str(puzzle_id),
+        _analysis_variant(
+            analysis_mode,
+            profile_difficulty_window,
+        ),
+    )
+
+
+def _analysis_path(
+    puzzle_id,
+    analysis_mode=DEFAULT_ANALYSIS_MODE,
+    profile_difficulty_window=None,
+):
+    """Restituisce un file distinto per ogni variante di analisi."""
+    variant = _analysis_variant(
+        analysis_mode,
+        profile_difficulty_window,
+    )
+
+    # Mantiene il nome storico per la deep, che resta il default.
+    filename = (
+        "analysis.json"
+        if variant == "deep"
+        else f"analysis_{variant}.json"
+    )
+
+    return _analysis_directory(puzzle_id) / filename
+
+
+def _analysis_payload_is_current(
+    payload,
+    puzzle_id,
+    analysis_mode=DEFAULT_ANALYSIS_MODE,
+    profile_difficulty_window=None,
+):
+    """Verifica versione, Sudoku e variante richiesta."""
+    if (
+        payload.get("puzzle_id") != puzzle_id
+        or payload.get("analysis_version") != ANALYSIS_VERSION
+    ):
+        return False
+
+    requested_mode, requested_window = _normalise_analysis_request(
+        analysis_mode,
+        profile_difficulty_window,
+    )
+
+    stored_analysis = payload.get("analysis", {})
+    stored_mode = payload.get(
+        "analysis_mode",
+        stored_analysis.get("analysis_mode", DEFAULT_ANALYSIS_MODE),
+    )
+    stored_window = payload.get(
+        "profile_difficulty_window",
+        stored_analysis.get("profile_difficulty_window"),
+    )
+
+    try:
+        stored_mode, stored_window = _normalise_analysis_request(
+            stored_mode,
+            stored_window,
+        )
+    except (TypeError, ValueError):
+        return False
+
+    if stored_mode != requested_mode:
+        return False
+
+    if requested_mode == "profile":
+        return abs(float(stored_window) - float(requested_window)) <= 1e-12
+
+    return True
+
+
+def _current_analysis_payloads(puzzle_id):
+    """Restituisce le varianti correnti già presenti per un Sudoku."""
+    directory = _analysis_directory(puzzle_id)
+
+    if not directory.exists():
+        return {}
+
+    variants = {}
+
+    for path in directory.glob("analysis*.json"):
+        try:
+            payload = _read_json(path)
+            analysis = payload.get("analysis", {})
+            mode = payload.get(
+                "analysis_mode",
+                analysis.get("analysis_mode", DEFAULT_ANALYSIS_MODE),
+            )
+            window = payload.get(
+                "profile_difficulty_window",
+                analysis.get("profile_difficulty_window"),
+            )
+            mode, window = _normalise_analysis_request(mode, window)
+        except (
+            OSError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ):
+            continue
+
+        if not _analysis_payload_is_current(
+            payload,
+            puzzle_id,
+            mode,
+            window,
+        ):
+            continue
+
+        variant = _analysis_variant(mode, window)
+        variants[variant] = {
+            "path": path,
+            "payload": payload,
+            "analysis_mode": mode,
+            "profile_difficulty_window": window,
+        }
+
+    return variants
 
 
 def _write_json(path, data):
@@ -244,6 +440,11 @@ def _restore_analysis(data):
     grading["histogram"] = {
         int(level): int(count)
         for level, count in grading.get("histogram", {}).items()
+    }
+
+    grading["se_histogram"] = {
+        float(score): int(count)
+        for score, count in grading.get("se_histogram", {}).items()
     }
 
     analysis["grading"] = grading
@@ -448,7 +649,10 @@ def load_last_sudoku():
 
     for path in SUDOKU_PUZZLES_DIR.glob("*.json"):
         payload = _read_json(path)
-        timestamp = payload.get("created_at")
+        timestamp = (
+            payload.get("updated_at")
+            or payload.get("created_at")
+        )
 
         if timestamp is None:
             continue
@@ -481,27 +685,12 @@ def list_sudokus(
     """
     Restituisce un elenco sintetico dei Sudoku salvati.
 
-    Parametri
-    ----------
-    number:
-        Numero massimo di risultati. Con ``None`` restituisce tutti
-        i risultati compatibili.
+    ``analysed`` indica che esiste almeno una variante corrente. Sono inoltre
+    esposti ``analysed_deep``, ``analysed_profile``,
+    ``analysed_superficial`` e l elenco ``analysis_variants``.
 
-    method:
-        Criterio di selezione:
-
-        - ``"all"``: tutti, ordinati per nome;
-        - ``"random"``: selezione casuale;
-        - ``"latest"``: i più recenti;
-        - ``"hardest"``: i più difficili;
-        - ``"easiest"``: i più facili;
-        - una chiave numerica di ``grading``, per esempio
-          ``"perceived_difficulty"``, ``"workload_score"`` oppure
-          ``"max_difficulty"``.
-
-    comparison_value:
-        Valore-obiettivo usato solamente quando ``method`` è una chiave
-        numerica di difficoltà. Negli altri casi viene ignorato.
+    Le chiavi numeriche di grading sono prese preferibilmente dalla deep,
+    poi da profile e infine da superficial.
     """
     _ensure_sudoku_directories()
 
@@ -517,81 +706,82 @@ def list_sudokus(
             )
 
     if not isinstance(method, str):
-        raise TypeError(
-            "method deve essere una stringa."
-        )
+        raise TypeError("method deve essere una stringa.")
 
     method = method.casefold()
 
     if method == "hardest":
         return list_sudokus(number, "perceived_difficulty", 99)
-    elif method == "easiest":
+
+    if method == "easiest":
         return list_sudokus(number, "perceived_difficulty", 0)
-    
-    standard_methods = {
-        "all",
-        "random",
-        "latest",
-        "hardesy",
-        "easiest"
-    }
 
     results = []
 
     for path in SUDOKU_PUZZLES_DIR.glob("*.json"):
         payload = _read_json(path)
         puzzle_id = payload["id"]
-        analysis_path = _analysis_path(puzzle_id)
+        variants = _current_analysis_payloads(puzzle_id)
+
+        modes = {
+            item["analysis_mode"]
+            for item in variants.values()
+        }
+
+        preferred_variant = None
+
+        if "deep" in variants:
+            preferred_variant = variants["deep"]
+        else:
+            profile_variants = [
+                item
+                for item in variants.values()
+                if item["analysis_mode"] == "profile"
+            ]
+
+            if profile_variants:
+                preferred_variant = sorted(
+                    profile_variants,
+                    key=lambda item: item[
+                        "profile_difficulty_window"
+                    ],
+                    reverse=True,
+                )[0]
+            elif variants:
+                preferred_variant = next(iter(variants.values()))
 
         grading = {}
-        analysis_is_current = False
 
-        if analysis_path.exists():
-            try:
-                analysis_payload = _read_json(analysis_path)
-
-                analysis_is_current = (
-                    analysis_payload.get("puzzle_id") == puzzle_id
-                    and analysis_payload.get(
-                        "analysis_version"
-                    ) == ANALYSIS_VERSION
-                )
-
-                if analysis_is_current:
-                    grading = (
-                        analysis_payload
-                        .get("analysis", {})
-                        .get("grading", {})
-                    )
-
-            except (
-                OSError,
-                ValueError,
-                TypeError,
-                json.JSONDecodeError,
-            ):
-                analysis_is_current = False
-                grading = {}
+        if preferred_variant is not None:
+            grading = (
+                preferred_variant["payload"]
+                .get("analysis", {})
+                .get("grading", {})
+            )
 
         result = {
             "id": puzzle_id,
             "name": payload.get("name"),
             "clues": payload.get("clues"),
-            "analysed": analysis_is_current,
+            "analysed": bool(variants),
+            "analysed_deep": "deep" in modes,
+            "analysed_profile": "profile" in modes,
+            "analysed_superficial": "superficial" in modes,
+            "analysis_modes": sorted(modes),
+            "analysis_variants": sorted(variants),
             "created_at": payload.get("created_at"),
             "updated_at": payload.get("updated_at"),
         }
 
-        if analysis_is_current:
-            result.update({
-                key: value
-                for key, value in grading.items()
-                if isinstance(
-                    value,
-                    (int, float, np.integer, np.floating),
-                )
-                and not isinstance(value, bool)
-            })
+        result.update({
+            key: value
+            for key, value in grading.items()
+            if isinstance(
+                value,
+                (int, float, np.integer, np.floating),
+            )
+            and not isinstance(value, bool)
+        })
 
         results.append(result)
 
@@ -601,22 +791,17 @@ def list_sudokus(
     elif method == "latest":
         def timestamp_key(item):
             timestamp = (
-                item.get("created_at")
-                or item.get("updated_at")
+                item.get("updated_at")
+                or item.get("created_at")
                 or ""
             )
 
             try:
                 return datetime.fromisoformat(timestamp)
             except (TypeError, ValueError):
-                return datetime.min.replace(
-                    tzinfo=timezone.utc
-                )
+                return datetime.min.replace(tzinfo=timezone.utc)
 
-        results.sort(
-            key=timestamp_key,
-            reverse=True,
-        )
+        results.sort(key=timestamp_key, reverse=True)
 
     elif method == "all":
         results.sort(
@@ -625,15 +810,13 @@ def list_sudokus(
                 item["id"],
             )
         )
-    
+
     else:
         if isinstance(comparison_value, bool) or not isinstance(
             comparison_value,
             (int, float, np.integer, np.floating),
         ):
-            raise TypeError(
-                "comparison_value deve essere numerico."
-            )
+            raise TypeError("comparison_value deve essere numerico.")
 
         comparable_results = [
             item
@@ -648,7 +831,6 @@ def list_sudokus(
             )
 
         target = float(comparison_value)
-
         comparable_results.sort(
             key=lambda item: (
                 abs(float(item[method]) - target),
@@ -657,7 +839,6 @@ def list_sudokus(
                 item["id"],
             )
         )
-
         results = comparable_results
 
     if number is not None:
@@ -665,16 +846,26 @@ def list_sudokus(
 
     return results
 
-
-
 # ---------------------------------------------------------------------------
 # Salvataggio e caricamento delle analisi
 # ---------------------------------------------------------------------------
 
 def save_analysis(analysis):
-    """Salva l'analisi nella cartella dedicata al Sudoku."""
+    """Salva una variante di analisi senza sovrascrivere le altre."""
     original = normalise_sudoku_grid(analysis["original"])
     puzzle_id = sudoku_id(original)
+
+    mode, window = _normalise_analysis_request(
+        analysis.get("analysis_mode", DEFAULT_ANALYSIS_MODE),
+        analysis.get("profile_difficulty_window"),
+    )
+
+    analysis = dict(analysis)
+    variant = _analysis_variant(mode, window)
+    analysis["puzzle_id"] = puzzle_id
+    analysis["analysis_variant"] = variant
+    analysis["analysis_mode"] = mode
+    analysis["profile_difficulty_window"] = window
 
     save_sudoku(
         original,
@@ -682,49 +873,69 @@ def save_analysis(analysis):
     )
 
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "analysis_version": ANALYSIS_VERSION,
         "puzzle_id": puzzle_id,
+        "analysis_variant": variant,
+        "analysis_mode": mode,
+        "profile_difficulty_window": window,
         "created_at": _current_timestamp(),
         "analysis": _to_json_value(analysis),
     }
 
-    path = _analysis_path(puzzle_id)
+    path = _analysis_path(puzzle_id, mode, window)
     _write_json(path, payload)
 
-    _ANALYSIS_MEMORY_CACHE[puzzle_id] = analysis
+    cache_key = _analysis_cache_key(puzzle_id, mode, window)
+    _ANALYSIS_MEMORY_CACHE[cache_key] = analysis
 
     return path
 
 
-def load_analysis(reference):
+def load_analysis(
+    reference,
+    analysis_mode=DEFAULT_ANALYSIS_MODE,
+    profile_difficulty_window=None,
+):
     """
-    Carica l'analisi associata a un Sudoku.
-
-    reference può essere l'identificatore, il nome o il percorso del Sudoku.
+    Carica la variante richiesta tramite ID, nome o percorso del Sudoku.
     """
     puzzle = load_sudoku(reference)
     puzzle_id = puzzle["id"]
-    path = _analysis_path(puzzle_id)
+    mode, window = _normalise_analysis_request(
+        analysis_mode,
+        profile_difficulty_window,
+    )
+    path = _analysis_path(puzzle_id, mode, window)
 
     if not path.exists():
+        variant = _analysis_variant(mode, window)
         raise FileNotFoundError(
-            f"Il Sudoku {puzzle['name']!r} non è ancora stato analizzato."
+            f"Il Sudoku {puzzle['name']!r} non possiede ancora "
+            f"l analisi {variant!r}."
         )
 
     payload = _read_json(path)
 
-    if payload.get("puzzle_id") != puzzle_id:
-        raise ValueError("L'analisi non appartiene al Sudoku richiesto.")
-
-    if payload.get("analysis_version") != ANALYSIS_VERSION:
+    if not _analysis_payload_is_current(
+        payload,
+        puzzle_id,
+        mode,
+        window,
+    ):
         raise ValueError(
-            "L'analisi è stata prodotta con una versione precedente "
-            "del solver e deve essere ricalcolata."
+            "L analisi richiesta appartiene a una versione, un Sudoku "
+            "o una variante differente e deve essere ricalcolata."
         )
 
     analysis = _restore_analysis(payload["analysis"])
-    _ANALYSIS_MEMORY_CACHE[puzzle_id] = analysis
+    analysis.setdefault("puzzle_id", puzzle_id)
+    analysis.setdefault(
+        "analysis_variant",
+        _analysis_variant(mode, window),
+    )
+    cache_key = _analysis_cache_key(puzzle_id, mode, window)
+    _ANALYSIS_MEMORY_CACHE[cache_key] = analysis
 
     return analysis
 
@@ -738,24 +949,24 @@ def analyse_puzzle_cached(
     name=None,
     metadata=None,
     force=False,
+    analysis_mode=DEFAULT_ANALYSIS_MODE,
+    profile_difficulty_window=None,
+    max_steps=10000,
+    verbose=False,
 ):
     """
-    Restituisce l'analisi di un Sudoku seguendo questo ordine:
+    Restituisce e persiste la variante di analisi richiesta.
 
-    1. usa l'analisi già presente in memoria;
-    2. altrimenti carica l'analisi salvata;
-    3. altrimenti esegue analyse_puzzle;
-    4. salva automaticamente Sudoku e analisi.
-
-    puzzle può essere:
-    - una stringa di 81 caratteri;
-    - una griglia 9x9;
-    - un SudokuState;
-    - il nome o l'identificatore di un Sudoku già salvato.
-
-    Con force=True l'analisi viene sempre ricalcolata.
+    Le varianti ``deep``, ``profile`` e ``superficial`` hanno file e chiavi
+    di cache distinti. La ``deep`` resta il default e continua a usare
+    ``analysis.json``.
     """
     _ensure_sudoku_directories()
+
+    mode, window = _normalise_analysis_request(
+        analysis_mode,
+        profile_difficulty_window,
+    )
 
     if isinstance(puzzle, str) and not _looks_like_grid_string(puzzle):
         stored_puzzle = load_sudoku(puzzle)
@@ -768,42 +979,61 @@ def analyse_puzzle_cached(
 
     else:
         grid = normalise_sudoku_grid(puzzle)
-
         stored_puzzle = save_sudoku(
             grid,
             name=name,
             metadata=metadata,
         )
-
         puzzle_id = stored_puzzle["id"]
         name = stored_puzzle["name"]
 
+    cache_key = _analysis_cache_key(puzzle_id, mode, window)
+
     if not force:
-        cached = _ANALYSIS_MEMORY_CACHE.get(puzzle_id)
+        cached = _ANALYSIS_MEMORY_CACHE.get(cache_key)
 
         if cached is not None:
             return cached
 
-        path = _analysis_path(puzzle_id)
+        path = _analysis_path(puzzle_id, mode, window)
 
         if path.exists():
             payload = _read_json(path)
 
-            analysis_is_current = (
-                payload.get("puzzle_id") == puzzle_id
-                and payload.get("analysis_version") == ANALYSIS_VERSION
-            )
-
-            if analysis_is_current:
+            if _analysis_payload_is_current(
+                payload,
+                puzzle_id,
+                mode,
+                window,
+            ):
                 analysis = _restore_analysis(payload["analysis"])
-                _ANALYSIS_MEMORY_CACHE[puzzle_id] = analysis
+                analysis.setdefault("puzzle_id", puzzle_id)
+                analysis.setdefault(
+                    "analysis_variant",
+                    _analysis_variant(mode, window),
+                )
+                _ANALYSIS_MEMORY_CACHE[cache_key] = analysis
                 return analysis
 
     analysis = ss.analyse_puzzle(
         grid,
         name=name,
+        analysis_mode=mode,
+        profile_difficulty_window=(
+            window
+            if mode == "profile"
+            else getattr(
+                ss,
+                "DEFAULT_PROFILE_DIFFICULTY_WINDOW",
+                1.0,
+            )
+        ),
+        max_steps=max_steps,
+        verbose=verbose,
     )
 
-    save_analysis(analysis)
+    analysis["puzzle_id"] = puzzle_id
+    analysis["analysis_variant"] = _analysis_variant(mode, window)
 
+    save_analysis(analysis)
     return analysis
