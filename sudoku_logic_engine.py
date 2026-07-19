@@ -19,17 +19,54 @@ Move usato dal resto del progetto, mantenendo le interfacce storiche.
 
 from __future__ import annotations
 
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 from copy import deepcopy
 from dataclasses import dataclass
 from itertools import combinations
-import weakref
+from threading import RLock
 
 from sudoku_data_structure import UNITS, UNIT_KINDS, peers
 
 
 Candidate = tuple[int, int, int]
 Literal = tuple[int, int, int, bool]
+
+
+# Le tecniche sono raggruppate in batch con strutture e propagazioni comuni.
+# La prima richiesta di una tecnica prepara l'intero batch; le richieste
+# successive dello stesso stato leggono esclusivamente i risultati in cache.
+LOGIC_TECHNIQUE_BATCHES = {
+    "static": (
+        "Bidirectional X-Cycle",
+        "XY-Chain",
+        "Bidirectional Y-Cycle",
+        "Forcing X-Chain",
+        "Forcing Chain",
+        "Bidirectional Cycle",
+    ),
+    "multiple": (
+        "Nishio",
+        "Cell Forcing Chain",
+        "Region Forcing Chain",
+    ),
+    "dynamic": (
+        "Dynamic Forcing Chain",
+        "Dynamic Forcing Chain Plus",
+        "Nested Forcing Chain",
+    ),
+}
+
+_LOGIC_TECHNIQUE_TO_BATCH = {
+    technique: batch
+    for batch, techniques in LOGIC_TECHNIQUE_BATCHES.items()
+    for technique in techniques
+}
+
+_LOGIC_TECHNIQUE_ORDER = tuple(
+    technique
+    for batch in ("static", "multiple", "dynamic")
+    for technique in LOGIC_TECHNIQUE_BATCHES[batch]
+)
 
 _UNITS_BY_CELL: dict[tuple[int, int], tuple[int, ...]] = {}
 for _unit_index, _unit in enumerate(UNITS):
@@ -799,28 +836,101 @@ class LogicEngine:
         self.graph = StaticImplicationGraph(self.candidates)
         self.propagator = DynamicPropagator(self.grid, self.candidates)
         self._results = {}
+        self._prepared_batches = set()
         self._propagation_cache = {}
+        self._closure_cache = {}
+        self._lock = RLock()
 
     def _propagate(self, source, *, mode="dynamic", advanced_level=0):
-        key = source, mode, advanced_level
+        # I tre livelli dinamici condividono la stessa propagazione massima.
+        # Le deduzioni vengono poi attribuite a Dynamic, Plus o Nested in
+        # base alle feature minime della prova. Questo evita tre esplorazioni
+        # quasi identiche per ogni assunzione. Nishio resta separato.
+        effective_level = 2 if mode == "dynamic" else advanced_level
+        key = source, mode, effective_level
         if key not in self._propagation_cache:
             self._propagation_cache[key] = self.propagator.propagate(
                 source,
                 mode=mode,
-                advanced_level=advanced_level,
+                advanced_level=effective_level,
             )
         return self._propagation_cache[key]
 
-    def find(self, technique: str):
+    def _closure(self, source, allowed):
+        key = source, frozenset(allowed)
+        if key not in self._closure_cache:
+            self._closure_cache[key] = self.graph.closure(source, key[1])
+        return self._closure_cache[key]
+
+    @staticmethod
+    def _matches_feature_tier(features, required_feature):
+        features = set(features)
+        if required_feature == "dynamic":
+            return (
+                "dynamic" in features
+                and "advanced" not in features
+                and "nested" not in features
+            )
+        if required_feature == "advanced":
+            return "advanced" in features and "nested" not in features
+        if required_feature == "nested":
+            return "nested" in features
+        return required_feature in features
+
+    @staticmethod
+    def _method_name(technique):
+        return (
+            "_find_"
+            + technique.lower()
+            .replace("+", "_plus")
+            .replace(" ", "_")
+            .replace("-", "_")
+            .replace("(", "")
+            .replace(")", "")
+        )
+
+    def _compute(self, technique):
+        method = getattr(self, self._method_name(technique), None)
+        if method is None:
+            raise KeyError(f"Tecnica logica sconosciuta: {technique}")
+        self._results[technique] = self._deduplicate(method())
+
+    def prepare(self, batch="all"):
+        """Precalcola un batch logico una sola volta per questo stato.
+
+        ``batch`` può essere ``static``, ``multiple``, ``dynamic``, ``all``
+        oppure il nome di una tecnica. Le chiamate successive non eseguono
+        ricerca: leggono soltanto ``self._results``.
+        """
+        if batch in _LOGIC_TECHNIQUE_TO_BATCH:
+            batch = _LOGIC_TECHNIQUE_TO_BATCH[batch]
+
+        if batch == "all":
+            batch_names = ("static", "multiple", "dynamic")
+        elif batch in LOGIC_TECHNIQUE_BATCHES:
+            batch_names = (batch,)
+        else:
+            raise KeyError(f"Batch logico sconosciuto: {batch}")
+
+        with self._lock:
+            for batch_name in batch_names:
+                if batch_name in self._prepared_batches:
+                    continue
+                for technique in LOGIC_TECHNIQUE_BATCHES[batch_name]:
+                    if technique not in self._results:
+                        self._compute(technique)
+                self._prepared_batches.add(batch_name)
+
+    def get_cached(self, technique):
         if technique not in self._results:
-            method_name = "_find_" + technique.lower().replace("+", "_plus").replace(" ", "_").replace("-", "_").replace("(", "").replace(")", "")
-            method = getattr(self, method_name, None)
-            if method is None:
-                raise KeyError(f"Tecnica logica sconosciuta: {technique}")
-            self._results[technique] = self._deduplicate(method())
-        # Il chiamante può arricchire il dizionario Move: non deve riuscire a
-        # mutare accidentalmente le prove conservate nella cache del motore.
+            raise KeyError(
+                f"La tecnica {technique!r} non è ancora nella cache logica."
+            )
         return deepcopy(self._results[technique])
+
+    def find(self, technique: str):
+        self.prepare(technique)
+        return self.get_cached(technique)
 
     @staticmethod
     def _deduplicate(deductions):
@@ -959,7 +1069,7 @@ class LogicEngine:
             if len(candidates) < 3:
                 continue
             sources = [_literal(candidate, True) for candidate in candidates]
-            closures = [self.graph.closure(source, allowed) for source in sources]
+            closures = [self._closure(source, allowed) for source in sources]
             common = set.intersection(*(closure.literals for closure in closures))
             for literal in sorted(common, key=_literal_key):
                 candidate = _candidate(literal)
@@ -1044,7 +1154,9 @@ class LogicEngine:
             if (
                 on_result.contradiction
                 and not off_result.contradiction
-                and required_feature in on_result.contradiction_features
+                and self._matches_feature_tier(
+                    on_result.contradiction_features, required_feature
+                )
             ):
                 result.append(_deduction(
                     description=(
@@ -1061,7 +1173,9 @@ class LogicEngine:
             if (
                 off_result.contradiction
                 and not on_result.contradiction
-                and required_feature in off_result.contradiction_features
+                and self._matches_feature_tier(
+                    off_result.contradiction_features, required_feature
+                )
             ):
                 result.append(_deduction(
                     description=(
@@ -1084,7 +1198,9 @@ class LogicEngine:
                     set(on_result.features.get(literal, ()))
                     | set(off_result.features.get(literal, ()))
                 )
-                if required_feature not in combined_features:
+                if not self._matches_feature_tier(
+                    combined_features, required_feature
+                ):
                     continue
                 target = _candidate(literal)
                 if target not in self.graph.all_candidates:
@@ -1146,7 +1262,7 @@ class LogicEngine:
                     outcome.features.get(literal, frozenset())
                     for outcome in outcomes
                 ))
-                if required_feature not in features:
+                if not self._matches_feature_tier(features, required_feature):
                     continue
                 if literal[3]:
                     placements, eliminations = (target,), ()
@@ -1239,27 +1355,111 @@ class LogicEngine:
         )
 
 
-_ENGINE_CACHE = weakref.WeakKeyDictionary()
+# Cache LRU indicizzata dal contenuto logico dello stato, non dall'identità
+# dell'oggetto Python. Anche due SudokuState distinti ma equivalenti possono
+# quindi riutilizzare lo stesso motore già preparato.
+_ENGINE_CACHE_MAXSIZE = 32
+_ENGINE_CACHE = OrderedDict()
+_ENGINE_CACHE_LOCK = RLock()
+_ENGINE_CACHE_HITS = 0
+_ENGINE_CACHE_MISSES = 0
 
 
 def _engine_for(state):
+    global _ENGINE_CACHE_HITS, _ENGINE_CACHE_MISSES
+
     fingerprint = _fingerprint(state)
-    cached = _ENGINE_CACHE.get(state)
-    if cached is None or cached[0] != fingerprint:
-        cached = fingerprint, LogicEngine(state)
-        _ENGINE_CACHE[state] = cached
-    return cached[1]
+    with _ENGINE_CACHE_LOCK:
+        engine = _ENGINE_CACHE.get(fingerprint)
+        if engine is not None:
+            _ENGINE_CACHE_HITS += 1
+            _ENGINE_CACHE.move_to_end(fingerprint)
+            return engine
+
+        _ENGINE_CACHE_MISSES += 1
+        engine = LogicEngine(state)
+        _ENGINE_CACHE[fingerprint] = engine
+        _ENGINE_CACHE.move_to_end(fingerprint)
+
+        while len(_ENGINE_CACHE) > _ENGINE_CACHE_MAXSIZE:
+            _ENGINE_CACHE.popitem(last=False)
+
+        return engine
+
+
+def prepare_logic_cache(state, technique=None, batch=None):
+    """Prepara la cache logica dello stato e restituisce il motore.
+
+    Se viene fornita ``technique``, viene preparato il batch che la contiene.
+    Con ``batch`` si può richiedere esplicitamente ``static``, ``multiple``,
+    ``dynamic`` o ``all``. Senza argomenti prepara l'inventario completo.
+    """
+    if technique is not None and batch is not None:
+        raise ValueError("Usa technique oppure batch, non entrambi.")
+
+    engine = _engine_for(state)
+    target = technique if technique is not None else (batch or "all")
+    engine.prepare(target)
+    return engine
+
+
+def get_cached_logic_deductions(state, technique: str):
+    """Legge una tecnica già preparata senza avviare alcuna ricerca."""
+    return _engine_for(state).get_cached(technique)
 
 
 def find_logic_deductions(state, technique: str):
-    """Restituisce tutte le deduzioni della tecnica senza mutare ``state``."""
-    return _engine_for(state).find(technique)
+    """Prepara il batch della tecnica e ne restituisce le deduzioni."""
+    engine = prepare_logic_cache(state, technique=technique)
+    return engine.get_cached(technique)
+
+
+def clear_logic_cache(state=None):
+    """Svuota tutta la cache o soltanto la firma dello stato indicato."""
+    global _ENGINE_CACHE_HITS, _ENGINE_CACHE_MISSES
+
+    with _ENGINE_CACHE_LOCK:
+        if state is None:
+            _ENGINE_CACHE.clear()
+            _ENGINE_CACHE_HITS = 0
+            _ENGINE_CACHE_MISSES = 0
+            return
+
+        _ENGINE_CACHE.pop(_fingerprint(state), None)
+
+
+def logic_cache_info():
+    """Restituisce statistiche leggere della cache globale."""
+    with _ENGINE_CACHE_LOCK:
+        return {
+            "size": len(_ENGINE_CACHE),
+            "maxsize": _ENGINE_CACHE_MAXSIZE,
+            "hits": _ENGINE_CACHE_HITS,
+            "misses": _ENGINE_CACHE_MISSES,
+            "prepared_batches": sum(
+                len(engine._prepared_batches)
+                for engine in _ENGINE_CACHE.values()
+            ),
+            "cached_techniques": sum(
+                len(engine._results)
+                for engine in _ENGINE_CACHE.values()
+            ),
+            "cached_propagations": sum(
+                len(engine._propagation_cache)
+                for engine in _ENGINE_CACHE.values()
+            ),
+        }
 
 
 __all__ = [
     "Candidate",
     "Literal",
+    "LOGIC_TECHNIQUE_BATCHES",
     "LogicEngine",
     "StaticImplicationGraph",
+    "clear_logic_cache",
     "find_logic_deductions",
+    "get_cached_logic_deductions",
+    "logic_cache_info",
+    "prepare_logic_cache",
 ]

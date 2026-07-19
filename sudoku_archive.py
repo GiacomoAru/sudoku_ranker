@@ -22,7 +22,7 @@ PUZZLE_SCHEMA_VERSION = 1
 
 # Incrementare questo numero quando cambia il funzionamento del solver
 # o il formato dell'analisi. Le vecchie analisi verranno ricalcolate.
-ANALYSIS_VERSION = 8
+ANALYSIS_VERSION = 9
 
 # La modalità canonica resta deep. Le altre varianti vengono salvate
 # separatamente, senza sovrascrivere l analisi completa.
