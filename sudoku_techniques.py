@@ -1,18 +1,25 @@
 '''
 ## 2. Libreria delle tecniche
 
-Ogni funzione analizza lo stato corrente e restituisce **tutte** le istanze
-applicabili della tecnica. Le difficoltà sono espresse nella scala classica
-Sudoku Explainer 1.2.1 (SE), non in livelli generici da 1 a 5.
+Ogni funzione analizza lo stato corrente e restituisce le conclusioni
+logiche applicabili della tecnica. Le prove equivalenti vengono consolidate:
+l'inventario conserva quante prove portano allo stesso risultato, ma espone
+una sola mossa rappresentativa per ogni esito distinto. Le difficoltà sono
+espresse nella scala classica Sudoku Explainer 1.2.1 (SE), non in livelli
+generici da 1 a 5.
 
 La tassonomia resta volutamente granulare: pattern moderni come Skyscraper,
-Two-String Kite e W-Wing conservano il proprio nome, ma ricevono il rating
-della famiglia SE equivalente (Forcing X-Chain o Forcing Chain).
+Two-String Kite, Empty Rectangle, Remote Pair, XY-Chain, Turbot Fish e W-Wing
+conservano il proprio nome, ma ricevono il rating della famiglia SE
+equivalente. Il metadata della mossa conserva anche la tecnica logica genitrice
+per consentire sia report dettagliati sia aggregazioni per famiglia.
 
 Il registro `TECHNIQUE_FUNCS` in fondo è ordinato per rating SE minimo. Le
-tecniche basate su catene generali, Nishio e forcing dinamiche non sono
-registrate: richiedono un motore di inferenza dedicato, distinto dai
-rilevatori locali contenuti in questo modulo.
+tecniche basate su catene generali, Nishio e forcing dinamiche delegano la
+ricerca al motore di inferenza dedicato in `sudoku_logic_engine`. I risultati
+sono classificati con tre granularità indipendenti: tecnica, famiglia logica
+e strategia generale. Una cache per stato evita di ricalcolare i rilevatori
+locali e le catene già richiesti durante lo stesso step di analisi.
 '''
 
 """
@@ -24,7 +31,8 @@ the single simplest move across all techniques and apply it.
 Move dict schema:
 {
     'technique': str,           # display name, matches the taxonomy document
-    'family': str,              # broader family, for reporting
+    'family': str,              # logical family, for detailed aggregation
+    'strategy': str,            # broader strategy, for compact aggregation
     'difficulty': float,        # Sudoku Explainer 1.2.1 rating
     'description': str,         # human readable explanation of this instance
     'placements': [(r,c,v)],    # cells to solve (usually 0 or 1 entries)
@@ -32,14 +40,19 @@ Move dict schema:
     'highlight': {              # cells to visually mark, by role
         'primary': [(r,c)],     # cells that define the pattern
         'secondary': [(r,c)],   # cells affected by eliminations
-    }
+    },
+    'proof_count': int,         # equivalent proofs represented by this move
+    'conclusion_count': int,    # atomic placements/eliminations in the move
 }
 A move must change something: it either places a digit or eliminates >=1
 candidate; moves that would do nothing are not returned.
 """
 
+from collections import defaultdict
 from itertools import combinations
+
 from sudoku_data_structure import *
+import sudoku_logic_engine as logic_engine
 
 TECHNIQUE_DIFFICULTY = {
     # Tecniche elementari (scala SE 1.2.1).
@@ -84,16 +97,78 @@ TECHNIQUE_DIFFICULTY = {
     "BUG Type 3 (Quad)": 6.0,
     "Aligned Pair Exclusion": 6.2,
 
+    # Cicli e catene statiche.
+    "Bidirectional X-Cycle": 6.5,
+    "Bidirectional Y-Cycle": 6.5,
+    "Remote Pair": 6.5,       # Bidirectional Y-Cycle
+    "XY-Chain": 6.5,          # Bidirectional Y-Cycle
+    "XY-Cycle": 6.5,          # Bidirectional Y-Cycle
+    "Forcing X-Chain": 6.6,
+
     # Nomi moderni mantenuti, rating della famiglia SE equivalente.
     "Skyscraper": 6.6,        # Forcing X-Chain
     "Two-String Kite": 6.6,  # Forcing X-Chain
+    "Empty Rectangle": 6.6,  # Forcing X-Chain
+    "Turbot Fish": 6.6,       # Forcing X-Chain breve
+    "Forcing Chain": 7.0,
+    "Alternating Inference Chain": 7.0,  # Forcing Chain
+    "Bidirectional Cycle": 7.0,
+    "Continuous Nice Loop": 7.0,         # Bidirectional Cycle
     "W-Wing": 7.0,           # Forcing Chain
+
+    # Assunzioni, riduzioni multiple e propagazione dinamica.
+    "Nishio": 7.5,
+    "Cell Forcing Chain": 8.0,
+    "Region Forcing Chain": 8.0,
+    "Dynamic Forcing Chain": 8.5,
+    "Dynamic Contradiction Forcing Chain": 8.5,
+    "Dynamic Double Forcing Chain": 8.5,
+    "Dynamic Cell Forcing Chain": 8.5,
+    "Dynamic Region Forcing Chain": 8.5,
+    "Dynamic Forcing Chain Plus": 9.0,
+    "Dynamic Contradiction Forcing Chain Plus": 9.0,
+    "Dynamic Double Forcing Chain Plus": 9.0,
+    "Dynamic Cell Forcing Chain Plus": 9.0,
+    "Dynamic Region Forcing Chain Plus": 9.0,
+    "Nested Forcing Chain": 9.5,
+    "Nested Contradiction Forcing Chain": 9.5,
+    "Nested Double Forcing Chain": 9.5,
+    "Nested Cell Forcing Chain": 9.5,
+    "Nested Region Forcing Chain": 9.5,
 }
 
-# Famiglie SE che richiedono un vero motore di catene/assunzioni. Sono
-# dichiarate esplicitamente per distinguere una lacuna intenzionale da una
-# tecnica locale dimenticata.
-TECHNIQUES_REQUIRING_LOGIC_ENGINE = {
+# Il nome specifico resta distinto dalla famiglia logica che ne determina il
+# rating SE e l'algoritmo. È utile anche ai report che vogliono aggregare o
+# espandere la tassonomia a seconda del livello di dettaglio desiderato.
+MODERN_TECHNIQUE_PARENT = {
+    "Remote Pair": "Bidirectional Y-Cycle",
+    "XY-Chain": "Bidirectional Y-Cycle",
+    "XY-Cycle": "Bidirectional Y-Cycle",
+    "Skyscraper": "Forcing X-Chain",
+    "Two-String Kite": "Forcing X-Chain",
+    "Empty Rectangle": "Forcing X-Chain",
+    "Turbot Fish": "Forcing X-Chain",
+    "W-Wing": "Forcing Chain",
+    "Alternating Inference Chain": "Forcing Chain",
+    "Continuous Nice Loop": "Bidirectional Cycle",
+    "Dynamic Contradiction Forcing Chain": "Dynamic Forcing Chain",
+    "Dynamic Double Forcing Chain": "Dynamic Forcing Chain",
+    "Dynamic Cell Forcing Chain": "Dynamic Forcing Chain",
+    "Dynamic Region Forcing Chain": "Dynamic Forcing Chain",
+    "Dynamic Contradiction Forcing Chain Plus": "Dynamic Forcing Chain Plus",
+    "Dynamic Double Forcing Chain Plus": "Dynamic Forcing Chain Plus",
+    "Dynamic Cell Forcing Chain Plus": "Dynamic Forcing Chain Plus",
+    "Dynamic Region Forcing Chain Plus": "Dynamic Forcing Chain Plus",
+    "Nested Contradiction Forcing Chain": "Nested Forcing Chain",
+    "Nested Double Forcing Chain": "Nested Forcing Chain",
+    "Nested Cell Forcing Chain": "Nested Forcing Chain",
+    "Nested Region Forcing Chain": "Nested Forcing Chain",
+}
+
+# Intervalli SE delle tecniche implementate dal motore logico. Il rating
+# canonico usato dal solver è il minimo dell'intervallo; l'estremo superiore
+# documenta la crescita storica legata alla lunghezza/complessità della prova.
+LOGIC_ENGINE_TECHNIQUE_RANGES = {
     "Bidirectional X-Cycle": (6.5, 7.5),
     "Bidirectional Y-Cycle": (6.5, 7.5),
     "Forcing X-Chain": (6.6, 7.6),
@@ -106,6 +181,10 @@ TECHNIQUES_REQUIRING_LOGIC_ENGINE = {
     "Dynamic Forcing Chain Plus": (9.0, 10.0),
     "Nested Forcing Chain": (9.5, float("inf")),
 }
+
+# Nome storico mantenuto per compatibilità: tutte le voci che richiedevano il
+# motore sono ora coperte.
+TECHNIQUES_REQUIRING_LOGIC_ENGINE = {}
 
 # La generalizzazione dei rettangoli a Unique Loop di 6+ celle richiede un
 # enumeratore di cicli alternati con validazione delle case. È un componente
@@ -167,11 +246,359 @@ _TECHNIQUE_ORDER = [
     # Tecniche locali oltre la fascia BUG.
     "Aligned Pair Exclusion",
 
-    # Specializzazioni di catene già implementate come pattern autonomi.
+    # Cicli e catene generali gestiti dal motore logico.
+    "Bidirectional X-Cycle",
+    "Remote Pair",
+    "XY-Chain",
+    "XY-Cycle",
+    "Bidirectional Y-Cycle",
+
+    # Le specializzazioni precedono la famiglia generale a parità di rating,
+    # così il log conserva il nome più informativo quando entrambe descrivono
+    # la stessa eliminazione.
     "Skyscraper",
     "Two-String Kite",
+    "Empty Rectangle",
+    "Turbot Fish",
+    "Forcing X-Chain",
     "W-Wing",
+    "Alternating Inference Chain",
+    "Forcing Chain",
+    "Continuous Nice Loop",
+    "Bidirectional Cycle",
+
+    # Forcing multipli e dinamici.
+    "Nishio",
+    "Cell Forcing Chain",
+    "Region Forcing Chain",
+    "Dynamic Contradiction Forcing Chain",
+    "Dynamic Double Forcing Chain",
+    "Dynamic Cell Forcing Chain",
+    "Dynamic Region Forcing Chain",
+    "Dynamic Forcing Chain",
+    "Dynamic Contradiction Forcing Chain Plus",
+    "Dynamic Double Forcing Chain Plus",
+    "Dynamic Cell Forcing Chain Plus",
+    "Dynamic Region Forcing Chain Plus",
+    "Dynamic Forcing Chain Plus",
+    "Nested Contradiction Forcing Chain",
+    "Nested Double Forcing Chain",
+    "Nested Cell Forcing Chain",
+    "Nested Region Forcing Chain",
+    "Nested Forcing Chain",
 ]
+
+
+# ---------------------------------------------------------------- taxonomy
+# ``family`` mantiene una tassonomia abbastanza granulare per le heatmap
+# dettagliate. ``strategy`` raggruppa invece famiglie affini in poche righe
+# leggibili. La tecnica specifica resta sempre disponibile in ``technique``.
+TECHNIQUE_FAMILY_ORDER = [
+    "Inserimenti diretti",
+    "Intersezioni box/linee",
+    "Sottoinsiemi bloccati",
+    "Fish",
+    "Wings",
+    "Unicita",
+    "Exclusion",
+    "Pattern a cifra singola",
+    "Cicli bidirezionali",
+    "Catene forzanti",
+    "Assunzioni logiche",
+    "Forcing multipli",
+    "Forcing dinamici",
+    "Forcing annidati",
+]
+
+TECHNIQUE_STRATEGY_ORDER = [
+    "Tecniche elementari",
+    "Sottoinsiemi e intersezioni",
+    "Fish e wings",
+    "Unicita ed esclusione",
+    "Pattern a cifra singola",
+    "Catene statiche",
+    "Forcing multipli",
+    "Forcing dinamici",
+    "Forcing annidati",
+]
+
+TECHNIQUE_FAMILY = {
+    "Last Value": "Inserimenti diretti",
+    "Hidden Single (Box)": "Inserimenti diretti",
+    "Hidden Single (Row/Column)": "Inserimenti diretti",
+    "Naked Single": "Inserimenti diretti",
+    "Direct Pointing": "Intersezioni box/linee",
+    "Direct Claiming": "Intersezioni box/linee",
+    "Pointing": "Intersezioni box/linee",
+    "Claiming": "Intersezioni box/linee",
+    "Direct Hidden Pair": "Sottoinsiemi bloccati",
+    "Direct Hidden Triplet": "Sottoinsiemi bloccati",
+    "Naked Pair": "Sottoinsiemi bloccati",
+    "Hidden Pair": "Sottoinsiemi bloccati",
+    "Naked Triple": "Sottoinsiemi bloccati",
+    "Hidden Triple": "Sottoinsiemi bloccati",
+    "Naked Quadruple": "Sottoinsiemi bloccati",
+    "Hidden Quadruple": "Sottoinsiemi bloccati",
+    "X-Wing": "Fish",
+    "Swordfish": "Fish",
+    "Jellyfish": "Fish",
+    "Y-Wing": "Wings",
+    "XYZ-Wing": "Wings",
+    "W-Wing": "Wings",
+    "Unique Rectangle Type 1": "Unicita",
+    "Unique Rectangle Type 2": "Unicita",
+    "Unique Rectangle Type 3": "Unicita",
+    "Unique Rectangle Type 4": "Unicita",
+    "Unique Rectangle Type 5": "Unicita",
+    "BUG+1": "Unicita",
+    "BUG Type 2": "Unicita",
+    "BUG Type 3 (Pair)": "Unicita",
+    "BUG Type 3 (Triplet)": "Unicita",
+    "BUG Type 3 (Quad)": "Unicita",
+    "BUG Type 4": "Unicita",
+    "Aligned Pair Exclusion": "Exclusion",
+    "Skyscraper": "Pattern a cifra singola",
+    "Two-String Kite": "Pattern a cifra singola",
+    "Empty Rectangle": "Pattern a cifra singola",
+    "Turbot Fish": "Pattern a cifra singola",
+    "Bidirectional X-Cycle": "Cicli bidirezionali",
+    "Bidirectional Y-Cycle": "Cicli bidirezionali",
+    "Remote Pair": "Cicli bidirezionali",
+    "XY-Chain": "Cicli bidirezionali",
+    "XY-Cycle": "Cicli bidirezionali",
+    "Bidirectional Cycle": "Cicli bidirezionali",
+    "Continuous Nice Loop": "Cicli bidirezionali",
+    "Forcing X-Chain": "Catene forzanti",
+    "Forcing Chain": "Catene forzanti",
+    "Alternating Inference Chain": "Catene forzanti",
+    "Nishio": "Assunzioni logiche",
+    "Cell Forcing Chain": "Forcing multipli",
+    "Region Forcing Chain": "Forcing multipli",
+    "Dynamic Forcing Chain": "Forcing dinamici",
+    "Dynamic Contradiction Forcing Chain": "Forcing dinamici",
+    "Dynamic Double Forcing Chain": "Forcing dinamici",
+    "Dynamic Cell Forcing Chain": "Forcing dinamici",
+    "Dynamic Region Forcing Chain": "Forcing dinamici",
+    "Dynamic Forcing Chain Plus": "Forcing dinamici",
+    "Dynamic Contradiction Forcing Chain Plus": "Forcing dinamici",
+    "Dynamic Double Forcing Chain Plus": "Forcing dinamici",
+    "Dynamic Cell Forcing Chain Plus": "Forcing dinamici",
+    "Dynamic Region Forcing Chain Plus": "Forcing dinamici",
+    "Nested Forcing Chain": "Forcing annidati",
+    "Nested Contradiction Forcing Chain": "Forcing annidati",
+    "Nested Double Forcing Chain": "Forcing annidati",
+    "Nested Cell Forcing Chain": "Forcing annidati",
+    "Nested Region Forcing Chain": "Forcing annidati",
+}
+
+_FAMILY_TO_STRATEGY = {
+    "Inserimenti diretti": "Tecniche elementari",
+    "Intersezioni box/linee": "Sottoinsiemi e intersezioni",
+    "Sottoinsiemi bloccati": "Sottoinsiemi e intersezioni",
+    "Fish": "Fish e wings",
+    "Wings": "Fish e wings",
+    "Unicita": "Unicita ed esclusione",
+    "Exclusion": "Unicita ed esclusione",
+    "Pattern a cifra singola": "Pattern a cifra singola",
+    "Cicli bidirezionali": "Catene statiche",
+    "Catene forzanti": "Catene statiche",
+    "Assunzioni logiche": "Forcing multipli",
+    "Forcing multipli": "Forcing multipli",
+    "Forcing dinamici": "Forcing dinamici",
+    "Forcing annidati": "Forcing annidati",
+}
+
+TECHNIQUE_STRATEGY = {
+    technique: _FAMILY_TO_STRATEGY[family]
+    for technique, family in TECHNIQUE_FAMILY.items()
+}
+
+
+def technique_family(technique, fallback=None):
+    """Restituisce la famiglia canonica di una tecnica."""
+    if technique in TECHNIQUE_FAMILY:
+        return TECHNIQUE_FAMILY[technique]
+    if fallback is not None:
+        return fallback
+    parent = MODERN_TECHNIQUE_PARENT.get(technique)
+    if parent in TECHNIQUE_FAMILY:
+        return TECHNIQUE_FAMILY[parent]
+    return "Altro"
+
+
+def technique_strategy(technique, family=None):
+    """Restituisce la strategia generale usata nelle viste compatte."""
+    if technique in TECHNIQUE_STRATEGY:
+        return TECHNIQUE_STRATEGY[technique]
+    family = family or technique_family(technique)
+    return _FAMILY_TO_STRATEGY.get(family, "Altro")
+
+
+def technique_metadata(technique):
+    """Metadata stabile consumabile da solver, report e visualizzazioni."""
+    family = technique_family(technique)
+    return {
+        "technique": technique,
+        "family": family,
+        "strategy": technique_strategy(technique, family),
+        "difficulty": _canonical_difficulty(technique),
+        "parent": MODERN_TECHNIQUE_PARENT.get(technique, technique),
+    }
+
+
+_missing_family_metadata = set(TECHNIQUE_DIFFICULTY) - set(TECHNIQUE_FAMILY)
+if _missing_family_metadata:
+    missing = ", ".join(sorted(_missing_family_metadata))
+    raise RuntimeError(f"Metadata di famiglia mancante per: {missing}")
+
+
+# ---------------------------------------------------------- move utilities
+def _normalise_triplets(items):
+    return sorted({
+        (int(r), int(c), int(value))
+        for r, c, value in items
+    })
+
+
+def _normalise_cells(items):
+    return sorted({
+        (int(r), int(c))
+        for r, c in items
+    })
+
+
+def _atomic_conclusions(placements, eliminations):
+    return {
+        ("place", r, c, value)
+        for r, c, value in placements
+    } | {
+        ("eliminate", r, c, value)
+        for r, c, value in eliminations
+    }
+
+
+def _build_move(
+    technique,
+    family,
+    difficulty,
+    description,
+    placements,
+    eliminations,
+    primary,
+    secondary=None,
+    proof_count=1,
+    extra=None,
+):
+    """Costruisce una Move con tassonomia e conteggi uniformi."""
+    placements = _normalise_triplets(placements)
+    eliminations = _normalise_triplets(eliminations)
+    conclusions = _atomic_conclusions(placements, eliminations)
+
+    if not conclusions:
+        return None
+
+    canonical_family = technique_family(technique, family)
+    canonical_strategy = technique_strategy(technique, canonical_family)
+    primary = _normalise_cells(primary)
+
+    if secondary is None:
+        secondary = [
+            (r, c)
+            for _, r, c, _ in conclusions
+        ]
+
+    move = {
+        "technique": technique,
+        "family": canonical_family,
+        "strategy": canonical_strategy,
+        "difficulty": _canonical_difficulty(technique, difficulty),
+        "description": description,
+        "placements": placements,
+        "eliminations": eliminations,
+        "highlight": {
+            "primary": primary,
+            "secondary": _normalise_cells(secondary),
+        },
+        "proof_count": max(int(proof_count), 1),
+        "conclusion_count": len(conclusions),
+    }
+
+    if extra:
+        move.update(extra)
+
+    return move
+
+
+# -------------------------------------------------------------- state cache
+# Il solver interroga molte funzioni sullo stesso stato. Le catene, inoltre,
+# richiamano tecniche locali per escludere conclusioni gia spiegate in modo
+# piu semplice. La cache evita che questi rilevatori vengano rieseguiti.
+_CACHE_ATTRIBUTE = "_sudoku_technique_analysis_cache"
+
+
+def _state_signature(state):
+    grid = state.grid
+    if hasattr(grid, "tobytes"):
+        grid_signature = grid.tobytes()
+    else:
+        grid_signature = tuple(
+            int(grid[r][c])
+            for r in range(9)
+            for c in range(9)
+        )
+
+    candidate_signature = tuple(
+        tuple(sorted(int(value) for value in state.candidates[r][c]))
+        for r in range(9)
+        for c in range(9)
+    )
+
+    return grid_signature, candidate_signature
+
+
+def _state_cache(state):
+    signature = _state_signature(state)
+    cache_data = getattr(state, _CACHE_ATTRIBUTE, None)
+
+    if (
+        cache_data is None
+        or cache_data.get("signature") != signature
+    ):
+        cache_data = {
+            "signature": signature,
+            "moves": {},
+        }
+        try:
+            setattr(state, _CACHE_ATTRIBUTE, cache_data)
+        except (AttributeError, TypeError):
+            # Stato con __slots__ restrittivi: la correttezza non dipende
+            # dalla cache, quindi si usa semplicemente un contenitore locale.
+            pass
+
+    return cache_data["moves"]
+
+
+def _cached_moves(state, key, producer):
+    cache = _state_cache(state)
+    if key not in cache:
+        cache[key] = tuple(producer())
+    return list(cache[key])
+
+
+def clear_technique_cache(state):
+    """Invalida esplicitamente la cache, utile per test o mutation custom."""
+    try:
+        delattr(state, _CACHE_ATTRIBUTE)
+    except AttributeError:
+        pass
+
+
+def _cached_local(state, key, function, *args):
+    return _cached_moves(
+        state,
+        f"local:{key}",
+        lambda: function(state, *args),
+    )
 
 
 def _canonical_difficulty(technique, fallback=None):
@@ -184,49 +611,54 @@ def _canonical_difficulty(technique, fallback=None):
 
 
 def _elim_move(technique, family, difficulty, description, eliminations, primary, state):
-    """Build an elimination-only move, filtering out no-op eliminations."""
-    real = [(r, c, v) for (r, c, v) in eliminations if v in state.candidates[r][c]]
-    if not real:
-        return None
-    secondary = sorted(set((r, c) for (r, c, v) in real))
-    return {
-        'technique': technique, 'family': family,
-        'difficulty': _canonical_difficulty(technique, difficulty),
-        'description': description, 'placements': [], 'eliminations': real,
-        'highlight': {'primary': primary, 'secondary': secondary},
-    }
+    """Costruisce una mossa di sole eliminazioni, scartando i no-op."""
+    real = [
+        (r, c, value)
+        for r, c, value in eliminations
+        if value in state.candidates[r][c]
+    ]
+    return _build_move(
+        technique=technique,
+        family=family,
+        difficulty=difficulty,
+        description=description,
+        placements=(),
+        eliminations=real,
+        primary=primary,
+    )
 
 
 def _place_move(technique, family, difficulty, description, r, c, v, primary=None):
-    return {
-        'technique': technique, 'family': family,
-        'difficulty': _canonical_difficulty(technique, difficulty),
-        'description': description, 'placements': [(r, c, v)], 'eliminations': [],
-        'highlight': {'primary': primary or [(r, c)], 'secondary': [(r, c)]},
-    }
+    return _build_move(
+        technique=technique,
+        family=family,
+        difficulty=difficulty,
+        description=description,
+        placements=[(r, c, v)],
+        eliminations=(),
+        primary=primary or [(r, c)],
+        secondary=[(r, c)],
+    )
 
 
 def _direct_move(technique, family, difficulty, description, placement,
                  eliminations, primary, state):
     """Costruisce una tecnica Direct: eliminazioni e Hidden Single finale."""
-    real = sorted(set(
-        (r, c, v) for r, c, v in eliminations
-        if v in state.candidates[r][c]
-    ))
-    r, c, v = placement
-    secondary = sorted({(r, c)} | {(rr, cc) for rr, cc, _ in real})
-    return {
-        'technique': technique,
-        'family': family,
-        'difficulty': _canonical_difficulty(technique, difficulty),
-        'description': description,
-        'placements': [(r, c, v)],
-        'eliminations': real,
-        'highlight': {
-            'primary': sorted(set(primary)),
-            'secondary': secondary,
-        },
-    }
+    real = [
+        (r, c, value)
+        for r, c, value in eliminations
+        if value in state.candidates[r][c]
+    ]
+    r, c, value = placement
+    return _build_move(
+        technique=technique,
+        family=family,
+        difficulty=difficulty,
+        description=description,
+        placements=[(r, c, value)],
+        eliminations=real,
+        primary=primary,
+    )
 
 
 # ---------------------------------------------------------- 1.0 last value
@@ -1020,6 +1452,120 @@ def two_string_kite(state):
     return moves
 
 
+def empty_rectangle(state):
+    """Empty Rectangle: ERI di box collegata a una coppia coniugata.
+
+    Nel box le posizioni di un candidato devono stare sull'unione di una
+    mini-riga e una mini-colonna, con l'intersezione vuota e almeno una
+    posizione su ciascun braccio. Una strong link esterna allineata con un
+    braccio chiude la breve X-Chain e produce l'eliminazione sull'altro asse.
+    """
+    moves = []
+    seen = set()
+
+    for digit in range(1, 10):
+        for box_index in range(9):
+            box = UNITS[18 + box_index]
+            box_rows = sorted({r for r, _ in box})
+            box_columns = sorted({c for _, c in box})
+            positions = {
+                (r, c) for r, c in box
+                if digit in state.candidates[r][c]
+            }
+            if len(positions) < 2:
+                continue
+
+            for eri_row in box_rows:
+                for eri_column in box_columns:
+                    eri = (eri_row, eri_column)
+                    if eri in positions:
+                        continue
+                    if not all(
+                        r == eri_row or c == eri_column
+                        for r, c in positions
+                    ):
+                        continue
+                    row_arm = {
+                        cell for cell in positions
+                        if cell[0] == eri_row
+                    }
+                    column_arm = {
+                        cell for cell in positions
+                        if cell[1] == eri_column
+                    }
+                    if not row_arm or not column_arm:
+                        continue
+
+                    # Strong link verticale: una estremità è allineata con la
+                    # mini-riga dell'ERI; il target incrocia l'altra estremità
+                    # con la mini-colonna dell'ERI.
+                    for external_column in sorted(
+                        set(range(9)) - set(box_columns)
+                    ):
+                        link = [
+                            (r, external_column) for r in range(9)
+                            if digit in state.candidates[r][external_column]
+                        ]
+                        if len(link) != 2:
+                            continue
+                        aligned = [cell for cell in link if cell[0] == eri_row]
+                        if len(aligned) != 1:
+                            continue
+                        outer = link[0] if link[1] == aligned[0] else link[1]
+                        if outer[0] in box_rows:
+                            continue
+                        target = (outer[0], eri_column)
+                        mv = _elim_move(
+                            'Empty Rectangle',
+                            'Pattern a cifra singola',
+                            6.6,
+                            f'Nel box {box_index+1}, le posizioni di {digit} '
+                            f'formano un Empty Rectangle con ERI '
+                            f'R{eri_row+1}C{eri_column+1}. La coppia '
+                            f'coniugata in colonna {external_column+1} '
+                            f'elimina {digit} da '
+                            f'R{target[0]+1}C{target[1]+1}.',
+                            [(target[0], target[1], digit)],
+                            sorted(positions | set(link)),
+                            state,
+                        )
+                        _append_unique(moves, mv, seen)
+
+                    # Caso trasposto con strong link orizzontale.
+                    for external_row in sorted(
+                        set(range(9)) - set(box_rows)
+                    ):
+                        link = [
+                            (external_row, c) for c in range(9)
+                            if digit in state.candidates[external_row][c]
+                        ]
+                        if len(link) != 2:
+                            continue
+                        aligned = [cell for cell in link if cell[1] == eri_column]
+                        if len(aligned) != 1:
+                            continue
+                        outer = link[0] if link[1] == aligned[0] else link[1]
+                        if outer[1] in box_columns:
+                            continue
+                        target = (eri_row, outer[1])
+                        mv = _elim_move(
+                            'Empty Rectangle',
+                            'Pattern a cifra singola',
+                            6.6,
+                            f'Nel box {box_index+1}, le posizioni di {digit} '
+                            f'formano un Empty Rectangle con ERI '
+                            f'R{eri_row+1}C{eri_column+1}. La coppia '
+                            f'coniugata in riga {external_row+1} elimina '
+                            f'{digit} da R{target[0]+1}C{target[1]+1}.',
+                            [(target[0], target[1], digit)],
+                            sorted(positions | set(link)),
+                            state,
+                        )
+                        _append_unique(moves, mv, seen)
+
+    return moves
+
+
 # ----------------------------------------------------------- 8. unique rect
 def _rectangle_patterns(state):
     """Genera rettangoli validi: due righe, due colonne e due box."""
@@ -1597,37 +2143,551 @@ def aligned_pair_exclusion(state):
     return moves
 
 
+# -------------------------------------------- logical implication engine
+_LOGIC_TECHNIQUE_FAMILY = {
+    technique: technique_family(technique)
+    for technique in TECHNIQUE_DIFFICULTY
+    if TECHNIQUE_DIFFICULTY[technique] >= 6.5
+}
+
+
+def _conclusion_effects(move):
+    return _atomic_conclusions(
+        move.get("placements", ()),
+        move.get("eliminations", ()),
+    )
+
+
+def _effects_of_moves(moves):
+    effects = set()
+    for move in moves:
+        effects.update(_conclusion_effects(move))
+    return effects
+
+
+def _specific_logic_technique(state, parent, deduction):
+    """Classifica una prova generale solo quando il sottotipo e univoco."""
+    logic = deduction.get("logic", {})
+    chains = logic.get("chains", [])
+    kind = logic.get("kind")
+
+    if parent in ("Bidirectional Y-Cycle", "XY-Chain") and chains:
+        chain_items = (
+            chains[0][1:-1]
+            if parent == "XY-Chain"
+            else chains[0][:-1]
+        )
+        cells = {
+            (item["row"], item["column"])
+            for item in chain_items
+        }
+        candidate_sets = [
+            set(state.candidates[r][c]) for r, c in cells
+        ]
+        if parent == "XY-Chain" and len(cells) >= 2 and candidate_sets:
+            common_pair = candidate_sets[0]
+            if (
+                len(common_pair) == 2
+                and all(values == common_pair for values in candidate_sets)
+            ):
+                return "Remote Pair"
+        if parent == "XY-Chain" and len(cells) >= 3 and all(
+            len(values) == 2 for values in candidate_sets
+        ):
+            return "XY-Chain"
+        if parent == "Bidirectional Y-Cycle" and len(cells) >= 2 and all(
+            len(values) == 2 for values in candidate_sets
+        ):
+            return "XY-Cycle"
+
+    if parent == "Forcing X-Chain" and len(chains) == 1:
+        if len(chains[0]) == 6:
+            return "Turbot Fish"
+
+    if parent == "Forcing Chain":
+        return "Alternating Inference Chain"
+
+    if parent == "Bidirectional Cycle":
+        return "Continuous Nice Loop"
+
+    dynamic_names = {
+        "dynamic-contradiction": "Contradiction",
+        "dynamic-reduction": "Double",
+        "dynamic-cell-reduction": "Cell",
+        "dynamic-region-reduction": "Region",
+    }
+    subtype = dynamic_names.get(kind)
+    if subtype and parent == "Dynamic Forcing Chain":
+        return f"Dynamic {subtype} Forcing Chain"
+    if subtype and parent == "Dynamic Forcing Chain Plus":
+        return f"Dynamic {subtype} Forcing Chain Plus"
+    if subtype and parent == "Nested Forcing Chain":
+        return f"Nested {subtype} Forcing Chain"
+
+    return parent
+
+
+def _nested_structure_depth(value, depth=0):
+    if isinstance(value, dict):
+        if not value:
+            return depth
+        return max(
+            _nested_structure_depth(item, depth + 1)
+            for item in value.values()
+        )
+    if isinstance(value, (list, tuple, set)):
+        if not value:
+            return depth
+        return max(
+            _nested_structure_depth(item, depth + 1)
+            for item in value
+        )
+    return depth
+
+
+def _proof_metrics(deduction):
+    """Stima deterministica della complessita della prova mostrata."""
+    logic = deduction.get("logic", {}) or {}
+    chains = logic.get("chains", ()) or ()
+    chain_lengths = [
+        len(chain)
+        for chain in chains
+        if isinstance(chain, (list, tuple))
+    ]
+    node_count = sum(chain_lengths)
+
+    return {
+        "chain_count": len(chain_lengths),
+        "node_count": node_count,
+        "max_chain_length": max(chain_lengths, default=0),
+        "nesting_depth": _nested_structure_depth(logic),
+        "primary_cell_count": len(set(deduction.get("primary", ()))),
+    }
+
+
+def _proof_rank(deduction, placements, eliminations):
+    metrics = _proof_metrics(deduction)
+    return (
+        metrics["nesting_depth"],
+        metrics["node_count"],
+        metrics["max_chain_length"],
+        metrics["primary_cell_count"],
+        len(placements) + len(eliminations),
+        deduction.get("description", ""),
+    )
+
+
+def _logic_moves(state, technique, excluded_effects=()):
+    """
+    Adatta e consolida le deduzioni del motore logico.
+
+    Le prove con identico esito vengono raggruppate. Per ogni esito resta la
+    prova meno complessa, mentre ``proof_count`` conserva quante prove grezze
+    equivalenti sono state trovate. Le conclusioni gia ottenibili tramite una
+    tecnica piu specifica o semplice vengono rimosse singolarmente, non solo
+    quando costituiscono l'intera mossa.
+    """
+    excluded_effects = set(excluded_effects)
+    grouped = {}
+
+    raw_deductions = logic_engine.find_logic_deductions(state, technique)
+
+    for deduction in raw_deductions:
+        raw_placements = _normalise_triplets(
+            (r, c, value)
+            for r, c, value in deduction.get("placements", ())
+            if state.grid[r, c] == 0
+            and value in state.candidates[r][c]
+        )
+        raw_eliminations = _normalise_triplets(
+            (r, c, value)
+            for r, c, value in deduction.get("eliminations", ())
+            if value in state.candidates[r][c]
+        )
+
+        placements = [
+            item for item in raw_placements
+            if ("place", *item) not in excluded_effects
+        ]
+        eliminations = [
+            item for item in raw_eliminations
+            if ("eliminate", *item) not in excluded_effects
+        ]
+
+        if not placements and not eliminations:
+            continue
+
+        specific = _specific_logic_technique(
+            state,
+            technique,
+            deduction,
+        )
+        signature = (
+            specific,
+            tuple(placements),
+            tuple(eliminations),
+        )
+        rank = _proof_rank(deduction, placements, eliminations)
+
+        bucket = grouped.get(signature)
+        if bucket is None:
+            grouped[signature] = {
+                "proof_count": 1,
+                "best_rank": rank,
+                "best_deduction": deduction,
+                "placements": placements,
+                "eliminations": eliminations,
+                "specific": specific,
+            }
+        else:
+            bucket["proof_count"] += 1
+            if rank < bucket["best_rank"]:
+                bucket["best_rank"] = rank
+                bucket["best_deduction"] = deduction
+
+    moves = []
+    order_rank = {
+        name: index
+        for index, name in enumerate(_TECHNIQUE_ORDER)
+    }
+
+    ordered_groups = sorted(
+        grouped.values(),
+        key=lambda item: (
+            order_rank.get(item["specific"], len(order_rank)),
+            tuple(item["placements"]),
+            tuple(item["eliminations"]),
+        ),
+    )
+
+    for bucket in ordered_groups:
+        deduction = bucket["best_deduction"]
+        specific = bucket["specific"]
+        description = deduction.get("description", specific)
+
+        if specific != technique:
+            description = description.replace(technique, specific, 1)
+            if specific not in description:
+                description = f"{specific}: {description}"
+
+        proof = dict(deduction.get("logic", {}) or {})
+        proof["parent_technique"] = technique
+        proof["specific_technique"] = specific
+        proof["metrics"] = _proof_metrics(deduction)
+        proof["equivalent_proof_count"] = bucket["proof_count"]
+
+        move = _build_move(
+            technique=specific,
+            family=technique_family(specific),
+            difficulty=_canonical_difficulty(specific),
+            description=description,
+            placements=bucket["placements"],
+            eliminations=bucket["eliminations"],
+            primary=deduction.get("primary", ()),
+            proof_count=bucket["proof_count"],
+            extra={"logic": proof},
+        )
+        if move is not None:
+            moves.append(move)
+
+    return moves
+
+
+def _effects_from_functions(state, functions):
+    effects = set()
+    for function in functions:
+        effects.update(_effects_of_moves(function(state)))
+    return effects
+
+
+def bidirectional_x_cycle(state):
+    def produce():
+        excluded = _effects_of_moves(
+            _cached_local(state, "fish:2", fish, 2)
+        )
+        return _logic_moves(state, "Bidirectional X-Cycle", excluded)
+
+    return _cached_moves(state, "logic:Bidirectional X-Cycle", produce)
+
+
+def xy_chain(state):
+    def produce():
+        specific_moves = (
+            _cached_local(state, "y_wing", y_wing)
+            + _cached_local(state, "naked_subset:2", naked_subset, 2)
+        )
+        return _logic_moves(
+            state,
+            "XY-Chain",
+            _effects_of_moves(specific_moves),
+        )
+
+    return _cached_moves(state, "logic:XY-Chain", produce)
+
+
+def bidirectional_y_cycle(state):
+    def produce():
+        specific_moves = (
+            _cached_local(state, "y_wing", y_wing)
+            + _cached_local(state, "naked_subset:2", naked_subset, 2)
+            + bidirectional_x_cycle(state)
+            + xy_chain(state)
+        )
+        return _logic_moves(
+            state,
+            "Bidirectional Y-Cycle",
+            _effects_of_moves(specific_moves),
+        )
+
+    return _cached_moves(state, "logic:Bidirectional Y-Cycle", produce)
+
+
+def forcing_x_chain(state):
+    def produce():
+        specific_moves = (
+            _cached_local(state, "skyscraper", skyscraper)
+            + _cached_local(state, "two_string_kite", two_string_kite)
+            + _cached_local(state, "empty_rectangle", empty_rectangle)
+            + bidirectional_x_cycle(state)
+            + xy_chain(state)
+            + bidirectional_y_cycle(state)
+        )
+        return _logic_moves(
+            state,
+            "Forcing X-Chain",
+            _effects_of_moves(specific_moves),
+        )
+
+    return _cached_moves(state, "logic:Forcing X-Chain", produce)
+
+
+def forcing_chain(state):
+    def produce():
+        specific_moves = (
+            _cached_local(state, "w_wing", w_wing)
+            + _cached_local(state, "y_wing", y_wing)
+            + bidirectional_x_cycle(state)
+            + xy_chain(state)
+            + bidirectional_y_cycle(state)
+            + forcing_x_chain(state)
+        )
+        return _logic_moves(
+            state,
+            "Forcing Chain",
+            _effects_of_moves(specific_moves),
+        )
+
+    return _cached_moves(state, "logic:Forcing Chain", produce)
+
+
+def bidirectional_cycle(state):
+    def produce():
+        excluded = _effects_from_functions(
+            state,
+            (
+                bidirectional_x_cycle,
+                xy_chain,
+                bidirectional_y_cycle,
+                forcing_x_chain,
+                forcing_chain,
+            ),
+        )
+        return _logic_moves(state, "Bidirectional Cycle", excluded)
+
+    return _cached_moves(state, "logic:Bidirectional Cycle", produce)
+
+
+def nishio(state):
+    def produce():
+        excluded = _effects_from_functions(
+            state,
+            (
+                bidirectional_x_cycle,
+                xy_chain,
+                bidirectional_y_cycle,
+                forcing_x_chain,
+                forcing_chain,
+                bidirectional_cycle,
+            ),
+        )
+        return _logic_moves(state, "Nishio", excluded)
+
+    return _cached_moves(state, "logic:Nishio", produce)
+
+
+def cell_forcing_chain(state):
+    def produce():
+        excluded = _effects_from_functions(
+            state,
+            (
+                bidirectional_x_cycle,
+                xy_chain,
+                bidirectional_y_cycle,
+                forcing_x_chain,
+                forcing_chain,
+                bidirectional_cycle,
+                nishio,
+            ),
+        )
+        return _logic_moves(state, "Cell Forcing Chain", excluded)
+
+    return _cached_moves(state, "logic:Cell Forcing Chain", produce)
+
+
+def region_forcing_chain(state):
+    def produce():
+        excluded = _effects_from_functions(
+            state,
+            (
+                bidirectional_x_cycle,
+                xy_chain,
+                bidirectional_y_cycle,
+                forcing_x_chain,
+                forcing_chain,
+                bidirectional_cycle,
+                nishio,
+                cell_forcing_chain,
+            ),
+        )
+        return _logic_moves(state, "Region Forcing Chain", excluded)
+
+    return _cached_moves(state, "logic:Region Forcing Chain", produce)
+
+
+def dynamic_forcing_chain(state):
+    def produce():
+        excluded = _effects_from_functions(
+            state,
+            (
+                bidirectional_x_cycle,
+                xy_chain,
+                bidirectional_y_cycle,
+                forcing_x_chain,
+                forcing_chain,
+                bidirectional_cycle,
+                nishio,
+                cell_forcing_chain,
+                region_forcing_chain,
+            ),
+        )
+        return _logic_moves(state, "Dynamic Forcing Chain", excluded)
+
+    return _cached_moves(state, "logic:Dynamic Forcing Chain", produce)
+
+
+def dynamic_forcing_chain_plus(state):
+    def produce():
+        excluded = _effects_from_functions(
+            state,
+            (
+                bidirectional_x_cycle,
+                xy_chain,
+                bidirectional_y_cycle,
+                forcing_x_chain,
+                forcing_chain,
+                bidirectional_cycle,
+                nishio,
+                cell_forcing_chain,
+                region_forcing_chain,
+                dynamic_forcing_chain,
+            ),
+        )
+        return _logic_moves(
+            state,
+            "Dynamic Forcing Chain Plus",
+            excluded,
+        )
+
+    return _cached_moves(
+        state,
+        "logic:Dynamic Forcing Chain Plus",
+        produce,
+    )
+
+
+def nested_forcing_chain(state):
+    def produce():
+        excluded = _effects_from_functions(
+            state,
+            (
+                bidirectional_x_cycle,
+                xy_chain,
+                bidirectional_y_cycle,
+                forcing_x_chain,
+                forcing_chain,
+                bidirectional_cycle,
+                nishio,
+                cell_forcing_chain,
+                region_forcing_chain,
+                dynamic_forcing_chain,
+                dynamic_forcing_chain_plus,
+            ),
+        )
+        return _logic_moves(state, "Nested Forcing Chain", excluded)
+
+    return _cached_moves(state, "logic:Nested Forcing Chain", produce)
+
+
 # --------------------------------------------------------------- registry
-# Le sole famiglie SE escluse sono elencate in
-# TECHNIQUES_REQUIRING_LOGIC_ENGINE e richiedono un motore a grafo/assunzioni.
-TECHNIQUE_FUNCS = [
-    (1.0, lambda s: last_value(s)),
-    (1.2, lambda s: hidden_single(s)),
-    (1.7, lambda s: direct_locked_candidates(s)),
-    (2.0, lambda s: direct_hidden_subset(s, 2)),
-    (2.3, lambda s: naked_single(s)),
-    (2.5, lambda s: direct_hidden_subset(s, 3)),
-    (2.6, lambda s: locked_candidates(s)),
-    (3.0, lambda s: naked_subset(s, 2)),
-    (3.2, lambda s: fish(s, 2)),
-    (3.4, lambda s: hidden_subset(s, 2)),
-    (3.6, lambda s: naked_subset(s, 3)),
-    (3.8, lambda s: fish(s, 3)),
-    (4.0, lambda s: hidden_subset(s, 3)),
-    (4.2, lambda s: y_wing(s)),
-    (4.4, lambda s: xyz_wing(s)),
-    (4.5, lambda s: unique_rectangle_type1(s)),
-    (4.6, lambda s: unique_rectangle_type2(s)),
-    (4.8, lambda s: unique_rectangle_type3(s)),
-    (4.9, lambda s: unique_rectangle_type4(s)),
-    (5.0, lambda s: unique_rectangle_type5(s)),
-    (5.0, lambda s: naked_subset(s, 4)),
-    (5.2, lambda s: fish(s, 4)),
-    (5.4, lambda s: hidden_subset(s, 4)),
-    (5.6, lambda s: bug_plus_one(s)),
-    (5.7, lambda s: bug_types_2_to_4(s)),
-    (6.2, lambda s: aligned_pair_exclusion(s)),
-    (6.6, lambda s: skyscraper(s)),
-    (6.6, lambda s: two_string_kite(s)),
-    (7.0, lambda s: w_wing(s)),
+# Il registro pubblico resta una sequenza di coppie ``(difficolta_minima,
+# funzione)`` per compatibilita con il solver. ``TECHNIQUE_SPECS`` espone in
+# aggiunta chiavi stabili e il tipo di motore, utili per profiling e report.
+
+def _local_runner(key, function, *args):
+    def runner(state):
+        return _cached_local(state, key, function, *args)
+
+    runner.__name__ = f"cached_{key.replace(':', '_')}"
+    return runner
+
+
+TECHNIQUE_SPECS = [
+    {"minimum_difficulty": 1.0, "key": "last_value", "engine": "local", "runner": _local_runner("last_value", last_value)},
+    {"minimum_difficulty": 1.2, "key": "hidden_single", "engine": "local", "runner": _local_runner("hidden_single", hidden_single)},
+    {"minimum_difficulty": 1.7, "key": "direct_locked", "engine": "local", "runner": _local_runner("direct_locked", direct_locked_candidates)},
+    {"minimum_difficulty": 2.0, "key": "direct_hidden_pair", "engine": "local", "runner": _local_runner("direct_hidden_subset:2", direct_hidden_subset, 2)},
+    {"minimum_difficulty": 2.3, "key": "naked_single", "engine": "local", "runner": _local_runner("naked_single", naked_single)},
+    {"minimum_difficulty": 2.5, "key": "direct_hidden_triplet", "engine": "local", "runner": _local_runner("direct_hidden_subset:3", direct_hidden_subset, 3)},
+    {"minimum_difficulty": 2.6, "key": "locked_candidates", "engine": "local", "runner": _local_runner("locked_candidates", locked_candidates)},
+    {"minimum_difficulty": 3.0, "key": "naked_pair", "engine": "local", "runner": _local_runner("naked_subset:2", naked_subset, 2)},
+    {"minimum_difficulty": 3.2, "key": "x_wing", "engine": "local", "runner": _local_runner("fish:2", fish, 2)},
+    {"minimum_difficulty": 3.4, "key": "hidden_pair", "engine": "local", "runner": _local_runner("hidden_subset:2", hidden_subset, 2)},
+    {"minimum_difficulty": 3.6, "key": "naked_triple", "engine": "local", "runner": _local_runner("naked_subset:3", naked_subset, 3)},
+    {"minimum_difficulty": 3.8, "key": "swordfish", "engine": "local", "runner": _local_runner("fish:3", fish, 3)},
+    {"minimum_difficulty": 4.0, "key": "hidden_triple", "engine": "local", "runner": _local_runner("hidden_subset:3", hidden_subset, 3)},
+    {"minimum_difficulty": 4.2, "key": "y_wing", "engine": "local", "runner": _local_runner("y_wing", y_wing)},
+    {"minimum_difficulty": 4.4, "key": "xyz_wing", "engine": "local", "runner": _local_runner("xyz_wing", xyz_wing)},
+    {"minimum_difficulty": 4.5, "key": "ur_type_1", "engine": "local", "runner": _local_runner("ur_type_1", unique_rectangle_type1)},
+    {"minimum_difficulty": 4.6, "key": "ur_type_2", "engine": "local", "runner": _local_runner("ur_type_2", unique_rectangle_type2)},
+    {"minimum_difficulty": 4.8, "key": "ur_type_3", "engine": "local", "runner": _local_runner("ur_type_3", unique_rectangle_type3)},
+    {"minimum_difficulty": 4.9, "key": "ur_type_4", "engine": "local", "runner": _local_runner("ur_type_4", unique_rectangle_type4)},
+    {"minimum_difficulty": 5.0, "key": "ur_type_5", "engine": "local", "runner": _local_runner("ur_type_5", unique_rectangle_type5)},
+    {"minimum_difficulty": 5.0, "key": "naked_quad", "engine": "local", "runner": _local_runner("naked_subset:4", naked_subset, 4)},
+    {"minimum_difficulty": 5.2, "key": "jellyfish", "engine": "local", "runner": _local_runner("fish:4", fish, 4)},
+    {"minimum_difficulty": 5.4, "key": "hidden_quad", "engine": "local", "runner": _local_runner("hidden_subset:4", hidden_subset, 4)},
+    {"minimum_difficulty": 5.6, "key": "bug_plus_one", "engine": "local", "runner": _local_runner("bug_plus_one", bug_plus_one)},
+    {"minimum_difficulty": 5.7, "key": "bug_types", "engine": "local", "runner": _local_runner("bug_types", bug_types_2_to_4)},
+    {"minimum_difficulty": 6.2, "key": "aligned_pair_exclusion", "engine": "local", "runner": _local_runner("aligned_pair_exclusion", aligned_pair_exclusion)},
+    {"minimum_difficulty": 6.5, "key": "bidirectional_x_cycle", "engine": "logic", "runner": bidirectional_x_cycle},
+    {"minimum_difficulty": 6.5, "key": "xy_chain", "engine": "logic", "runner": xy_chain},
+    {"minimum_difficulty": 6.5, "key": "bidirectional_y_cycle", "engine": "logic", "runner": bidirectional_y_cycle},
+    {"minimum_difficulty": 6.6, "key": "skyscraper", "engine": "local", "runner": _local_runner("skyscraper", skyscraper)},
+    {"minimum_difficulty": 6.6, "key": "two_string_kite", "engine": "local", "runner": _local_runner("two_string_kite", two_string_kite)},
+    {"minimum_difficulty": 6.6, "key": "empty_rectangle", "engine": "local", "runner": _local_runner("empty_rectangle", empty_rectangle)},
+    {"minimum_difficulty": 6.6, "key": "forcing_x_chain", "engine": "logic", "runner": forcing_x_chain},
+    {"minimum_difficulty": 7.0, "key": "w_wing", "engine": "local", "runner": _local_runner("w_wing", w_wing)},
+    {"minimum_difficulty": 7.0, "key": "forcing_chain", "engine": "logic", "runner": forcing_chain},
+    {"minimum_difficulty": 7.0, "key": "bidirectional_cycle", "engine": "logic", "runner": bidirectional_cycle},
+    {"minimum_difficulty": 7.5, "key": "nishio", "engine": "logic", "runner": nishio},
+    {"minimum_difficulty": 8.0, "key": "cell_forcing_chain", "engine": "logic", "runner": cell_forcing_chain},
+    {"minimum_difficulty": 8.0, "key": "region_forcing_chain", "engine": "logic", "runner": region_forcing_chain},
+    {"minimum_difficulty": 8.5, "key": "dynamic_forcing_chain", "engine": "logic", "runner": dynamic_forcing_chain},
+    {"minimum_difficulty": 9.0, "key": "dynamic_forcing_chain_plus", "engine": "logic", "runner": dynamic_forcing_chain_plus},
+    {"minimum_difficulty": 9.5, "key": "nested_forcing_chain", "engine": "logic", "runner": nested_forcing_chain},
 ]
+
+TECHNIQUE_FUNCS = [
+    (spec["minimum_difficulty"], spec["runner"])
+    for spec in TECHNIQUE_SPECS
+]
+

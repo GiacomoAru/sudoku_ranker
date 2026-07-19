@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -60,9 +61,27 @@ class SERatingTests(unittest.TestCase):
             "BUG Type 3 (Triplet)": 5.9,
             "BUG Type 3 (Quad)": 6.0,
             "Aligned Pair Exclusion": 6.2,
+            "Bidirectional X-Cycle": 6.5,
+            "Bidirectional Y-Cycle": 6.5,
+            "Remote Pair": 6.5,
+            "XY-Chain": 6.5,
+            "XY-Cycle": 6.5,
+            "Forcing X-Chain": 6.6,
             "Skyscraper": 6.6,
             "Two-String Kite": 6.6,
+            "Empty Rectangle": 6.6,
+            "Turbot Fish": 6.6,
+            "Forcing Chain": 7.0,
+            "Alternating Inference Chain": 7.0,
+            "Bidirectional Cycle": 7.0,
+            "Continuous Nice Loop": 7.0,
             "W-Wing": 7.0,
+            "Nishio": 7.5,
+            "Cell Forcing Chain": 8.0,
+            "Region Forcing Chain": 8.0,
+            "Dynamic Forcing Chain": 8.5,
+            "Dynamic Forcing Chain Plus": 9.0,
+            "Nested Forcing Chain": 9.5,
         }
         for name, rating in expected.items():
             with self.subTest(name=name):
@@ -213,6 +232,206 @@ class SERatingTests(unittest.TestCase):
         self.assertEqual(grading["label"], "Estremo")
         self.assertIn(6, grading["histogram"])
         self.assertEqual(grading["se_histogram"], {6.2: 1})
+
+
+class LogicEngineTests(unittest.TestCase):
+    def test_all_declared_logic_engine_techniques_are_now_implemented(self):
+        expected = {
+            "Bidirectional X-Cycle",
+            "Bidirectional Y-Cycle",
+            "Forcing X-Chain",
+            "Forcing Chain",
+            "Bidirectional Cycle",
+            "Nishio",
+            "Cell Forcing Chain",
+            "Region Forcing Chain",
+            "Dynamic Forcing Chain",
+            "Dynamic Forcing Chain Plus",
+            "Nested Forcing Chain",
+        }
+        self.assertEqual(
+            set(techniques.LOGIC_ENGINE_TECHNIQUE_RANGES),
+            expected,
+        )
+        self.assertEqual(
+            techniques.TECHNIQUES_REQUIRING_LOGIC_ENGINE,
+            {},
+        )
+        self.assertTrue(expected <= set(techniques.TECHNIQUE_DIFFICULTY))
+
+    def test_x_wing_is_not_duplicated_as_bidirectional_x_cycle(self):
+        # Lo stesso grafo può spiegare questa eliminazione come ciclo X, ma
+        # il nome strutturale X-Wing è più specifico e deve prevalere.
+        state = synthetic_state({
+            (0, 0): {1},
+            (0, 3): {1},
+            (3, 3): {1},
+            (3, 0): {1},
+            (0, 1): {1},
+        })
+        before = [[set(values) for values in row] for row in state.candidates]
+        fish_moves = techniques.fish(state, 2)
+        cycle_moves = techniques.bidirectional_x_cycle(state)
+        self.assertTrue(any(
+            move["technique"] == "X-Wing"
+            and move["eliminations"] == [(0, 1, 1)]
+            for move in fish_moves
+        ))
+        self.assertFalse(any(
+            move["eliminations"] == [(0, 1, 1)]
+            for move in cycle_moves
+        ))
+        self.assertEqual(state.candidates, before)
+
+    def test_xy_chain_uses_modern_specific_name(self):
+        state = synthetic_state({
+            (0, 0): {1, 2},
+            (3, 0): {2, 3},
+            (3, 4): {3, 4},
+            (1, 4): {1, 4},
+            (1, 1): {1},
+        })
+        moves = techniques.xy_chain(state)
+        self.assertTrue(any(
+            move["technique"] == "XY-Chain"
+            and move["eliminations"] == [(1, 1, 1)]
+            and {"peer", "y"} <= set(move["logic"]["reasons"])
+            for move in moves
+        ))
+
+    def test_remote_pair_is_recognised_as_xy_chain_subtype(self):
+        state = synthetic_state({
+            (0, 0): {1, 2},
+            (3, 0): {1, 2},
+            (3, 4): {1, 2},
+            (1, 4): {1, 2},
+            (1, 1): {1},
+        })
+        moves = techniques.xy_chain(state)
+        self.assertTrue(any(
+            move["technique"] == "Remote Pair"
+            and move["eliminations"] == [(1, 1, 1)]
+            and move["logic"]["parent_technique"] == "XY-Chain"
+            for move in moves
+        ))
+
+    def test_empty_rectangle_has_dedicated_detector(self):
+        state = synthetic_state({
+            (0, 1): {1},
+            (1, 0): {1},
+            (0, 4): {1},
+            (3, 4): {1},
+            (3, 0): {1},
+        })
+        moves = techniques.empty_rectangle(state)
+        self.assertTrue(any(
+            move["technique"] == "Empty Rectangle"
+            and move["eliminations"] == [(3, 0, 1)]
+            and move["difficulty"] == 6.6
+            for move in moves
+        ))
+
+    def test_general_proofs_are_classified_by_structure(self):
+        state = synthetic_state({(0, 0): {1, 2}})
+        six_literal_chain = [{
+            "row": 0,
+            "column": index % 2,
+            "value": 1,
+            "state": "on" if index % 2 == 0 else "off",
+        } for index in range(6)]
+        cases = [
+            ("Forcing X-Chain", "forcing-chain", [six_literal_chain], "Turbot Fish"),
+            ("Forcing Chain", "forcing-chain", [], "Alternating Inference Chain"),
+            ("Bidirectional Cycle", "bidirectional-cycle", [], "Continuous Nice Loop"),
+            ("Dynamic Forcing Chain", "dynamic-contradiction", [], "Dynamic Contradiction Forcing Chain"),
+            ("Dynamic Forcing Chain Plus", "dynamic-cell-reduction", [], "Dynamic Cell Forcing Chain Plus"),
+            ("Nested Forcing Chain", "dynamic-region-reduction", [], "Nested Region Forcing Chain"),
+        ]
+        for parent, kind, chains, expected in cases:
+            with self.subTest(parent=parent, kind=kind):
+                self.assertEqual(
+                    techniques._specific_logic_technique(
+                        state,
+                        parent,
+                        {"logic": {"kind": kind, "chains": chains}},
+                    ),
+                    expected,
+                )
+
+    def test_forcing_x_chain_detects_assumption_implying_its_opposite(self):
+        state = synthetic_state({
+            (0, 0): {1},
+            (0, 1): {1},
+            (1, 1): {1},
+        })
+        moves = techniques.forcing_x_chain(state)
+        self.assertTrue(any(
+            move["eliminations"] == [(0, 0, 1)]
+            and move["difficulty"] == 6.6
+            and move["logic"]["kind"] == "forcing-chain"
+            for move in moves
+        ))
+
+    def test_logic_wrapper_preserves_move_interface(self):
+        state = synthetic_state({(0, 0): {4, 7}})
+        deduction = {
+            "description": "prova controllata",
+            "placements": [],
+            "eliminations": [(0, 0, 7)],
+            "primary": [(0, 0)],
+            "logic": {"kind": "test", "assumptions": [], "chains": []},
+        }
+        with mock.patch.object(
+            techniques.logic_engine,
+            "find_logic_deductions",
+            return_value=[deduction],
+        ) as finder:
+            moves = techniques.dynamic_forcing_chain_plus(state)
+        finder.assert_called_once_with(state, "Dynamic Forcing Chain Plus")
+        self.assertEqual(len(moves), 1)
+        self.assertEqual(moves[0]["technique"], "Dynamic Forcing Chain Plus")
+        self.assertEqual(moves[0]["difficulty"], 9.0)
+        self.assertEqual(moves[0]["placements"], [])
+        self.assertEqual(moves[0]["eliminations"], [(0, 0, 7)])
+        self.assertEqual(
+            set(moves[0]["highlight"]),
+            {"primary", "secondary"},
+        )
+
+    def test_solver_records_the_complete_move_inventory(self):
+        grid = SOLVED_GRID.copy()
+        grid[0, 0] = 0
+        moves = [{
+            "technique": "Last Value",
+            "family": "Inserimenti diretti",
+            "difficulty": 1.0,
+            "description": "mossa scelta",
+            "placements": [(0, 0, 5)],
+            "eliminations": [],
+            "highlight": {"primary": [(0, 0)], "secondary": [(0, 0)]},
+        }, {
+            "technique": "Forcing Chain",
+            "family": "Catene forzanti",
+            "difficulty": 7.0,
+            "description": "alternativa più difficile",
+            "placements": [],
+            "eliminations": [(0, 0, 5)],
+            "highlight": {"primary": [(0, 0)], "secondary": [(0, 0)]},
+        }]
+        with mock.patch.object(
+            solver,
+            "collect_all_moves_full",
+            return_value=moves,
+        ) as collect_full:
+            _, chain, status = solver.solve_and_log(grid)
+        collect_full.assert_called_once()
+        self.assertEqual(status, "solved")
+        self.assertEqual(chain[0]["n_alternatives"], 2)
+        self.assertEqual(chain[0]["n_best_alternatives"], 1)
+        self.assertEqual(chain[0]["applicable_by_technique"], {
+            "Last Value": 1,
+            "Forcing Chain": 1,
+        })
 
 
 if __name__ == "__main__":

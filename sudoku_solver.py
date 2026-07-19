@@ -1,14 +1,12 @@
 '''
 ## 3. Motore risolutivo
 
-Ad ogni step: `collect_all_moves` interroga le tecniche in ordine di
-difficoltà crescente e si ferma non appena nessuna tecnica rimasta potrebbe
-produrre qualcosa di più semplice di quanto già trovato (è solo
-un'ottimizzazione di velocità: il risultato, quale sia la mossa più
-semplice, è identico a uno scan completo, cambia solo quanto lavoro extra
-si fa per scoprirlo). Tra le mosse trovate alla difficoltà minima, un
-ordine di tie-break fisso (`_TECHNIQUE_ORDER`) rende la scelta
-deterministica quando due tecniche diverse sono a pari difficoltà.
+Ad ogni step il motore interroga le tecniche in ordine di difficoltà.
+L'analisi `deep`, predefinita, costruisce l'inventario completo; `profile`
+si limita a una fascia configurabile sopra la difficoltà minima;
+`superficial` conserva soltanto la frontiera minima. In ogni modalità la
+mossa scelta è la più semplice e un ordine di tie-break fisso
+(`_TECHNIQUE_ORDER`) rende la scelta deterministica.
 
 `solve_and_log` applica una mossa alla volta e registra ogni step nella
 catena, fino a soluzione completa, blocco (nessuna tecnica implementata
@@ -24,14 +22,13 @@ poche alternative aumentano il carico, molte lo riducono.
 
 
 """
-Solver engine: at every step, collect every move every technique can find,
-then apply only the single simplest one (lowest difficulty; ties broken by
-a fixed technique order so the run is deterministic). Every applied step is
-logged into a "chain" which is later used both for difficulty grading and
-for visualisation.
+Solver engine with configurable analysis depth. The default deep mode
+collects the complete logical inventory, while profile and superficial modes
+reduce the scanned difficulty range. Proofs are retained as diagnostics, but
+availability is measured primarily through unique logical conclusions.
 """
 
-from collections import Counter
+from collections import defaultdict
 import math
 
 import sudoku_data_structure as sds
@@ -79,6 +76,24 @@ _TECHNIQUE_RANK = {
     technique: index
     for index, technique in enumerate(st._TECHNIQUE_ORDER)
 }
+
+
+ANALYSIS_MODES = {
+    "deep",
+    "profile",
+    "superficial",
+}
+
+ANALYSIS_MODE_ALIASES = {
+    "full": "deep",
+    "complete": "deep",
+    "profilo": "profile",
+    "standard": "superficial",
+    "shallow": "superficial",
+    "superficiale": "superficial",
+}
+
+DEFAULT_PROFILE_DIFFICULTY_WINDOW = 1.0
 
 
 def _difficulty_score(move):
@@ -150,39 +165,322 @@ def _perceived_step_difficulty(difficulty, n_alternatives):
     return theoretical_weight * scarcity_factor
 
 
-def collect_all_moves(state, early_stop=True):
-    """Run technique functions cheapest-first. If early_stop is True, stop
-    as soon as we hold a move at difficulty D and every remaining function's
-    best possible output is > D (it could never beat what we already have)."""
+def _normalise_analysis_mode(mode):
+    """Valida e normalizza il livello di profondita dell inventario."""
+    if mode is None:
+        return "deep"
+
+    normalised = str(mode).strip().lower()
+    normalised = ANALYSIS_MODE_ALIASES.get(normalised, normalised)
+
+    if normalised not in ANALYSIS_MODES:
+        allowed = ", ".join(sorted(ANALYSIS_MODES))
+        raise ValueError(
+            f"Modalita di analisi non valida: {mode!r}. "
+            f"Valori ammessi: {allowed}."
+        )
+
+    return normalised
+
+
+def _move_atomic_conclusions(move):
+    """
+    Restituisce le conclusioni atomiche prodotte da una mossa.
+
+    Una conclusione e un inserimento oppure l eliminazione di un singolo
+    candidato. Prove diverse che raggiungono lo stesso effetto vengono quindi
+    contate una sola volta nell inventario analitico.
+    """
+    conclusions = {
+        ("place", int(r), int(c), int(value))
+        for r, c, value in move.get("placements", ())
+    }
+    conclusions.update(
+        ("eliminate", int(r), int(c), int(value))
+        for r, c, value in move.get("eliminations", ())
+    )
+    return frozenset(conclusions)
+
+
+def _move_outcome_signature(move):
+    """Firma dell intero risultato della mossa, indipendente dalla prova."""
+    return (
+        tuple(sorted(
+            (int(r), int(c), int(value))
+            for r, c, value in move.get("placements", ())
+        )),
+        tuple(sorted(
+            (int(r), int(c), int(value))
+            for r, c, value in move.get("eliminations", ())
+        )),
+    )
+
+
+def collect_moves_for_analysis(
+    state,
+    mode="deep",
+    profile_difficulty_window=DEFAULT_PROFILE_DIFFICULTY_WINDOW,
+):
+    """
+    Raccoglie le mosse secondo la granularita richiesta.
+
+    ``deep``
+        Interroga tutte le tecniche e produce un inventario completo.
+
+    ``profile``
+        Dopo aver trovato la difficolta minima D, continua a interrogare le
+        tecniche che possono produrre mosse fino a D + window.
+
+    ``superficial``
+        Cerca soltanto la frontiera minima: si ferma appena le tecniche
+        rimanenti non possono piu eguagliare la mossa migliore trovata.
+
+    La modalita cambia soltanto l inventario registrato. La mossa scelta resta
+    sempre la piu semplice tra quelle applicabili.
+    """
+    mode = _normalise_analysis_mode(mode)
+
+    if profile_difficulty_window is None:
+        profile_difficulty_window = DEFAULT_PROFILE_DIFFICULTY_WINDOW
+
+    profile_difficulty_window = float(profile_difficulty_window)
+
+    if profile_difficulty_window < 0:
+        raise ValueError(
+            "profile_difficulty_window deve essere maggiore o uguale a 0."
+        )
+
     moves = []
     best_diff = None
+    scanned_function_count = 0
+    stopped_early = False
+    stop_before_min_difficulty = None
 
     for min_d, fn in st.TECHNIQUE_FUNCS:
-        if early_stop and best_diff is not None and min_d > best_diff:
-            break
+        if best_diff is not None:
+            if mode == "superficial":
+                difficulty_limit = best_diff
+            elif mode == "profile":
+                difficulty_limit = (
+                    best_diff + profile_difficulty_window
+                )
+            else:
+                difficulty_limit = None
 
+            if (
+                difficulty_limit is not None
+                and float(min_d) > difficulty_limit
+            ):
+                stopped_early = True
+                stop_before_min_difficulty = float(min_d)
+                break
+
+        scanned_function_count += 1
         found = fn(state)
 
-        if found:
-            moves.extend(found)
-            local_min = min(
-                _difficulty_score(move)
-                for move in found
-            )
-            best_diff = (
-                local_min
-                if best_diff is None
-                else min(best_diff, local_min)
-            )
+        if not found:
+            continue
 
+        moves.extend(found)
+        local_min = min(
+            _difficulty_score(move)
+            for move in found
+        )
+        best_diff = (
+            local_min
+            if best_diff is None
+            else min(best_diff, local_min)
+        )
+
+    metadata = {
+        "mode": mode,
+        "profile_difficulty_window": (
+            profile_difficulty_window
+            if mode == "profile"
+            else None
+        ),
+        "best_difficulty": best_diff,
+        "scanned_function_count": scanned_function_count,
+        "total_function_count": len(st.TECHNIQUE_FUNCS),
+        "stopped_early": stopped_early,
+        "complete_inventory": not stopped_early,
+        "stop_before_min_difficulty": stop_before_min_difficulty,
+    }
+
+    return moves, metadata
+
+
+def collect_all_moves(state, early_stop=True):
+    """
+    Interfaccia storica mantenuta per compatibilita.
+
+    ``early_stop=True`` equivale a ``superficial``;
+    ``early_stop=False`` equivale a ``deep``.
+    """
+    mode = "superficial" if early_stop else "deep"
+    moves, _ = collect_moves_for_analysis(state, mode=mode)
     return moves
 
 
 def collect_all_moves_full(state):
-    """Same as collect_all_moves but never early-stops, used when the
-    caller wants a complete inventory of every applicable technique."""
-    return collect_all_moves(state, early_stop=False)
+    """Restituisce l inventario completo di tutte le tecniche applicabili."""
+    moves, _ = collect_moves_for_analysis(state, mode="deep")
+    return moves
 
+
+def _build_move_inventory(moves, best_difficulty):
+    """
+    Aggrega prove, risultati distinti e conclusioni atomiche.
+
+    L inventario mantiene due viste dello stesso stato:
+
+    ``scanned``
+        Tutto cio che e stato trovato dalla modalita di analisi corrente.
+
+    ``frontier``
+        Soltanto le mosse alla difficolta minima, indipendentemente dalla
+        profondita con cui e stato esplorato lo stato.
+
+    Per entrambe sono disponibili aggregazioni per tecnica e per famiglia.
+    Questo permette alla visualizzazione di scegliere separatamente la
+    profondita della heatmap e la granularita delle righe.
+    """
+    def new_scope():
+        return {
+            "proofs_by_technique": defaultdict(int),
+            "proofs_by_family": defaultdict(int),
+            "outcomes_by_technique": defaultdict(set),
+            "outcomes_by_family": defaultdict(set),
+            "conclusions_by_technique": defaultdict(set),
+            "conclusions_by_family": defaultdict(set),
+            "all_outcomes": set(),
+            "all_conclusions": set(),
+        }
+
+    scanned = new_scope()
+    frontier = new_scope()
+
+    technique_families = defaultdict(set)
+    technique_difficulties = defaultdict(set)
+    family_difficulties = defaultdict(set)
+
+    def add_to_scope(scope, technique, family, outcome, conclusions):
+        scope["proofs_by_technique"][technique] += 1
+        scope["proofs_by_family"][family] += 1
+
+        scope["outcomes_by_technique"][technique].add(outcome)
+        scope["outcomes_by_family"][family].add(outcome)
+        scope["all_outcomes"].add(outcome)
+
+        scope["conclusions_by_technique"][technique].update(conclusions)
+        scope["conclusions_by_family"][family].update(conclusions)
+        scope["all_conclusions"].update(conclusions)
+
+    for move in moves:
+        technique = move.get("technique", "Sconosciuta")
+        family = move.get("family", technique)
+        difficulty = _difficulty_score(move)
+        outcome = _move_outcome_signature(move)
+        conclusions = _move_atomic_conclusions(move)
+
+        technique_families[technique].add(family)
+        technique_difficulties[technique].add(difficulty)
+        family_difficulties[family].add(difficulty)
+
+        add_to_scope(
+            scanned,
+            technique,
+            family,
+            outcome,
+            conclusions,
+        )
+
+        if math.isclose(
+            difficulty,
+            best_difficulty,
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        ):
+            add_to_scope(
+                frontier,
+                technique,
+                family,
+                outcome,
+                conclusions,
+            )
+
+    def serialise_scope(scope):
+        technique_names = sorted(
+            scope["proofs_by_technique"],
+            key=lambda name: _TECHNIQUE_RANK.get(
+                name,
+                len(_TECHNIQUE_RANK),
+            ),
+        )
+        family_names = sorted(scope["proofs_by_family"])
+
+        by_technique = {
+            technique: {
+                "family": sorted(technique_families[technique]),
+                "difficulty_min": min(
+                    technique_difficulties[technique]
+                ),
+                "difficulty_max": max(
+                    technique_difficulties[technique]
+                ),
+                "proof_count": scope[
+                    "proofs_by_technique"
+                ][technique],
+                "distinct_outcome_count": len(
+                    scope["outcomes_by_technique"][technique]
+                ),
+                "conclusion_count": len(
+                    scope["conclusions_by_technique"][technique]
+                ),
+            }
+            for technique in technique_names
+        }
+
+        by_family = {
+            family: {
+                "difficulty_min": min(family_difficulties[family]),
+                "difficulty_max": max(family_difficulties[family]),
+                "proof_count": scope["proofs_by_family"][family],
+                "distinct_outcome_count": len(
+                    scope["outcomes_by_family"][family]
+                ),
+                "conclusion_count": len(
+                    scope["conclusions_by_family"][family]
+                ),
+            }
+            for family in family_names
+        }
+
+        return {
+            "proof_count": sum(
+                scope["proofs_by_technique"].values()
+            ),
+            "distinct_outcome_count": len(scope["all_outcomes"]),
+            "conclusion_count": len(scope["all_conclusions"]),
+            "by_technique": by_technique,
+            "by_family": by_family,
+        }
+
+    scanned_summary = serialise_scope(scanned)
+    frontier_summary = serialise_scope(frontier)
+
+    # I campi principali rappresentano tutto l inventario scandito. La
+    # vista ``frontier`` contiene invece soltanto la difficolta minima.
+    return {
+        **scanned_summary,
+        "best_distinct_outcome_count": frontier_summary[
+            "distinct_outcome_count"
+        ],
+        "best_conclusion_count": frontier_summary[
+            "conclusion_count"
+        ],
+        "frontier": frontier_summary,
+    }
 
 def apply_move(state, move):
     for r, c, v in move["placements"]:
@@ -192,11 +490,26 @@ def apply_move(state, move):
         state.eliminate(r, c, v)
 
 
-def solve_and_log(grid, max_steps=10000, verbose=False):
-    """Run the human-style solver, returning (final_state, chain, status).
-
-    status is one of: 'solved', 'stuck', or 'contradiction'.
+def solve_and_log(
+    grid,
+    max_steps=10000,
+    verbose=False,
+    analysis_mode="deep",
+    profile_difficulty_window=DEFAULT_PROFILE_DIFFICULTY_WINDOW,
+):
     """
+    Risolve il Sudoku e registra l inventario logico di ogni stato.
+
+    ``analysis_mode`` controlla la profondita dell inventario:
+    ``deep`` e il default e interroga tutte le tecniche; ``profile`` esplora
+    una fascia configurabile sopra la difficolta minima; ``superficial``
+    registra soltanto la frontiera minima.
+
+    Lo stato finale, la mossa scelta e il grading non dipendono dalla modalita:
+    cambia solo la quantita di informazione analitica raccolta.
+    """
+    analysis_mode = _normalise_analysis_mode(analysis_mode)
+
     state = sds.SudokuState(grid)
     chain = []
     step_no = 0
@@ -205,37 +518,37 @@ def solve_and_log(grid, max_steps=10000, verbose=False):
         if state.is_stuck():
             return state, chain, "contradiction"
 
-        moves = collect_all_moves_full(state)
+        moves, collection_metadata = collect_moves_for_analysis(
+            state,
+            mode=analysis_mode,
+            profile_difficulty_window=profile_difficulty_window,
+        )
 
         if not moves:
             return state, chain, "stuck"
-
-        applicable_by_technique = dict(
-            Counter(move["technique"] for move in moves)
-        )
 
         moves.sort(key=_move_sort_key)
 
         chosen = moves[0]
         chosen_score = _difficulty_score(chosen)
         chosen_level = int(chosen_score)
-        n_alternatives = len(moves)
 
-        # Conta soltanto le alternative alla stessa difficoltà minima della
-        # mossa scelta. Le mosse più difficili non rendono più facile trovare
-        # il prossimo passo logicamente più semplice.
-        n_best_alternatives = sum(
-            math.isclose(
-                _difficulty_score(move),
-                chosen_score,
-                rel_tol=0.0,
-                abs_tol=1e-9,
-            )
-            for move in moves
+        inventory = _build_move_inventory(
+            moves,
+            best_difficulty=chosen_score,
+        )
+
+        n_conclusions = max(
+            int(inventory["conclusion_count"]),
+            1,
+        )
+        n_best_conclusions = max(
+            int(inventory["best_conclusion_count"]),
+            1,
         )
 
         theoretical_weight = _perceived_theoretical_weight(chosen_score)
-        scarcity_factor = _scarcity_factor(n_best_alternatives)
+        scarcity_factor = _scarcity_factor(n_best_conclusions)
         perceived_difficulty = (
             theoretical_weight * scarcity_factor
         )
@@ -245,10 +558,78 @@ def solve_and_log(grid, max_steps=10000, verbose=False):
 
         record = dict(chosen)
         record["step"] = step_no
-        record["n_alternatives"] = n_alternatives
-        record["n_best_alternatives"] = n_best_alternatives
         record["grid_after"] = state.grid.copy()
-        record["applicable_by_technique"] = applicable_by_technique
+
+        record["analysis_mode"] = analysis_mode
+        record["analysis_scope"] = collection_metadata
+        record["availability"] = inventory
+
+        # Conteggi principali: ora rappresentano conclusioni uniche, non
+        # il numero grezzo di prove enumerate.
+        record["n_conclusions"] = n_conclusions
+        record["n_best_conclusions"] = n_best_conclusions
+        record["n_distinct_outcomes"] = max(
+            int(inventory["distinct_outcome_count"]),
+            1,
+        )
+        record["n_best_distinct_outcomes"] = max(
+            int(inventory["best_distinct_outcome_count"]),
+            1,
+        )
+        record["n_proofs"] = int(inventory["proof_count"])
+
+        # Alias temporanei per il codice di visualizzazione esistente.
+        # Il loro significato e ora documentato come numero di conclusioni.
+        record["n_alternatives"] = n_conclusions
+        record["n_best_alternatives"] = n_best_conclusions
+        record["applicable_by_technique"] = {
+            technique: values["conclusion_count"]
+            for technique, values in inventory["by_technique"].items()
+        }
+        record["applicable_by_family"] = {
+            family: values["conclusion_count"]
+            for family, values in inventory["by_family"].items()
+        }
+        record["best_applicable_by_technique"] = {
+            technique: values["conclusion_count"]
+            for technique, values in inventory[
+                "frontier"
+            ]["by_technique"].items()
+        }
+        record["best_applicable_by_family"] = {
+            family: values["conclusion_count"]
+            for family, values in inventory[
+                "frontier"
+            ]["by_family"].items()
+        }
+        record["proofs_by_technique"] = {
+            technique: values["proof_count"]
+            for technique, values in inventory["by_technique"].items()
+        }
+        record["proofs_by_family"] = {
+            family: values["proof_count"]
+            for family, values in inventory["by_family"].items()
+        }
+        record["best_proofs_by_technique"] = {
+            technique: values["proof_count"]
+            for technique, values in inventory[
+                "frontier"
+            ]["by_technique"].items()
+        }
+        record["best_proofs_by_family"] = {
+            family: values["proof_count"]
+            for family, values in inventory[
+                "frontier"
+            ]["by_family"].items()
+        }
+        record["distinct_outcomes_by_technique"] = {
+            technique: values["distinct_outcome_count"]
+            for technique, values in inventory["by_technique"].items()
+        }
+        record["distinct_outcomes_by_family"] = {
+            family: values["distinct_outcome_count"]
+            for family, values in inventory["by_family"].items()
+        }
 
         record["difficulty"] = chosen_score
         record["difficulty_level"] = chosen_level
@@ -264,7 +645,9 @@ def solve_and_log(grid, max_steps=10000, verbose=False):
                 f"{chosen['technique']:<30} "
                 f"(diff {chosen_score:.1f}, "
                 f"percepita {perceived_difficulty:.3f}, "
-                f"alternative minime {n_best_alternatives}) "
+                f"conclusioni minime {n_best_conclusions}, "
+                f"prove {inventory['proof_count']}, "
+                f"modo {analysis_mode}) "
                 f"{chosen['description']}"
             )
 
@@ -860,7 +1243,10 @@ def grade_difficulty(chain, status):
             move.get("perceived_difficulty")
             or _perceived_step_difficulty(
                 score,
-                move.get("n_best_alternatives", 1),
+                move.get(
+                    "n_best_conclusions",
+                    move.get("n_best_alternatives", 1),
+                ),
             )
         )
 
@@ -899,10 +1285,31 @@ def grade_difficulty(chain, status):
     }
 
 
-def analyse_puzzle(grid, name=None):
-    """Solve, grade, and package the complete puzzle analysis."""
+def analyse_puzzle(
+    grid,
+    name=None,
+    analysis_mode="deep",
+    profile_difficulty_window=DEFAULT_PROFILE_DIFFICULTY_WINDOW,
+    max_steps=10000,
+    verbose=False,
+):
+    """
+    Risolve, valuta e confeziona l analisi completa del puzzle.
+
+    La modalita predefinita e ``deep``. ``profile`` e ``superficial`` sono
+    disponibili per analisi piu rapide e meno granulari senza cambiare la
+    strategia di scelta delle mosse.
+    """
+    analysis_mode = _normalise_analysis_mode(analysis_mode)
     original = sds.SudokuState(grid).grid.copy()
-    state, chain, status = solve_and_log(grid)
+
+    state, chain, status = solve_and_log(
+        grid,
+        max_steps=max_steps,
+        verbose=verbose,
+        analysis_mode=analysis_mode,
+        profile_difficulty_window=profile_difficulty_window,
+    )
     grading = grade_difficulty(chain, status)
 
     bt = sds.backtracking_solve(original)
@@ -915,5 +1322,12 @@ def analyse_puzzle(grid, name=None):
         "chain": chain,
         "status": status,
         "grading": grading,
+        "analysis_mode": analysis_mode,
+        "profile_difficulty_window": (
+            float(profile_difficulty_window)
+            if analysis_mode == "profile"
+            else None
+        ),
         "backtracking_verified_solvable": verified,
     }
+
