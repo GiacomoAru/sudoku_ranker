@@ -26,7 +26,7 @@ CANONICAL_CLASS_SCHEMA_VERSION = 1
 
 # Incrementare questo numero quando cambia il funzionamento del solver
 # o il formato dell'analisi. Le vecchie analisi verranno ricalcolate.
-ANALYSIS_VERSION = 10
+ANALYSIS_VERSION = 11
 
 # Evita anche letture ripetute dal disco durante la stessa esecuzione.
 # La chiave è (puzzle_id, analysis_variant), non soltanto puzzle_id.
@@ -220,7 +220,8 @@ def _analysis_path(
         profile_difficulty_window,
     )
 
-    # Mantiene il nome storico per la deep, che resta il default.
+    # Mantiene il nome storico per la deep; il default profile usa invece
+    # un file esplicito che include la finestra nel nome.
     filename = (
         "analysis.json"
         if variant == "deep"
@@ -941,6 +942,8 @@ def list_sudokus(
             "canonical_id": payload.get("canonical_id"),
             "name": payload.get("name"),
             "clues": payload.get("clues"),
+            "difficulty_label": grading.get("label"),
+            "technique_label": grading.get("technique_label"),
             "is_canonical": payload.get("is_canonical"),
             "isomorphic_variant_count": canonical_info.get(
                 "isomorphic_variant_count",
@@ -1374,8 +1377,8 @@ def analyse_puzzle_cached(
     Restituisce e persiste la variante di analisi richiesta.
 
     Le varianti ``deep``, ``profile`` e ``superficial`` hanno file e chiavi
-    di cache distinti. La ``deep`` resta il default e continua a usare
-    ``analysis.json``.
+    di cache distinti. ``profile`` con finestra 3.0 è il default; la ``deep``
+    continua a usare il nome storico ``analysis.json``.
     """
     _ensure_sudoku_directories()
 

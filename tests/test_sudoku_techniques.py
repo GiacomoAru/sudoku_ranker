@@ -229,9 +229,50 @@ class SERatingTests(unittest.TestCase):
         grading = solver.grade_difficulty(chain, "solved")
         self.assertEqual(grading["max_difficulty"], 6.2)
         self.assertEqual(grading["max_level"], 6)
-        self.assertEqual(grading["label"], "Diabolico")
+        self.assertEqual(grading["label"], "Esperto")
+        self.assertEqual(grading["technique_label"], "Esperto")
         self.assertIn(6, grading["histogram"])
         self.assertEqual(grading["se_histogram"], {6.2: 1})
+
+    def test_fair_difficulty_label_boundaries(self):
+        expected = {
+            1.7: "Molto facile",
+            1.8: "Facile",
+            2.5: "Facile",
+            2.6: "Medio",
+            3.0: "Medio",
+            3.2: "Difficile",
+            4.4: "Difficile",
+            5.6: "Molto difficile",
+            6.6: "Esperto",
+            7.5: "Diabolico",
+            8.5: "Estremo",
+            9.5: "Incubo",
+            9.6: "Oltre il limite",
+        }
+
+        for score, label in expected.items():
+            with self.subTest(score=score):
+                self.assertEqual(
+                    solver.difficulty_label(score),
+                    label,
+                )
+
+    def test_long_simple_chain_can_be_promoted_by_workload(self):
+        chain = [{
+            "technique": "Hidden Single (Box)",
+            "difficulty": 1.2,
+            "n_best_conclusions": 1,
+        } for _ in range(50)]
+
+        grading = solver.grade_difficulty(chain, "solved")
+
+        self.assertEqual(grading["technique_label"], "Molto facile")
+        self.assertEqual(grading["label"], "Facile")
+        self.assertGreater(
+            grading["classification_score"],
+            grading["max_difficulty"],
+        )
 
 
 class LogicEngineTests(unittest.TestCase):
@@ -433,7 +474,10 @@ class LogicEngineTests(unittest.TestCase):
                 "complete_inventory": True,
             }),
         ) as collect_moves:
-            _, chain, status = solver.solve_and_log(grid)
+            _, chain, status = solver.solve_and_log(
+                grid,
+                analysis_mode="deep",
+            )
         collect_moves.assert_called_once()
         self.assertEqual(
             collect_moves.call_args.kwargs["mode"],

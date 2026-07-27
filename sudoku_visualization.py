@@ -1146,6 +1146,14 @@ def analyses_summary_dataframe(analyses):
             "modalita_analisi": analysis.get("analysis_mode", "legacy"),
             "finestra_profile": analysis.get("profile_difficulty_window"),
             "difficolta": grading["label"],
+            "difficolta_tecnica": grading.get(
+                "technique_label",
+                grading["label"],
+            ),
+            "punteggio_classificazione": grading.get(
+                "classification_score",
+                grading["max_difficulty"],
+            ),
             "carico": grading.get(
                 "workload_score",
                 grading.get("score", 0),

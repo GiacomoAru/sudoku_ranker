@@ -2,8 +2,9 @@
 ## 3. Motore risolutivo
 
 Ad ogni step il motore interroga le tecniche in ordine di difficoltà.
-L'analisi `deep`, predefinita, costruisce l'inventario completo; `profile`
-si limita a una fascia configurabile sopra la difficoltà minima;
+L'analisi `profile`, predefinita con finestra 3.0, si limita a una fascia
+configurabile sopra la difficoltà minima; `deep` costruisce invece
+l'inventario completo;
 `superficial` conserva soltanto la frontiera minima. In ogni modalità la
 mossa scelta è la più semplice; il tie-break usa `_TECHNIQUE_ORDER` e,
 fra conclusioni equivalenti, le coordinate della forma canonica MinLex.
@@ -16,18 +17,20 @@ trova più nulla) o contraddizione (un candidato azzerato, non dovrebbe mai
 succedere su un puzzle valido con solo eliminazioni logicamente corrette).
 
 `grade_difficulty` produce sia la difficoltà teorica sia una difficoltà
-percepita. La difficoltà percepita assegna a ogni livello tecnico un peso
-su una scala logaritmica, quindi un livello intero in più vale circa dieci
-volte tanto, e corregge il peso in base al numero di mosse minime disponibili:
-poche alternative aumentano il carico, molte lo riducono.
+percepita. La label usa il maggiore fra tecnica massima e carico percepito:
+un puzzle non viene sottostimato né per un collo di bottiglia tecnico né per
+una lunga soluzione con poche opportunità. La difficoltà percepita assegna a
+ogni livello tecnico un peso logaritmico e lo corregge in base al numero di
+mosse minime disponibili.
 '''
 
 
 """
-Solver engine with configurable analysis depth. The default deep mode
-collects the complete logical inventory, while profile and superficial modes
-reduce the scanned difficulty range. Proofs are retained as diagnostics, but
-availability is measured primarily through unique logical conclusions.
+Solver engine with configurable analysis depth. The default profile mode
+scans three SE points above the minimum difficulty; deep collects the complete
+logical inventory and superficial keeps only the minimum frontier. Proofs are
+retained as diagnostics, while availability is measured through unique
+logical conclusions.
 """
 
 from collections import defaultdict
@@ -39,20 +42,24 @@ import sudoku_techniques as st
 
 
 DIFFICULTY_THRESHOLDS = [
-    (1.5, "Principiante"),
+    # Le prime tre fasce distinguono meglio i puzzle semplici. ``Medio``
+    # termina a Naked Pair/Pointing/Claiming; da X-Wing e Hidden Pair in poi
+    # il puzzle è classificato almeno come ``Difficile``.
+    (1.7, "Molto facile"),
     (2.5, "Facile"),
-    (3.5, "Medio"),
-    (4.5, "Difficile"),
-    (5.5, "Esperto"),
-    (6.5, "Diabolico"),
-    (7.5, "Estremo"),
-    (8.5, "Incubo"),
-    (9.4, "Disumano"),
+    (3.0, "Medio"),
+    (4.4, "Difficile"),
+    (5.6, "Molto difficile"),
+    (6.6, "Esperto"),
+    (7.5, "Diabolico"),
+    (8.5, "Estremo"),
+    (9.5, "Incubo"),
     (float("inf"), "Oltre il limite"),
 ]
 
 
 def difficulty_label(difficulty):
+    """Converte uno score continuo nella label editoriale del progetto."""
     difficulty = float(difficulty)
 
     for maximum, label in DIFFICULTY_THRESHOLDS:
@@ -528,8 +535,8 @@ def solve_and_log(
     Risolve il Sudoku e registra l inventario logico di ogni stato.
 
     ``analysis_mode`` controlla la profondita dell inventario:
-    ``deep`` e il default e interroga tutte le tecniche; ``profile`` esplora
-    una fascia configurabile sopra la difficolta minima; ``superficial``
+    ``profile`` e il default ed esplora una fascia configurabile sopra la
+    difficolta minima; ``deep`` interroga tutte le tecniche; ``superficial``
     registra soltanto la frontiera minima.
 
     Lo stato finale, la mossa scelta e il grading non dipendono dalla modalita:
@@ -1206,6 +1213,8 @@ def grade_difficulty(chain, status):
     if not chain:
         return {
             "label": "N/A",
+            "technique_label": "N/A",
+            "classification_score": 0.0,
             "max_difficulty": 0,
             "max_level": 0,
             "score": 0,
@@ -1287,14 +1296,21 @@ def grade_difficulty(chain, status):
 
     perceived_difficulty = math.log10(sum(perceived_step_scores) * math.sqrt(len(perceived_step_scores)))
     max_perceived_step = math.log10(max(perceived_step_scores))
+    classification_score = max(
+        max_difficulty,
+        perceived_difficulty,
+    )
+    technique_label = difficulty_label(max_difficulty)
 
     if status == "solved":
-        label = difficulty_label(max_difficulty)
+        label = difficulty_label(classification_score)
     else:
         label = "Non risolto"
 
     return {
         "label": label,
+        "technique_label": technique_label,
+        "classification_score": classification_score,
         "max_difficulty": max_difficulty,
         "max_level": max_level,
 
@@ -1328,9 +1344,9 @@ def analyse_puzzle(
     """
     Risolve, valuta e confeziona l analisi completa del puzzle.
 
-    La modalita predefinita e ``deep``. ``profile`` e ``superficial`` sono
-    disponibili per analisi piu rapide e meno granulari senza cambiare la
-    strategia di scelta delle mosse.
+    La modalita predefinita e ``profile`` con finestra 3.0. ``deep`` produce
+    l'inventario totale e ``superficial`` conserva soltanto la frontiera,
+    senza cambiare la strategia di scelta delle mosse.
     """
     analysis_mode = _normalise_analysis_mode(analysis_mode)
     original = sds.SudokuState(grid).grid.copy()
