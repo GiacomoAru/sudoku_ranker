@@ -229,7 +229,7 @@ class SERatingTests(unittest.TestCase):
         grading = solver.grade_difficulty(chain, "solved")
         self.assertEqual(grading["max_difficulty"], 6.2)
         self.assertEqual(grading["max_level"], 6)
-        self.assertEqual(grading["label"], "Estremo")
+        self.assertEqual(grading["label"], "Diabolico")
         self.assertIn(6, grading["histogram"])
         self.assertEqual(grading["se_histogram"], {6.2: 1})
 
@@ -384,10 +384,17 @@ class LogicEngineTests(unittest.TestCase):
         with mock.patch.object(
             techniques.logic_engine,
             "find_logic_deductions",
-            return_value=[deduction],
+            side_effect=lambda current_state, technique: (
+                [deduction]
+                if technique == "Dynamic Forcing Chain Plus"
+                else []
+            ),
         ) as finder:
             moves = techniques.dynamic_forcing_chain_plus(state)
-        finder.assert_called_once_with(state, "Dynamic Forcing Chain Plus")
+        self.assertIn(
+            mock.call(state, "Dynamic Forcing Chain Plus"),
+            finder.call_args_list,
+        )
         self.assertEqual(len(moves), 1)
         self.assertEqual(moves[0]["technique"], "Dynamic Forcing Chain Plus")
         self.assertEqual(moves[0]["difficulty"], 9.0)
@@ -420,11 +427,18 @@ class LogicEngineTests(unittest.TestCase):
         }]
         with mock.patch.object(
             solver,
-            "collect_all_moves_full",
-            return_value=moves,
-        ) as collect_full:
+            "collect_moves_for_analysis",
+            return_value=(moves, {
+                "mode": "deep",
+                "complete_inventory": True,
+            }),
+        ) as collect_moves:
             _, chain, status = solver.solve_and_log(grid)
-        collect_full.assert_called_once()
+        collect_moves.assert_called_once()
+        self.assertEqual(
+            collect_moves.call_args.kwargs["mode"],
+            "deep",
+        )
         self.assertEqual(status, "solved")
         self.assertEqual(chain[0]["n_alternatives"], 2)
         self.assertEqual(chain[0]["n_best_alternatives"], 1)

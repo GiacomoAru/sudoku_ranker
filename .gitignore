@@ -1,5 +1,7 @@
 .venv/
 .vscode/
+.agents/
+old_files/
 sudoku.code-workspace
 sudoku_data/
 __pycache__/

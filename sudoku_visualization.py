@@ -11,10 +11,12 @@ La misura predefinita e il numero di conclusioni atomiche uniche, per evitare
 che tecniche basate su catene dominino i grafici soltanto perche possono
 produrre molte prove equivalenti.
 
-`plot_technique_activity` offre quattro viste principali, ottenute combinando:
+`plot_technique_activity` offre tre granularita, combinabili con la
+profondita `deep` oppure `superficial`:
 
-- profondita `deep` oppure `superficial`;
-- vista `extended` per famiglie oppure `compact` per strategie generali.
+- vista `compact` per strategie generali;
+- vista `family` per famiglie logiche;
+- vista `extended` per ogni singola tecnica.
 
 La vista deep usa tutto l inventario registrato nello step. La vista
 superficial usa soltanto la frontiera alla difficolta minima. La modalita di
@@ -42,7 +44,6 @@ from sudoku_techniques import (
     technique_family,
     technique_strategy,
 )
-from sudoku_solver import DIFFICULTY_LABEL
 
 
 DIFF_COLORS = {
@@ -75,13 +76,28 @@ _HEATMAP_DEPTH_ALIASES = {
     "superficiale": "superficial",
 }
 
+# Schema pubblico delle viste della heatmap:
+# compact  = strategie generali
+# family   = famiglie logiche
+# extended = singole tecniche
+HEATMAP_VIEW_SCHEMA_VERSION = 2
+
 _HEATMAP_VIEW_ALIASES = {
+    # Vista estesa: una riga per ogni singola tecnica specifica.
     "extended": "extended",
     "estesa": "extended",
-    "family": "extended",
-    "families": "extended",
-    "famiglia": "extended",
-    "famiglie": "extended",
+    "technique": "extended",
+    "techniques": "extended",
+    "tecnica": "extended",
+    "tecniche": "extended",
+
+    # Vista per famiglie: una riga per ogni famiglia logica.
+    "family": "family",
+    "families": "family",
+    "famiglia": "family",
+    "famiglie": "family",
+
+    # Vista compatta: una riga per ogni strategia generale.
     "compact": "compact",
     "restricted": "compact",
     "ristretta": "compact",
@@ -89,12 +105,6 @@ _HEATMAP_VIEW_ALIASES = {
     "strategies": "compact",
     "strategia": "compact",
     "strategie": "compact",
-    # Vista aggiuntiva utile per il debug fine. Le quattro combinazioni
-    # principali restano deep/superficial x extended/compact.
-    "technique": "technique",
-    "techniques": "technique",
-    "tecnica": "technique",
-    "tecniche": "technique",
 }
 
 _HEATMAP_METRIC_ALIASES = {
@@ -284,8 +294,13 @@ def _scope_for_step(step, depth):
 
 
 def _scope_values(scope, view, metric):
-    """Estrae i valori di una cella heatmap dallo scope dello step."""
-    if view == "technique":
+    """Estrae i valori usando la granularita richiesta.
+
+    ``extended`` legge direttamente ``by_technique``;
+    ``family`` legge direttamente ``by_family``;
+    ``compact`` aggrega le famiglie nella strategia generale corrispondente.
+    """
+    if view == "extended":
         return {
             name: int(values.get(metric, 0))
             for name, values in scope.get("by_technique", {}).items()
@@ -296,7 +311,7 @@ def _scope_values(scope, view, metric):
         for name, values in scope.get("by_family", {}).items()
     }
 
-    if view == "extended":
+    if view == "family":
         return family_values
 
     # La vista compact somma le famiglie appartenenti alla stessa strategia.
@@ -314,25 +329,25 @@ def _scope_values(scope, view, metric):
 
 
 def _view_order(view):
-    if view == "technique":
-        return list(_TECHNIQUE_ORDER)
     if view == "extended":
+        return list(_TECHNIQUE_ORDER)
+    if view == "family":
         return list(TECHNIQUE_FAMILY_ORDER)
     return list(TECHNIQUE_STRATEGY_ORDER)
 
 
 def _view_axis_label(view):
-    if view == "technique":
-        return "Tecnica"
     if view == "extended":
+        return "Tecnica"
+    if view == "family":
         return "Famiglia"
     return "Strategia"
 
 
 def _view_title(view):
-    if view == "technique":
-        return "tecniche"
     if view == "extended":
+        return "tecniche"
+    if view == "family":
         return "famiglie"
     return "strategie"
 
@@ -716,8 +731,7 @@ def plot_difficulty_chain(analysis, figsize=(13, 4.6), show=True):
     ax2.set_xticks(
         np.arange(0.5, 10, 1),
         labels=[
-            f"SE {value}"
-            for value in list(DIFFICULTY_LABEL.keys())
+            f"SE {value}"  for value in list(range(1,11))
         ],
         rotation=45,
         ha="right",
@@ -758,16 +772,29 @@ def technique_activity_dataframe(
     show_inactive=False,
 ):
     """
-    Costruisce i dati della heatmap tecnica.
+    Costruisce la matrice numerica usata dalla heatmap.
 
-    Le quattro configurazioni principali sono:
+    Significato esatto di ``view``
+    --------------------------------
+    ``compact``
+        Raggruppa l'attivita nelle poche strategie generali definite da
+        ``TECHNIQUE_STRATEGY_ORDER``. Ogni riga rappresenta una strategia,
+        per esempio "Catene statiche" o "Forcing dinamici".
 
-    - `depth="deep", view="extended"`: inventario registrato per famiglia;
-    - `depth="deep", view="compact"`: inventario registrato per strategia;
-    - `depth="superficial", view="extended"`: frontiera minima per famiglia;
-    - `depth="superficial", view="compact"`: frontiera minima per strategia.
+    ``family``
+        Raggruppa l'attivita nelle famiglie logiche definite da
+        ``TECHNIQUE_FAMILY_ORDER``. Ogni riga rappresenta una famiglia,
+        per esempio "Fish", "Wings" o "Cicli bidirezionali".
 
-    `view="technique"` e disponibile come dettaglio diagnostico aggiuntivo.
+    ``extended``
+        Non aggrega le tecniche. Ogni riga rappresenta una singola voce di
+        ``_TECHNIQUE_ORDER``, per esempio "X-Wing", "XY-Chain" o "Nishio".
+
+    ``depth="deep"`` usa tutto l'inventario registrato nello step;
+    ``depth="superficial"`` usa soltanto la frontiera alla difficolta minima.
+
+    Gli alias ``technique``, ``techniques``, ``tecnica`` e ``tecniche``
+    indicano tutti la vista ``extended``.
     """
     depth = _normalise_heatmap_depth(depth)
     view = _normalise_heatmap_view(view)
@@ -841,24 +868,48 @@ def plot_technique_activity(
     show=True,
 ):
     """
-    Mostra l attivita logica lungo l intera risoluzione.
+    Visualizza l'attivita logica registrata durante la risoluzione.
 
-    Parametri principali
-    --------------------
-    depth:
-        `deep` usa tutto l inventario registrato; `superficial` usa soltanto
-        le conclusioni alla difficolta minima.
-    view:
-        `extended` aggrega per famiglia; `compact` aggrega per strategia.
-        Le due opzioni, combinate con depth, formano le quattro heatmap
-        principali richieste. `technique` aggiunge una vista di debug fine.
-    metric:
-        `conclusions` e il default. Sono disponibili anche `outcomes` e
-        `proofs` per confronto diagnostico.
-    scale:
-        `log` usa log1p soltanto per il colore; le annotazioni e il dataframe
-        mantengono sempre i conteggi reali. Sono disponibili anche `linear`
-        e `sqrt`.
+    PARAMETRO ``view``
+    ==================
+    ``view="compact"``
+        Vista piu sintetica. Le righe sono STRATEGIE GENERALI. Tecniche e
+        famiglie affini vengono sommate nella stessa riga.
+
+    ``view="family"``
+        Vista intermedia. Le righe sono FAMIGLIE LOGICHE. Le singole tecniche
+        appartenenti alla stessa famiglia vengono aggregate.
+
+    ``view="extended"``
+        Vista piu dettagliata. Le righe sono SINGOLE TECNICHE. Non viene
+        applicata alcuna aggregazione tassonomica.
+
+    In breve::
+
+        compact  -> strategie
+        family   -> famiglie
+        extended -> tecniche
+
+    PARAMETRO ``depth``
+    ===================
+    ``depth="deep"`` usa tutto l'inventario disponibile nello step.
+    ``depth="superficial"`` usa solo le conclusioni alla difficolta minima.
+
+    Le tre view possono essere combinate con entrambe le profondita, per un
+    totale di sei visualizzazioni.
+
+    PARAMETRO ``metric``
+    ====================
+    ``conclusions`` conta le conclusioni atomiche uniche ed e la metrica
+    consigliata. ``outcomes`` conta gli esiti complessivi distinti.
+    ``proofs`` conta le prove enumerate dal motore.
+
+    ``scale`` modifica soltanto il colore della heatmap. Le annotazioni e il
+    dataframe restituito mantengono sempre i conteggi reali. Sono disponibili
+    ``log``, ``sqrt`` e ``linear``.
+
+    ``technique`` e ``techniques`` restano alias compatibili di
+    ``extended``.
     """
     depth = _normalise_heatmap_depth(depth)
     view = _normalise_heatmap_view(view)

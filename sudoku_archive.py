@@ -3,10 +3,12 @@
 import hashlib
 import json
 import random
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
+import sudoku_canonicalization as sc
 import sudoku_data_structure as sds
 import sudoku_solver as ss
 
@@ -17,16 +19,14 @@ import sudoku_solver as ss
 SUDOKU_DATA_DIR = Path("sudoku_data")
 SUDOKU_PUZZLES_DIR = SUDOKU_DATA_DIR / "puzzles"
 SUDOKU_ANALYSES_DIR = SUDOKU_DATA_DIR / "analyses"
+SUDOKU_CANONICAL_DIR = SUDOKU_DATA_DIR / "canonical"
 
-PUZZLE_SCHEMA_VERSION = 1
+PUZZLE_SCHEMA_VERSION = 2
+CANONICAL_CLASS_SCHEMA_VERSION = 1
 
 # Incrementare questo numero quando cambia il funzionamento del solver
 # o il formato dell'analisi. Le vecchie analisi verranno ricalcolate.
-ANALYSIS_VERSION = 9
-
-# La modalità canonica resta deep. Le altre varianti vengono salvate
-# separatamente, senza sovrascrivere l analisi completa.
-DEFAULT_ANALYSIS_MODE = "deep"
+ANALYSIS_VERSION = 10
 
 # Evita anche letture ripetute dal disco durante la stessa esecuzione.
 # La chiave è (puzzle_id, analysis_variant), non soltanto puzzle_id.
@@ -40,6 +40,7 @@ _ANALYSIS_MEMORY_CACHE = {}
 def _ensure_sudoku_directories():
     SUDOKU_PUZZLES_DIR.mkdir(parents=True, exist_ok=True)
     SUDOKU_ANALYSES_DIR.mkdir(parents=True, exist_ok=True)
+    SUDOKU_CANONICAL_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _current_timestamp():
@@ -99,6 +100,11 @@ def sudoku_id(grid):
     ).hexdigest()[:20]
 
 
+def canonical_sudoku_id(grid):
+    """Restituisce l'identità della classe isomorfa della griglia."""
+    return sc.canonical_id(normalise_sudoku_grid(grid))
+
+
 def _looks_like_grid_string(value):
     if not isinstance(value, str):
         return False
@@ -115,13 +121,17 @@ def _puzzle_path(puzzle_id):
     return SUDOKU_PUZZLES_DIR / f"{puzzle_id}.json"
 
 
+def _canonical_path(canonical_id):
+    return SUDOKU_CANONICAL_DIR / f"{canonical_id}.json"
+
+
 def _analysis_directory(puzzle_id):
     return SUDOKU_ANALYSES_DIR / puzzle_id
 
 
 def _normalise_analysis_request(
-    analysis_mode=DEFAULT_ANALYSIS_MODE,
-    profile_difficulty_window=None,
+    analysis_mode=ss.DEFAULT_ANALYSIS_MODE,
+    profile_difficulty_window=ss.DEFAULT_PROFILE_DIFFICULTY_WINDOW,
 ):
     """Normalizza la variante di analisi richiesta all archivio."""
     normaliser = getattr(ss, "_normalise_analysis_mode", None)
@@ -135,7 +145,7 @@ def _normalise_analysis_request(
             "ANALYSIS_MODES",
             {"deep", "profile", "superficial"},
         )
-        mode = str(analysis_mode or DEFAULT_ANALYSIS_MODE).strip().lower()
+        mode = str(analysis_mode or ss.DEFAULT_ANALYSIS_MODE).strip().lower()
         mode = aliases.get(mode, mode)
 
         if mode not in allowed:
@@ -171,8 +181,8 @@ def _profile_window_token(value):
 
 
 def _analysis_variant(
-    analysis_mode=DEFAULT_ANALYSIS_MODE,
-    profile_difficulty_window=None,
+    analysis_mode=ss.DEFAULT_ANALYSIS_MODE,
+    profile_difficulty_window=ss.DEFAULT_PROFILE_DIFFICULTY_WINDOW,
 ):
     mode, window = _normalise_analysis_request(
         analysis_mode,
@@ -187,8 +197,8 @@ def _analysis_variant(
 
 def _analysis_cache_key(
     puzzle_id,
-    analysis_mode=DEFAULT_ANALYSIS_MODE,
-    profile_difficulty_window=None,
+    analysis_mode=ss.DEFAULT_ANALYSIS_MODE,
+    profile_difficulty_window=ss.DEFAULT_PROFILE_DIFFICULTY_WINDOW,
 ):
     return (
         str(puzzle_id),
@@ -201,8 +211,8 @@ def _analysis_cache_key(
 
 def _analysis_path(
     puzzle_id,
-    analysis_mode=DEFAULT_ANALYSIS_MODE,
-    profile_difficulty_window=None,
+    analysis_mode=ss.DEFAULT_ANALYSIS_MODE,
+    profile_difficulty_window=ss.DEFAULT_PROFILE_DIFFICULTY_WINDOW,
 ):
     """Restituisce un file distinto per ogni variante di analisi."""
     variant = _analysis_variant(
@@ -223,8 +233,8 @@ def _analysis_path(
 def _analysis_payload_is_current(
     payload,
     puzzle_id,
-    analysis_mode=DEFAULT_ANALYSIS_MODE,
-    profile_difficulty_window=None,
+    analysis_mode=ss.DEFAULT_ANALYSIS_MODE,
+    profile_difficulty_window=ss.DEFAULT_PROFILE_DIFFICULTY_WINDOW,
 ):
     """Verifica versione, Sudoku e variante richiesta."""
     if (
@@ -241,7 +251,7 @@ def _analysis_payload_is_current(
     stored_analysis = payload.get("analysis", {})
     stored_mode = payload.get(
         "analysis_mode",
-        stored_analysis.get("analysis_mode", DEFAULT_ANALYSIS_MODE),
+        stored_analysis.get("analysis_mode", ss.DEFAULT_ANALYSIS_MODE),
     )
     stored_window = payload.get(
         "profile_difficulty_window",
@@ -280,7 +290,7 @@ def _current_analysis_payloads(puzzle_id):
             analysis = payload.get("analysis", {})
             mode = payload.get(
                 "analysis_mode",
-                analysis.get("analysis_mode", DEFAULT_ANALYSIS_MODE),
+                analysis.get("analysis_mode", ss.DEFAULT_ANALYSIS_MODE),
             )
             window = payload.get(
                 "profile_difficulty_window",
@@ -338,6 +348,142 @@ def _read_json(path):
 
     with path.open("r", encoding="utf-8") as file:
         return json.load(file)
+
+
+def _canonical_fields(grid, existing=None):
+    """Costruisce i campi canonici, riusando un record già aggiornato."""
+    existing = existing or {}
+
+    if (
+        existing.get("canonicalization_version")
+        == sc.CANONICALIZATION_VERSION
+        and existing.get("canonical_id")
+        and existing.get("canonical_grid")
+        and existing.get("canonical_transform")
+    ):
+        return {
+            "canonicalization_version": sc.CANONICALIZATION_VERSION,
+            "canonical_id": existing["canonical_id"],
+            "canonical_grid": existing["canonical_grid"],
+            "canonical_transform": existing["canonical_transform"],
+            "is_canonical": bool(existing.get("is_canonical", False)),
+            "canonical_equivalent_minimum_count": int(
+                existing.get("canonical_equivalent_minimum_count", 1)
+            ),
+        }
+
+    details = sc.canonicalize_details(grid)
+    grid_string = _grid_to_string(grid)
+
+    return {
+        "canonicalization_version": sc.CANONICALIZATION_VERSION,
+        "canonical_id": sc.canonical_id_from_string(
+            details.canonical_string
+        ),
+        "canonical_grid": details.canonical_string,
+        "canonical_transform": details.transform.to_dict(),
+        "is_canonical": grid_string == details.canonical_string,
+        "canonical_equivalent_minimum_count": (
+            details.equivalent_minimum_count
+        ),
+    }
+
+
+def _canonical_members_from_puzzles(canonical_id, canonical_grid):
+    """
+    Ricostruisce a basso costo i membri già migrati se manca parte dell'indice.
+
+    I record legacy senza ``canonical_id`` vengono gestiti dalla migrazione
+    esplicita: canonicalizzarli tutti durante un singolo salvataggio renderebbe
+    imprevedibile la latenza dell'operazione.
+    """
+    members = set()
+
+    for path in SUDOKU_PUZZLES_DIR.glob("*.json"):
+        payload = _read_json(path)
+
+        if payload.get("canonical_id") == canonical_id:
+            if payload.get("canonical_grid") != canonical_grid:
+                raise RuntimeError(
+                    "Collisione dell'indice canonico rilevata nei puzzle: "
+                    f"{canonical_id}."
+                )
+            members.add(str(payload["id"]))
+
+    return members
+
+
+def _register_canonical_variant(puzzle_payload):
+    """Aggiorna atomicamente l'indice della classe isomorfa."""
+    canonical_id = puzzle_payload["canonical_id"]
+    canonical_grid = puzzle_payload["canonical_grid"]
+    puzzle_id = puzzle_payload["id"]
+    path = _canonical_path(canonical_id)
+    existing = _read_json(path) if path.exists() else {}
+
+    if (
+        existing
+        and existing.get("canonical_grid") != canonical_grid
+    ):
+        raise RuntimeError(
+            "Collisione dell'indice canonico: due forme MinLex diverse "
+            f"hanno prodotto {canonical_id}."
+        )
+
+    members = set(existing.get("variant_ids", []))
+    members.update(
+        _canonical_members_from_puzzles(canonical_id, canonical_grid)
+    )
+    members.add(puzzle_id)
+    members = sorted(members)
+    timestamp = _current_timestamp()
+
+    canonical_payload = {
+        "schema_version": CANONICAL_CLASS_SCHEMA_VERSION,
+        "canonicalization_version": sc.CANONICALIZATION_VERSION,
+        "canonical_id": canonical_id,
+        "canonical_grid": canonical_grid,
+        "primary_puzzle_id": members[0],
+        "variant_ids": members,
+        "variant_count": len(members),
+        "created_at": existing.get("created_at", timestamp),
+        "updated_at": timestamp,
+    }
+    _write_json(path, canonical_payload)
+    return canonical_payload
+
+
+def _canonical_class_info(payload):
+    """Aggiunge al record informazioni dinamiche sui duplicati isomorfi."""
+    canonical_id = payload.get("canonical_id")
+
+    if not canonical_id:
+        return {}
+
+    path = _canonical_path(canonical_id)
+
+    if path.exists():
+        canonical_class = _read_json(path)
+        members = sorted(set(canonical_class.get("variant_ids", [])))
+    else:
+        members = [str(payload["id"])]
+
+    puzzle_id = str(payload["id"])
+
+    if puzzle_id not in members:
+        members.append(puzzle_id)
+        members.sort()
+
+    primary = members[0]
+
+    return {
+        "primary_variant_id": primary,
+        "isomorphic_variant_ids": members,
+        "isomorphic_variant_count": len(members),
+        "is_isomorphic_duplicate": len(members) > 1,
+        "duplicate_of": primary if puzzle_id != primary else None,
+        "canonical_path": path,
+    }
 
 
 def _to_json_value(value):
@@ -509,7 +655,10 @@ def save_sudoku(grid, name=None, metadata=None):
     """
     Salva un Sudoku nella cartella puzzles.
 
-    Se il Sudoku esiste già, aggiorna solamente nome e metadati.
+    ``id`` identifica la disposizione concreta; ``canonical_id`` identifica
+    la classe isomorfa. Se la stessa griglia esiste già, aggiorna solamente
+    nome e metadati. Un nuovo isomorfo resta una variante distinta, ma viene
+    collegato alla stessa classe canonica.
     """
     _ensure_sudoku_directories()
 
@@ -518,6 +667,7 @@ def save_sudoku(grid, name=None, metadata=None):
     path = _puzzle_path(puzzle_id)
 
     existing = _read_json(path) if path.exists() else {}
+    canonical_fields = _canonical_fields(grid, existing)
 
     stored_metadata = dict(existing.get("metadata", {}))
 
@@ -537,6 +687,7 @@ def save_sudoku(grid, name=None, metadata=None):
         "grid": _grid_to_string(grid),
         "clues": int(np.count_nonzero(grid)),
         "metadata": _to_json_value(stored_metadata),
+        **canonical_fields,
         "created_at": existing.get(
             "created_at",
             _current_timestamp(),
@@ -545,9 +696,11 @@ def save_sudoku(grid, name=None, metadata=None):
     }
 
     _write_json(path, payload)
+    _register_canonical_variant(payload)
 
     return {
         **payload,
+        **_canonical_class_info(payload),
         "grid": grid,
         "path": path,
     }
@@ -576,7 +729,19 @@ def save_with_standard_nomenclature(
     existing_path = _puzzle_path(puzzle_id)
 
     if existing_path.exists():
-        return load_sudoku(existing_path)
+        existing = _read_json(existing_path)
+
+        if (
+            existing.get("schema_version") == PUZZLE_SCHEMA_VERSION
+            and existing.get("canonical_id")
+        ):
+            return load_sudoku(existing_path)
+
+        return save_sudoku(
+            grid,
+            name=existing.get("name"),
+            metadata=existing.get("metadata"),
+        )
 
     prefix = f"{provenience}_{difficulty}_"
     highest_index = -1
@@ -623,15 +788,26 @@ def load_sudoku(reference):
     path = _resolve_puzzle_path(reference)
     payload = _read_json(path)
 
-    if payload.get("schema_version") != PUZZLE_SCHEMA_VERSION:
+    if payload.get("schema_version", 1) not in (1, PUZZLE_SCHEMA_VERSION):
         raise ValueError(
             f"Versione del file Sudoku non supportata: "
             f"{payload.get('schema_version')}."
         )
 
+    grid = normalise_sudoku_grid(payload["grid"])
+
+    if not payload.get("canonical_id"):
+        # Compatibilità di lettura con lo schema 1. La migrazione esplicita
+        # persiste questi campi senza modificare date, nomi o analisi.
+        payload = {
+            **payload,
+            **_canonical_fields(grid),
+        }
+
     return {
         **payload,
-        "grid": normalise_sudoku_grid(payload["grid"]),
+        **_canonical_class_info(payload),
+        "grid": grid,
         "path": path,
     }
 
@@ -721,6 +897,7 @@ def list_sudokus(
     for path in SUDOKU_PUZZLES_DIR.glob("*.json"):
         payload = _read_json(path)
         puzzle_id = payload["id"]
+        canonical_info = _canonical_class_info(payload)
         variants = _current_analysis_payloads(puzzle_id)
 
         modes = {
@@ -761,8 +938,19 @@ def list_sudokus(
 
         result = {
             "id": puzzle_id,
+            "canonical_id": payload.get("canonical_id"),
             "name": payload.get("name"),
             "clues": payload.get("clues"),
+            "is_canonical": payload.get("is_canonical"),
+            "isomorphic_variant_count": canonical_info.get(
+                "isomorphic_variant_count",
+                1,
+            ),
+            "is_isomorphic_duplicate": canonical_info.get(
+                "is_isomorphic_duplicate",
+                False,
+            ),
+            "duplicate_of": canonical_info.get("duplicate_of"),
             "analysed": bool(variants),
             "analysed_deep": "deep" in modes,
             "analysed_profile": "profile" in modes,
@@ -846,6 +1034,230 @@ def list_sudokus(
 
     return results
 
+
+def load_canonical_class(reference):
+    """
+    Carica la classe isomorfa di un ID canonico, Sudoku salvato o griglia.
+
+    Il risultato contiene la forma MinLex autorevole e l'elenco sintetico
+    delle varianti concrete, ognuna delle quali continua a essere caricabile
+    e analizzabile tramite il proprio ``id``.
+    """
+    _ensure_sudoku_directories()
+
+    if (
+        isinstance(reference, str)
+        and len(reference) == 64
+        and all(character in "0123456789abcdef" for character in reference)
+        and _canonical_path(reference).exists()
+    ):
+        canonical_id = reference
+    elif isinstance(reference, str) and not _looks_like_grid_string(reference):
+        canonical_id = load_sudoku(reference)["canonical_id"]
+    else:
+        canonical_id = canonical_sudoku_id(reference)
+
+    path = _canonical_path(canonical_id)
+
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Classe canonica non indicizzata: {canonical_id}. "
+            "Esegui migrate_canonical_archive(dry_run=False) per i record "
+            "creati con lo schema precedente."
+        )
+
+    payload = _read_json(path)
+    variants = []
+
+    for puzzle_id in payload.get("variant_ids", []):
+        puzzle_path = _puzzle_path(puzzle_id)
+
+        if not puzzle_path.exists():
+            continue
+
+        puzzle = _read_json(puzzle_path)
+        variants.append({
+            "id": puzzle_id,
+            "name": puzzle.get("name"),
+            "grid": puzzle.get("grid"),
+            "clues": puzzle.get("clues"),
+            "metadata": puzzle.get("metadata", {}),
+            "is_canonical": puzzle.get("is_canonical", False),
+            "created_at": puzzle.get("created_at"),
+            "updated_at": puzzle.get("updated_at"),
+        })
+
+    return {
+        **payload,
+        "variants": variants,
+        "path": path,
+    }
+
+
+def find_isomorphic_sudokus(reference):
+    """Restituisce tutti i record concreti appartenenti alla stessa classe."""
+    canonical_class = load_canonical_class(reference)
+
+    return [
+        load_sudoku(puzzle_id)
+        for puzzle_id in canonical_class.get("variant_ids", [])
+        if _puzzle_path(puzzle_id).exists()
+    ]
+
+
+def migrate_canonical_archive(dry_run=True, workers=None):
+    """
+    Migra in modo non distruttivo i puzzle legacy allo schema canonico.
+
+    ``dry_run=True`` calcola e restituisce il rapporto senza modificare file.
+    Con ``False`` aggiorna ogni JSON in-place conservando ID, nome, griglia,
+    metadati e timestamp, quindi costruisce gli indici di classe. ``workers``
+    limita i calcoli MinLex paralleli; il valore automatico non supera quattro.
+    """
+    if not isinstance(dry_run, bool):
+        raise TypeError("dry_run deve essere booleano.")
+
+    _ensure_sudoku_directories()
+    paths = sorted(SUDOKU_PUZZLES_DIR.glob("*.json"))
+    payloads = [(path, _read_json(path)) for path in paths]
+
+    if workers is None:
+        workers = min(4, max(len(payloads), 1))
+
+    if (
+        isinstance(workers, bool)
+        or not isinstance(workers, int)
+        or workers < 1
+    ):
+        raise ValueError("workers deve essere un intero maggiore di zero.")
+
+    def prepare_record(item):
+        path, payload = item
+        version = payload.get("schema_version", 1)
+
+        if version not in (1, PUZZLE_SCHEMA_VERSION):
+            raise ValueError(
+                f"Versione puzzle non supportata in {path}: {version}."
+            )
+
+        grid = normalise_sudoku_grid(payload["grid"])
+        canonical_fields = _canonical_fields(grid, payload)
+        return path, payload, {
+            **payload,
+            "schema_version": PUZZLE_SCHEMA_VERSION,
+            **canonical_fields,
+        }
+
+    if workers == 1 or len(payloads) < 2:
+        prepared = [prepare_record(item) for item in payloads]
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            prepared = list(executor.map(prepare_record, payloads))
+
+    prepared_records = []
+    classes = {}
+    updated_files = 0
+
+    for path, payload, updated in prepared:
+        if updated != payload:
+            updated_files += 1
+
+        canonical_id = updated["canonical_id"]
+        canonical_grid = updated["canonical_grid"]
+        canonical_class = classes.setdefault(
+            canonical_id,
+            {
+                "canonical_grid": canonical_grid,
+                "records": [],
+            },
+        )
+
+        if canonical_class["canonical_grid"] != canonical_grid:
+            raise RuntimeError(
+                "Collisione dell'indice canonico durante la migrazione: "
+                f"{canonical_id}."
+            )
+
+        canonical_class["records"].append(updated)
+        prepared_records.append((path, updated))
+
+    timestamp = _current_timestamp()
+    duplicate_classes = []
+    class_payloads = []
+
+    for canonical_id, canonical_class in sorted(classes.items()):
+        records = canonical_class["records"]
+        variant_ids = sorted(str(record["id"]) for record in records)
+        existing_path = _canonical_path(canonical_id)
+        existing = (
+            _read_json(existing_path)
+            if existing_path.exists()
+            else {}
+        )
+        created_candidates = [
+            record.get("created_at")
+            for record in records
+            if record.get("created_at")
+        ]
+        created_at = existing.get("created_at")
+
+        if created_at is None:
+            created_at = (
+                min(created_candidates)
+                if created_candidates
+                else timestamp
+            )
+
+        class_payload = {
+            "schema_version": CANONICAL_CLASS_SCHEMA_VERSION,
+            "canonicalization_version": sc.CANONICALIZATION_VERSION,
+            "canonical_id": canonical_id,
+            "canonical_grid": canonical_class["canonical_grid"],
+            "primary_puzzle_id": variant_ids[0],
+            "variant_ids": variant_ids,
+            "variant_count": len(variant_ids),
+            "created_at": created_at,
+            "updated_at": (
+                existing.get("updated_at", timestamp)
+                if dry_run
+                else timestamp
+            ),
+        }
+        class_payloads.append((existing_path, class_payload))
+
+        if len(variant_ids) > 1:
+            duplicate_classes.append({
+                "canonical_id": canonical_id,
+                "primary_puzzle_id": variant_ids[0],
+                "variant_ids": variant_ids,
+                "names": sorted(
+                    str(record.get("name", record["id"]))
+                    for record in records
+                ),
+            })
+
+    if not dry_run:
+        for path, payload in prepared_records:
+            _write_json(path, payload)
+
+        for path, payload in class_payloads:
+            _write_json(path, payload)
+
+    return {
+        "dry_run": dry_run,
+        "workers": workers,
+        "puzzle_count": len(prepared_records),
+        "canonical_class_count": len(classes),
+        "isomorphic_duplicate_count": (
+            len(prepared_records) - len(classes)
+        ),
+        "duplicate_class_count": len(duplicate_classes),
+        "updated_puzzle_file_count": updated_files,
+        "canonical_index_file_count": len(class_payloads),
+        "duplicate_classes": duplicate_classes,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Salvataggio e caricamento delle analisi
 # ---------------------------------------------------------------------------
@@ -856,7 +1268,7 @@ def save_analysis(analysis):
     puzzle_id = sudoku_id(original)
 
     mode, window = _normalise_analysis_request(
-        analysis.get("analysis_mode", DEFAULT_ANALYSIS_MODE),
+        analysis.get("analysis_mode", ss.DEFAULT_ANALYSIS_MODE),
         analysis.get("profile_difficulty_window"),
     )
 
@@ -867,15 +1279,18 @@ def save_analysis(analysis):
     analysis["analysis_mode"] = mode
     analysis["profile_difficulty_window"] = window
 
-    save_sudoku(
+    stored_puzzle = save_sudoku(
         original,
         name=analysis.get("name"),
     )
+    canonical_id = stored_puzzle["canonical_id"]
+    analysis["canonical_id"] = canonical_id
 
     payload = {
         "schema_version": 2,
         "analysis_version": ANALYSIS_VERSION,
         "puzzle_id": puzzle_id,
+        "canonical_id": canonical_id,
         "analysis_variant": variant,
         "analysis_mode": mode,
         "profile_difficulty_window": window,
@@ -894,8 +1309,8 @@ def save_analysis(analysis):
 
 def load_analysis(
     reference,
-    analysis_mode=DEFAULT_ANALYSIS_MODE,
-    profile_difficulty_window=None,
+    analysis_mode=ss.DEFAULT_ANALYSIS_MODE,
+    profile_difficulty_window=ss.DEFAULT_PROFILE_DIFFICULTY_WINDOW,
 ):
     """
     Carica la variante richiesta tramite ID, nome o percorso del Sudoku.
@@ -930,6 +1345,7 @@ def load_analysis(
 
     analysis = _restore_analysis(payload["analysis"])
     analysis.setdefault("puzzle_id", puzzle_id)
+    analysis.setdefault("canonical_id", puzzle["canonical_id"])
     analysis.setdefault(
         "analysis_variant",
         _analysis_variant(mode, window),
@@ -949,8 +1365,8 @@ def analyse_puzzle_cached(
     name=None,
     metadata=None,
     force=False,
-    analysis_mode=DEFAULT_ANALYSIS_MODE,
-    profile_difficulty_window=None,
+    analysis_mode=ss.DEFAULT_ANALYSIS_MODE,
+    profile_difficulty_window=ss.DEFAULT_PROFILE_DIFFICULTY_WINDOW,
     max_steps=10000,
     verbose=False,
 ):
@@ -987,12 +1403,14 @@ def analyse_puzzle_cached(
         puzzle_id = stored_puzzle["id"]
         name = stored_puzzle["name"]
 
+    canonical_id = stored_puzzle["canonical_id"]
     cache_key = _analysis_cache_key(puzzle_id, mode, window)
 
     if not force:
         cached = _ANALYSIS_MEMORY_CACHE.get(cache_key)
 
         if cached is not None:
+            cached.setdefault("canonical_id", canonical_id)
             return cached
 
         path = _analysis_path(puzzle_id, mode, window)
@@ -1008,6 +1426,7 @@ def analyse_puzzle_cached(
             ):
                 analysis = _restore_analysis(payload["analysis"])
                 analysis.setdefault("puzzle_id", puzzle_id)
+                analysis.setdefault("canonical_id", canonical_id)
                 analysis.setdefault(
                     "analysis_variant",
                     _analysis_variant(mode, window),
@@ -1033,6 +1452,7 @@ def analyse_puzzle_cached(
     )
 
     analysis["puzzle_id"] = puzzle_id
+    analysis["canonical_id"] = canonical_id
     analysis["analysis_variant"] = _analysis_variant(mode, window)
 
     save_analysis(analysis)

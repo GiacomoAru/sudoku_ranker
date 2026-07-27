@@ -5,8 +5,10 @@ Ad ogni step il motore interroga le tecniche in ordine di difficoltà.
 L'analisi `deep`, predefinita, costruisce l'inventario completo; `profile`
 si limita a una fascia configurabile sopra la difficoltà minima;
 `superficial` conserva soltanto la frontiera minima. In ogni modalità la
-mossa scelta è la più semplice e un ordine di tie-break fisso
-(`_TECHNIQUE_ORDER`) rende la scelta deterministica.
+mossa scelta è la più semplice; il tie-break usa `_TECHNIQUE_ORDER` e,
+fra conclusioni equivalenti, le coordinate della forma canonica MinLex.
+Anche Sudoku isomorfi seguono così la stessa catena logica nel riferimento
+canonico.
 
 `solve_and_log` applica una mossa alla volta e registra ogni step nella
 catena, fino a soluzione completa, blocco (nessuna tecnica implementata
@@ -31,22 +33,33 @@ availability is measured primarily through unique logical conclusions.
 from collections import defaultdict
 import math
 
+import sudoku_canonicalization as sc
 import sudoku_data_structure as sds
 import sudoku_techniques as st
 
 
-DIFFICULTY_LABEL = {
-    1: "Fondamentale",
-    2: "Facile",
-    3: "Intermedio",
-    4: "Avanzato",
-    5: "Esperto",
-    6: "Estremo",
-    7: "Catene",
-    8: "Forcing avanzato",
-    9: "Dinamico",
-    10: "Nested",
-}
+DIFFICULTY_THRESHOLDS = [
+    (1.5, "Principiante"),
+    (2.5, "Facile"),
+    (3.5, "Medio"),
+    (4.5, "Difficile"),
+    (5.5, "Esperto"),
+    (6.5, "Diabolico"),
+    (7.5, "Estremo"),
+    (8.5, "Incubo"),
+    (9.4, "Disumano"),
+    (float("inf"), "Oltre il limite"),
+]
+
+
+def difficulty_label(difficulty):
+    difficulty = float(difficulty)
+
+    for maximum, label in DIFFICULTY_THRESHOLDS:
+        if difficulty <= maximum:
+            return label
+
+    return "Sconosciuto"
 
 DIFFICULTY_WORKLOAD_WEIGHT = {
     1: 0,
@@ -93,8 +106,8 @@ ANALYSIS_MODE_ALIASES = {
     "superficiale": "superficial",
 }
 
-DEFAULT_PROFILE_DIFFICULTY_WINDOW = 1.0
-
+DEFAULT_PROFILE_DIFFICULTY_WINDOW = 3.0
+DEFAULT_ANALYSIS_MODE = "profile"
 
 def _difficulty_score(move):
     """
@@ -118,11 +131,25 @@ def _tie_rank(move):
     )
 
 
-def _move_sort_key(move):
-    return (
+def _move_sort_key(move, canonical_transform=None):
+    key = (
         _difficulty_score(move),
         _tie_rank(move),
     )
+
+    if canonical_transform is None:
+        return key
+
+    placements = tuple(sorted(
+        canonical_transform.map_candidate(row, column, value)
+        for row, column, value in move.get("placements", ())
+    ))
+    eliminations = tuple(sorted(
+        canonical_transform.map_candidate(row, column, value)
+        for row, column, value in move.get("eliminations", ())
+    ))
+
+    return key + (placements, eliminations)
 
 
 def _perceived_theoretical_weight(difficulty):
@@ -218,7 +245,7 @@ def _move_outcome_signature(move):
 
 def collect_moves_for_analysis(
     state,
-    mode="deep",
+    mode=DEFAULT_ANALYSIS_MODE,
     profile_difficulty_window=DEFAULT_PROFILE_DIFFICULTY_WINDOW,
 ):
     """
@@ -494,7 +521,7 @@ def solve_and_log(
     grid,
     max_steps=10000,
     verbose=False,
-    analysis_mode="deep",
+    analysis_mode=DEFAULT_ANALYSIS_MODE,
     profile_difficulty_window=DEFAULT_PROFILE_DIFFICULTY_WINDOW,
 ):
     """
@@ -511,6 +538,9 @@ def solve_and_log(
     analysis_mode = _normalise_analysis_mode(analysis_mode)
 
     state = sds.SudokuState(grid)
+    canonical_transform = sc.canonicalize_details(
+        state.grid
+    ).transform
     chain = []
     step_no = 0
 
@@ -527,7 +557,12 @@ def solve_and_log(
         if not moves:
             return state, chain, "stuck"
 
-        moves.sort(key=_move_sort_key)
+        moves.sort(
+            key=lambda move: _move_sort_key(
+                move,
+                canonical_transform,
+            )
+        )
 
         chosen = moves[0]
         chosen_score = _difficulty_score(chosen)
@@ -1254,12 +1289,9 @@ def grade_difficulty(chain, status):
     max_perceived_step = math.log10(max(perceived_step_scores))
 
     if status == "solved":
-        label = DIFFICULTY_LABEL.get(
-            max_level,
-            "Sconosciuto",
-        )
+        label = difficulty_label(max_difficulty)
     else:
-        label = "Oltre la copertura del solver"
+        label = "Non risolto"
 
     return {
         "label": label,
@@ -1288,7 +1320,7 @@ def grade_difficulty(chain, status):
 def analyse_puzzle(
     grid,
     name=None,
-    analysis_mode="deep",
+    analysis_mode=DEFAULT_ANALYSIS_MODE,
     profile_difficulty_window=DEFAULT_PROFILE_DIFFICULTY_WINDOW,
     max_steps=10000,
     verbose=False,
@@ -1330,4 +1362,3 @@ def analyse_puzzle(
         ),
         "backtracking_verified_solvable": verified,
     }
-
