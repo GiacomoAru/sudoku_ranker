@@ -86,8 +86,8 @@ DIFFICULTY_WORKLOAD_WEIGHT = {
 # I valori decimali vengono interpolati esponenzialmente.
 PERCEIVED_DIFFICULTY_EXPONENT_OFFSET = 2.0
 
-# Quattro mosse minime disponibili rappresentano il caso neutro.
-# Con meno alternative il peso aumenta, con più alternative diminuisce.
+# Quattro risultati distinti alla difficoltà minima sono il caso neutro.
+# Con meno esiti il peso aumenta, con più esiti diminuisce.
 PERCEIVED_REFERENCE_ALTERNATIVES = 4
 PERCEIVED_MIN_SCARCITY_FACTOR = 0.5
 PERCEIVED_MAX_SCARCITY_FACTOR = 2.0
@@ -171,18 +171,19 @@ def _perceived_theoretical_weight(difficulty):
     )
 
 
-def _scarcity_factor(n_alternatives):
+def _scarcity_factor(n_outcomes):
     """
-    Restituisce il moltiplicatore dovuto alla scarsità di mosse.
+    Restituisce il moltiplicatore dovuto alla scarsità di esiti distinti.
 
-    Il riferimento neutro è quattro alternative. Il fattore è limitato
+    Il riferimento neutro è quattro risultati complessivi disponibili alla
+    difficoltà minima. Il fattore è limitato
     tra 0.5 e 2.0 per evitare che la disponibilità di mosse annulli o
     domini completamente la difficoltà teorica.
     """
-    n_alternatives = max(int(n_alternatives), 1)
+    n_outcomes = max(int(n_outcomes), 1)
 
     factor = math.sqrt(
-        PERCEIVED_REFERENCE_ALTERNATIVES / n_alternatives
+        PERCEIVED_REFERENCE_ALTERNATIVES / n_outcomes
     )
 
     return min(
@@ -191,10 +192,10 @@ def _scarcity_factor(n_alternatives):
     )
 
 
-def _perceived_step_difficulty(difficulty, n_alternatives):
+def _perceived_step_difficulty(difficulty, n_outcomes):
     """Calcola la difficoltà percepita di un singolo step."""
     theoretical_weight = _perceived_theoretical_weight(difficulty)
-    scarcity_factor = _scarcity_factor(n_alternatives)
+    scarcity_factor = _scarcity_factor(n_outcomes)
 
     return theoretical_weight * scarcity_factor
 
@@ -588,9 +589,17 @@ def solve_and_log(
             int(inventory["best_conclusion_count"]),
             1,
         )
+        n_distinct_outcomes = max(
+            int(inventory["distinct_outcome_count"]),
+            1,
+        )
+        n_best_distinct_outcomes = max(
+            int(inventory["best_distinct_outcome_count"]),
+            1,
+        )
 
         theoretical_weight = _perceived_theoretical_weight(chosen_score)
-        scarcity_factor = _scarcity_factor(n_best_conclusions)
+        scarcity_factor = _scarcity_factor(n_best_distinct_outcomes)
         perceived_difficulty = (
             theoretical_weight * scarcity_factor
         )
@@ -610,14 +619,8 @@ def solve_and_log(
         # il numero grezzo di prove enumerate.
         record["n_conclusions"] = n_conclusions
         record["n_best_conclusions"] = n_best_conclusions
-        record["n_distinct_outcomes"] = max(
-            int(inventory["distinct_outcome_count"]),
-            1,
-        )
-        record["n_best_distinct_outcomes"] = max(
-            int(inventory["best_distinct_outcome_count"]),
-            1,
-        )
+        record["n_distinct_outcomes"] = n_distinct_outcomes
+        record["n_best_distinct_outcomes"] = n_best_distinct_outcomes
         record["n_proofs"] = int(inventory["proof_count"])
 
         # Alias temporanei per il codice di visualizzazione esistente.
@@ -1206,9 +1209,10 @@ def grade_difficulty(chain, status):
     """
     Valuta difficoltà teorica, carico di risoluzione e difficoltà percepita.
 
-    `perceived_difficulty` è la somma dei carichi percepiti dei singoli step.
-    La scala tecnica è logaritmica e viene corretta in base alla scarsità
-    delle mosse minime disponibili.
+    La ``label`` dipende esclusivamente dalla tecnica più difficile usata,
+    cioè da ``max_difficulty``. ``perceived_difficulty`` resta una metrica
+    indipendente del carico complessivo, utile per confrontare e ordinare
+    puzzle ma non ancora calibrata sulla stessa scala del rating SE.
     """
     if not chain:
         return {
@@ -1288,22 +1292,25 @@ def grade_difficulty(chain, status):
             or _perceived_step_difficulty(
                 score,
                 move.get(
-                    "n_best_conclusions",
-                    move.get("n_best_alternatives", 1),
+                    "n_best_distinct_outcomes",
+                    move.get(
+                        "n_best_conclusions",
+                        move.get("n_best_alternatives", 1),
+                    ),
                 ),
             )
         )
 
     perceived_difficulty = math.log10(sum(perceived_step_scores) * math.sqrt(len(perceived_step_scores)))
     max_perceived_step = math.log10(max(perceived_step_scores))
-    classification_score = max(
-        max_difficulty,
-        perceived_difficulty,
-    )
+    # Alias mantenuto per compatibilità con analisi e notebook precedenti.
+    # La classificazione nominale è deliberatamente solo tecnica: la metrica
+    # percepita rimane separata finché le due scale non saranno calibrate.
+    classification_score = max_difficulty
     technique_label = difficulty_label(max_difficulty)
 
     if status == "solved":
-        label = difficulty_label(classification_score)
+        label = difficulty_label(max_difficulty)
     else:
         label = "Non risolto"
 

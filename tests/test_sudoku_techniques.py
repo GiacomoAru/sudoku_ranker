@@ -258,7 +258,7 @@ class SERatingTests(unittest.TestCase):
                     label,
                 )
 
-    def test_long_simple_chain_can_be_promoted_by_workload(self):
+    def test_perceived_difficulty_does_not_promote_the_label(self):
         chain = [{
             "technique": "Hidden Single (Box)",
             "difficulty": 1.2,
@@ -268,10 +268,29 @@ class SERatingTests(unittest.TestCase):
         grading = solver.grade_difficulty(chain, "solved")
 
         self.assertEqual(grading["technique_label"], "Molto facile")
-        self.assertEqual(grading["label"], "Facile")
-        self.assertGreater(
+        self.assertEqual(grading["label"], "Molto facile")
+        self.assertEqual(
             grading["classification_score"],
             grading["max_difficulty"],
+        )
+        self.assertGreater(
+            grading["perceived_difficulty"],
+            grading["max_difficulty"],
+        )
+
+    def test_perceived_scarcity_uses_distinct_outcomes(self):
+        chain = [{
+            "technique": "Direct Hidden Pair",
+            "difficulty": 2.0,
+            "n_best_distinct_outcomes": 1,
+            "n_best_conclusions": 16,
+        }]
+
+        grading = solver.grade_difficulty(chain, "solved")
+
+        self.assertAlmostEqual(
+            grading["max_perceived_step"],
+            np.log10(2.0),
         )
 
 

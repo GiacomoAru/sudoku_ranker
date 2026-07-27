@@ -3,6 +3,7 @@
 import hashlib
 import json
 import random
+import shutil
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,7 +27,7 @@ CANONICAL_CLASS_SCHEMA_VERSION = 1
 
 # Incrementare questo numero quando cambia il funzionamento del solver
 # o il formato dell'analisi. Le vecchie analisi verranno ricalcolate.
-ANALYSIS_VERSION = 11
+ANALYSIS_VERSION = 13
 
 # Evita anche letture ripetute dal disco durante la stessa esecuzione.
 # La chiave è (puzzle_id, analysis_variant), non soltanto puzzle_id.
@@ -454,6 +455,56 @@ def _register_canonical_variant(puzzle_payload):
     return canonical_payload
 
 
+def _unregister_canonical_variant(puzzle_payload):
+    """
+    Rimuove una variante dall'indice canonico e lo ricostruisce dai puzzle.
+
+    La scansione dei record ancora presenti evita di conservare riferimenti
+    orfani qualora un vecchio indice fosse già incompleto o non aggiornato.
+    """
+    canonical_id = puzzle_payload["canonical_id"]
+    canonical_grid = puzzle_payload["canonical_grid"]
+    puzzle_id = str(puzzle_payload["id"])
+    path = _canonical_path(canonical_id)
+    existing = _read_json(path) if path.exists() else {}
+
+    if (
+        existing
+        and existing.get("canonical_grid") != canonical_grid
+    ):
+        raise RuntimeError(
+            "Collisione dell'indice canonico durante la cancellazione: "
+            f"{canonical_id}."
+        )
+
+    members = _canonical_members_from_puzzles(
+        canonical_id,
+        canonical_grid,
+    )
+    members.discard(puzzle_id)
+    members = sorted(members)
+
+    if not members:
+        if path.exists():
+            path.unlink()
+        return None
+
+    timestamp = _current_timestamp()
+    canonical_payload = {
+        "schema_version": CANONICAL_CLASS_SCHEMA_VERSION,
+        "canonicalization_version": sc.CANONICALIZATION_VERSION,
+        "canonical_id": canonical_id,
+        "canonical_grid": canonical_grid,
+        "primary_puzzle_id": members[0],
+        "variant_ids": members,
+        "variant_count": len(members),
+        "created_at": existing.get("created_at", timestamp),
+        "updated_at": timestamp,
+    }
+    _write_json(path, canonical_payload)
+    return canonical_payload
+
+
 def _canonical_class_info(payload):
     """Aggiunge al record informazioni dinamiche sui duplicati isomorfi."""
     canonical_id = payload.get("canonical_id")
@@ -810,6 +861,129 @@ def load_sudoku(reference):
         **_canonical_class_info(payload),
         "grid": grid,
         "path": path,
+    }
+
+
+def delete_sudoku(reference):
+    """
+    Elimina completamente un Sudoku concreto dall'archivio.
+
+    ``reference`` accetta gli stessi identificatori di :func:`load_sudoku`:
+    ID, nome assegnato oppure percorso del JSON interno all'archivio.
+
+    Vengono eliminati il record del puzzle, tutte le sue analisi su disco e
+    le corrispondenti entry della cache in memoria. L'indice canonico viene
+    aggiornato sulle varianti isomorfe rimaste oppure rimosso se la classe
+    resta vuota.
+
+    Restituisce un rapporto con l'identità eliminata e lo stato finale della
+    classe canonica. Un riferimento inesistente solleva ``FileNotFoundError``.
+    """
+    path = _resolve_puzzle_path(reference)
+    resolved_path = path.resolve()
+    puzzles_root = SUDOKU_PUZZLES_DIR.resolve()
+
+    if resolved_path.parent != puzzles_root:
+        raise ValueError(
+            "È possibile eliminare solamente file contenuti nella cartella "
+            "puzzles dell'archivio."
+        )
+
+    payload = _read_json(resolved_path)
+    puzzle_id = resolved_path.stem
+    stored_id = str(payload.get("id", puzzle_id))
+
+    if stored_id != puzzle_id:
+        raise ValueError(
+            "Record Sudoku non coerente: l'ID interno non coincide con "
+            "il nome del file."
+        )
+
+    grid = normalise_sudoku_grid(payload["grid"])
+
+    if payload.get("canonical_id") and payload.get("canonical_grid"):
+        canonical_fields = {
+            "canonical_id": str(payload["canonical_id"]),
+            "canonical_grid": str(payload["canonical_grid"]),
+        }
+    else:
+        calculated = _canonical_fields(grid)
+        canonical_fields = {
+            "canonical_id": calculated["canonical_id"],
+            "canonical_grid": calculated["canonical_grid"],
+        }
+
+    canonical_id = canonical_fields["canonical_id"]
+
+    if (
+        len(canonical_id) != 64
+        or any(character not in "0123456789abcdef" for character in canonical_id)
+    ):
+        raise ValueError(
+            "Record Sudoku non coerente: canonical_id non valido."
+        )
+
+    if sc.canonical_id_from_string(
+        canonical_fields["canonical_grid"]
+    ) != canonical_id:
+        raise ValueError(
+            "Record Sudoku non coerente: canonical_grid e canonical_id "
+            "non corrispondono."
+        )
+
+    analysis_directory = _analysis_directory(puzzle_id)
+    resolved_analysis_directory = analysis_directory.resolve()
+    analyses_root = SUDOKU_ANALYSES_DIR.resolve()
+
+    if resolved_analysis_directory.parent != analyses_root:
+        raise RuntimeError(
+            "Percorso delle analisi non sicuro; cancellazione interrotta."
+        )
+
+    deleted_analysis_file_count = 0
+
+    if resolved_analysis_directory.exists():
+        deleted_analysis_file_count = sum(
+            1
+            for item in resolved_analysis_directory.rglob("*")
+            if item.is_file()
+        )
+        shutil.rmtree(resolved_analysis_directory)
+
+    cache_keys = [
+        key
+        for key in _ANALYSIS_MEMORY_CACHE
+        if key[0] == puzzle_id
+    ]
+
+    for key in cache_keys:
+        _ANALYSIS_MEMORY_CACHE.pop(key, None)
+
+    resolved_path.unlink()
+
+    canonical_payload = _unregister_canonical_variant({
+        **payload,
+        **canonical_fields,
+        "id": puzzle_id,
+    })
+    remaining_ids = (
+        canonical_payload.get("variant_ids", [])
+        if canonical_payload is not None
+        else []
+    )
+
+    return {
+        "deleted": True,
+        "id": puzzle_id,
+        "name": payload.get("name"),
+        "canonical_id": canonical_id,
+        "deleted_puzzle_path": resolved_path,
+        "deleted_analysis_directory": resolved_analysis_directory,
+        "deleted_analysis_file_count": deleted_analysis_file_count,
+        "cleared_memory_cache_entry_count": len(cache_keys),
+        "canonical_class_deleted": canonical_payload is None,
+        "remaining_isomorphic_variant_ids": list(remaining_ids),
+        "remaining_isomorphic_variant_count": len(remaining_ids),
     }
 
 
