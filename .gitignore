@@ -8,4 +8,3 @@ archives/
 __pycache__/
 *.py[cod]
 *.zip
-!archives/backups/sudoku_data.zip
