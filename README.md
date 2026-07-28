@@ -54,19 +54,30 @@ Per avviare e gestire l'interfaccia LAN vedere [WEB_LAN.md](WEB_LAN.md).
 # Prossime Modifiche:
 1. **Modificare interfaccia per:**
 
-   1. Fare che le due sezioni, sinistra e destra, scorrano entrambe e non venga data precedenza a quella di destra, se no è lungo arrivare al tasto invia.
-   2. Mostrare info sulla canonicizzazione e mostrare bene i vari punteggi di difficoltà.
-   3. Il tasto `Apri` deve diventare `Chiudi`, e sarebbe carino riordinare il JSON per lasciare ultima la catena e prima cose utili e leggibili.
-   4. Cambiare i campi di salvataggio, non so ancora come, ma meglio di così.
-   5. Tema scuro?!?!
-   6. Mostrare candidates e migliorare spiegazione delle mosse.
-   7. Renderlo carino da telefono.
+   1. ★ Fare che le due sezioni, sinistra e destra, scorrano entrambe e non venga data precedenza a quella di destra, se no è lungo arrivare al tasto invia.
+   2. Modificare manualmente i campi e le scritte del sito
+      1. a capo dopo puzzle
+      2. perceived 1-10
+   3. ★ rivedere completamente meccanismo di evidenziazione celle per spiegazione della mossa, chiarire celle principali, secondarie ecc. Mostrare anche i candidates per cella
 
-2. **Integrare riconoscimento Sudoku via foto:**
+   4. Il tasto `Apri` deve diventare `Chiudi`
+   5. riordinare il json per posticipare catena e altre liste
+   6. cambiare campi per il nome del sudoku e magari salvare altri metadati di salvataggio (dispositivo ecc.)
+   7. Tema scuro?!?!
+   8. ★ Renderlo carino da telefono.
+      1. restringere a tastierino numerico negli input del sudoku anche nell'input formato sringa
+   9. aggiungere un riferimento tra step visualizzato e punto della catena nel grafico o heatmap
 
-   1. Prima implementazione con interfaccia web di riconoscimento Sudoku con conferma.
+2. **Migliorare il solver**
+   1. chiarire stato "stuck" e quando un sudoku non ha soluzione unica
+   2. migliorare ricerca profile, in modo da non cercare tutte le tecniche possibili se richiedono molta computazione
+   3. scala logaritmica nella catena per l'asse della numerosità di tecniche, ma con 1 allineato con uno a sinistra
+
+
+3. **Integrare riconoscimento Sudoku via foto:**
+   1. ★ Prima implementazione con interfaccia web di riconoscimento Sudoku con conferma.
    2. Meccanismo di salvataggio foto e allenamento modello specializzato per riconoscimento cifre o fine-tuning di un modello pretrained.
 
-3. **Ampliare interfaccia web con magari visualizzazione database ecc.**
+4. **Ampliare interfaccia web con magari visualizzazione database ecc.**
 
-4. **Implementare generatore offline di Sudoku ed esplorare la generazione e difficoltà.**
+5. **Implementare generatore offline di Sudoku ed esplorare la generazione e difficoltà.**
