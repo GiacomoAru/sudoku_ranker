@@ -52,16 +52,21 @@ Per avviare e gestire l'interfaccia LAN vedere [WEB_LAN.md](WEB_LAN.md).
 
 
 # Prossime Modifiche:
-1 - modificare interfaccia per:
-    1.1 - fare che le due sezioni (sinistra e destra) scorrano entrambe e non venga data precedenza a quella di destra, se no è lungo arrivare al tasto invia
-    1.2 - mostrare info sulla canonicizzazione e mostrare bene i vari punteggi di difficoltà
-    1.3 - il tasto apri deve diventare chiudi, e sarebbe carino riordinare il json per lasciare ultima la catena e prima cose utili e leggibili
-    1.4 - cambiare i campi di salvataggio, non so ancora come, ma meglio di così
-    1.5 - tema scuro ?!?!
-    1.6 - mostrare candidates e migliorare spiegazione delle mosse
-    1.7 - renderlo carino da telefono
-2 - Integrare riconoscimento sudoku via foto:
-    2.1 - prima implementazione con interfaccia web di riconoscimento sudoku con conferma
-    2.2 - meccanismo di salvataggio foto e allenamento modello specializzato per riconoscimento cifre o finetuning pretrained
-3 - ampliare interfaccia web con magari visualizzazione database ecc...
-4 - Implementare genratore offline di sudoku e esplorare la generazione e difficoltà.
+1. **Modificare interfaccia per:**
+
+   1. Fare che le due sezioni, sinistra e destra, scorrano entrambe e non venga data precedenza a quella di destra, se no è lungo arrivare al tasto invia.
+   2. Mostrare info sulla canonicizzazione e mostrare bene i vari punteggi di difficoltà.
+   3. Il tasto `Apri` deve diventare `Chiudi`, e sarebbe carino riordinare il JSON per lasciare ultima la catena e prima cose utili e leggibili.
+   4. Cambiare i campi di salvataggio, non so ancora come, ma meglio di così.
+   5. Tema scuro?!?!
+   6. Mostrare candidates e migliorare spiegazione delle mosse.
+   7. Renderlo carino da telefono.
+
+2. **Integrare riconoscimento Sudoku via foto:**
+
+   1. Prima implementazione con interfaccia web di riconoscimento Sudoku con conferma.
+   2. Meccanismo di salvataggio foto e allenamento modello specializzato per riconoscimento cifre o fine-tuning di un modello pretrained.
+
+3. **Ampliare interfaccia web con magari visualizzazione database ecc.**
+
+4. **Implementare generatore offline di Sudoku ed esplorare la generazione e difficoltà.**
