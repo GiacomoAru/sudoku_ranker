@@ -3,8 +3,7 @@
 .agents/
 old_files/
 sudoku.code-workspace
-archives/offline/
-archives/online/
+archives/
 .sudoku-web.pid
 __pycache__/
 *.py[cod]
