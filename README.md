@@ -59,5 +59,9 @@ Per avviare e gestire l'interfaccia LAN vedere [WEB_LAN.md](WEB_LAN.md).
     1.4 - cambiare i campi di salvataggio, non so ancora come, ma meglio di così
     1.5 - tema scuro ?!?!
     1.6 - mostrare candidates e migliorare spiegazione delle mosse
-    
-2 - 
+    1.7 - renderlo carino da telefono
+2 - Integrare riconoscimento sudoku via foto:
+    2.1 - prima implementazione con interfaccia web di riconoscimento sudoku con conferma
+    2.2 - meccanismo di salvataggio foto e allenamento modello specializzato per riconoscimento cifre o finetuning pretrained
+3 - ampliare interfaccia web con magari visualizzazione database ecc...
+4 - Implementare genratore offline di sudoku e esplorare la generazione e difficoltà.
