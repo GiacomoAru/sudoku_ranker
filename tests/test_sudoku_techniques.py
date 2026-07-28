@@ -224,29 +224,35 @@ class SERatingTests(unittest.TestCase):
         chain = [{
             "technique": "Aligned Pair Exclusion",
             "difficulty": 6.2,
-            "perceived_difficulty": 10.0,
+            "n_best_distinct_outcomes": 1,
         }]
         grading = solver.grade_difficulty(chain, "solved")
         self.assertEqual(grading["max_difficulty"], 6.2)
         self.assertEqual(grading["max_level"], 6)
-        self.assertEqual(grading["label"], "Esperto")
-        self.assertEqual(grading["technique_label"], "Esperto")
+        self.assertEqual(grading["label"], "Molto difficile")
+        self.assertEqual(
+            grading["technique_label"],
+            "Molto difficile",
+        )
+        self.assertEqual(grading["hodoku_score"], 300)
+        self.assertEqual(grading["hodoku_level"], "Unfair")
         self.assertIn(6, grading["histogram"])
         self.assertEqual(grading["se_histogram"], {6.2: 1})
 
     def test_fair_difficulty_label_boundaries(self):
         expected = {
-            1.7: "Molto facile",
-            1.8: "Facile",
-            2.5: "Facile",
-            2.6: "Medio",
-            3.0: "Medio",
-            3.2: "Difficile",
-            4.4: "Difficile",
-            5.6: "Molto difficile",
-            6.6: "Esperto",
-            7.5: "Diabolico",
-            8.5: "Estremo",
+            2.3: "Molto facile",
+            2.4: "Facile",
+            3.4: "Facile",
+            3.5: "Medio",
+            4.4: "Medio",
+            4.5: "Difficile",
+            5.6: "Difficile",
+            6.6: "Molto difficile",
+            7.5: "Esperto",
+            8.5: "Diabolico",
+            8.6: "Estremo",
+            9.0: "Estremo",
             9.5: "Incubo",
             9.6: "Oltre il limite",
         }
@@ -277,6 +283,8 @@ class SERatingTests(unittest.TestCase):
             grading["perceived_difficulty"],
             grading["max_difficulty"],
         )
+        self.assertGreaterEqual(grading["perceived_difficulty"], 1.0)
+        self.assertLessEqual(grading["perceived_difficulty"], 10.0)
 
     def test_perceived_scarcity_uses_distinct_outcomes(self):
         chain = [{
@@ -288,10 +296,98 @@ class SERatingTests(unittest.TestCase):
 
         grading = solver.grade_difficulty(chain, "solved")
 
+        self.assertGreater(grading["max_perceived_step"], 1.0)
         self.assertAlmostEqual(
-            grading["max_perceived_step"],
+            grading["max_perceived_step_raw"],
             np.log10(2.0),
         )
+
+    def test_hodoku_mapping_separates_fish_from_pairs(self):
+        pair = techniques.technique_metadata("Naked Pair")
+        x_wing = techniques.technique_metadata("X-Wing")
+        skyscraper = techniques.technique_metadata("Skyscraper")
+
+        self.assertEqual(pair["hodoku_score"], 60)
+        self.assertEqual(pair["hodoku_level"], "Medium")
+        self.assertEqual(x_wing["hodoku_score"], 140)
+        self.assertEqual(x_wing["hodoku_level"], "Hard")
+        self.assertEqual(skyscraper["hodoku_score"], 130)
+        self.assertEqual(skyscraper["hodoku_level"], "Hard")
+        self.assertFalse(x_wing["hodoku_mapping_estimated"])
+
+    def test_editorial_labels_use_cognitive_technique_class(self):
+        def grading_for(technique):
+            return solver.grade_difficulty([{
+                "technique": technique,
+                "difficulty": techniques.TECHNIQUE_DIFFICULTY[
+                    technique
+                ],
+                "n_best_distinct_outcomes": 1,
+            }], "solved")
+
+        self.assertEqual(
+            grading_for("Naked Pair")["label"],
+            "Facile",
+        )
+        self.assertEqual(
+            grading_for("Hidden Pair")["label"],
+            "Facile",
+        )
+        self.assertEqual(
+            grading_for("X-Wing")["label"],
+            "Difficile",
+        )
+        self.assertEqual(
+            grading_for("Skyscraper")["label"],
+            "Difficile",
+        )
+        self.assertEqual(
+            grading_for("Forcing X-Chain")["label"],
+            "Molto difficile",
+        )
+
+    def test_hodoku_score_uses_sum_and_hardest_step_level(self):
+        chain = [{
+            "technique": "Hidden Single (Box)",
+            "difficulty": 1.2,
+            "n_best_distinct_outcomes": 2,
+        } for _ in range(50)]
+        chain.append({
+            "technique": "X-Wing",
+            "difficulty": 3.2,
+            "n_best_distinct_outcomes": 1,
+        })
+
+        grading = solver.grade_difficulty(chain, "solved")
+
+        self.assertEqual(grading["hodoku_score"], 840)
+        self.assertEqual(grading["hodoku_score_level"], "Medium")
+        self.assertEqual(
+            grading["hodoku_hardest_step_level"],
+            "Hard",
+        )
+        self.assertEqual(grading["hodoku_level"], "Hard")
+        self.assertEqual(grading["label"], "Difficile")
+
+    def test_perceived_rescaling_is_monotonic_and_capped(self):
+        easy = solver.grade_difficulty([{
+            "technique": "Last Value",
+            "difficulty": 1.0,
+            "n_best_distinct_outcomes": 4,
+        }], "solved")
+        hard = solver.grade_difficulty([{
+            "technique": "Nested Forcing Chain",
+            "difficulty": 9.5,
+            "n_best_distinct_outcomes": 1,
+        }], "solved")
+
+        self.assertGreater(
+            hard["perceived_difficulty"],
+            easy["perceived_difficulty"],
+        )
+        self.assertGreater(easy["perceived_difficulty"], 1.0)
+        self.assertLess(hard["perceived_difficulty"], 10.0)
+        self.assertGreater(hard["perceived_difficulty"], 9.0)
 
 
 class LogicEngineTests(unittest.TestCase):

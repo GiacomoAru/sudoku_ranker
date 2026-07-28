@@ -53,6 +53,7 @@ from itertools import combinations
 
 from .data_structure import *
 from . import logic_engine
+from . import difficulty as difficulty_model
 
 TECHNIQUE_DIFFICULTY = {
     # Tecniche elementari (scala SE 1.2.1).
@@ -437,12 +438,17 @@ def technique_strategy(technique, family=None):
 def technique_metadata(technique):
     """Metadata stabile consumabile da solver, report e visualizzazioni."""
     family = technique_family(technique)
+    hodoku = difficulty_model.hodoku_technique_rating(technique)
     return {
         "technique": technique,
         "family": family,
         "strategy": technique_strategy(technique, family),
         "difficulty": _canonical_difficulty(technique),
         "parent": MODERN_TECHNIQUE_PARENT.get(technique, technique),
+        "hodoku_score": hodoku["score"],
+        "hodoku_level": hodoku["level"],
+        "hodoku_mapping_estimated": hodoku["estimated"],
+        "hodoku_basis": hodoku["basis"],
     }
 
 
@@ -499,6 +505,7 @@ def _build_move(
 
     canonical_family = technique_family(technique, family)
     canonical_strategy = technique_strategy(technique, canonical_family)
+    hodoku = difficulty_model.hodoku_technique_rating(technique)
     primary = _normalise_cells(primary)
 
     if secondary is None:
@@ -512,6 +519,10 @@ def _build_move(
         "family": canonical_family,
         "strategy": canonical_strategy,
         "difficulty": _canonical_difficulty(technique, difficulty),
+        "hodoku_score": hodoku["score"],
+        "hodoku_level": hodoku["level"],
+        "hodoku_mapping_estimated": hodoku["estimated"],
+        "hodoku_basis": hodoku["basis"],
         "description": description,
         "placements": placements,
         "eliminations": eliminations,

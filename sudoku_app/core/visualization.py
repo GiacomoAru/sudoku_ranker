@@ -35,6 +35,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.ticker import MaxNLocator
 
+from .difficulty import hodoku_technique_rating
 from .techniques import (
     TECHNIQUE_FAMILY,
     TECHNIQUE_FAMILY_ORDER,
@@ -393,6 +394,19 @@ def aggregate_difficulty_chain(analyses):
         max(float(move["difficulty"]) for move in chain)
         for chain in chains
     ])
+    grading_rows = [
+        analysis.get("grading", {})
+        for analysis in analyses
+        if analysis.get("chain")
+    ]
+    hodoku_scores = np.asarray([
+        float(grading.get("hodoku_score", 0))
+        for grading in grading_rows
+    ])
+    perceived_scores = np.asarray([
+        float(grading.get("perceived_difficulty", 0))
+        for grading in grading_rows
+    ])
     labels = [
         analysis.get("grading", {}).get("label", "N/A")
         for analysis in analyses
@@ -413,6 +427,10 @@ def aggregate_difficulty_chain(analyses):
             "min_steps": int(chain_lengths.min()),
             "max_steps": int(chain_lengths.max()),
             "mean_max_difficulty": float(max_difficulties.mean()),
+            "mean_hodoku_score": float(hodoku_scores.mean()),
+            "mean_perceived_difficulty": float(
+                perceived_scores.mean()
+            ),
             "label_counts": label_counts,
         },
     }
@@ -815,9 +833,20 @@ def _plot_difficulty_chain_single(analysis, figsize=(13, 4.6), show=True):
     ax1.set_ylim(0.75, difficulty_top + 0.25)
 
     grading = analysis.get("grading", {})
+    hodoku_score = grading.get("hodoku_score")
+    hodoku_level = grading.get("hodoku_level")
+    perceived = grading.get("perceived_difficulty")
+    rating_summary = ""
+    if hodoku_score is not None:
+        rating_summary += (
+            f" · HoDoKu {hodoku_score} ({hodoku_level})"
+        )
+    if perceived is not None:
+        rating_summary += f" · perceived {float(perceived):.2f}/10"
     ax1.set_title(
         f"Catena logica ({analysis.get('name', 'puzzle')}) - "
         f"{grading.get('label', 'non classificato')}"
+        f"{rating_summary}"
     )
     ax1.grid(axis="both", alpha=0.22, linewidth=0.7)
 
@@ -1029,7 +1058,10 @@ def _plot_difficulty_chain_aggregate(
     title = (
         f"Catena media di {summary['analysis_count']} puzzle — "
         f"{summary['mean_steps']:.1f} ± {summary['std_steps']:.1f} step, "
-        f"max SE medio {summary['mean_max_difficulty']:.2f}"
+        f"max SE medio {summary['mean_max_difficulty']:.2f}\n"
+        f"HoDoKu medio {summary['mean_hodoku_score']:.0f}, "
+        f"perceived media "
+        f"{summary['mean_perceived_difficulty']:.2f}/10"
     )
     ax1.set_title(title)
 
@@ -1589,6 +1621,8 @@ def gallery(
             f"{analysis['name']}\n"
             f"{grading['label']} "
             f"(max SE {grading['max_difficulty']}, "
+            f"HoDoKu {grading.get('hodoku_score', 'N/A')}, "
+            f"perc. {grading.get('perceived_difficulty', 0):.2f}/10, "
             f"{grading.get('n_steps', 0)} step)"
         )
         ax.set_title(subtitle, fontsize=9)
@@ -1614,6 +1648,7 @@ def summary_dataframe(analysis):
             move["technique"],
             family,
         )
+        hodoku = hodoku_technique_rating(move["technique"])
 
         rows.append({
             "step": move["step"],
@@ -1621,6 +1656,15 @@ def summary_dataframe(analysis):
             "famiglia": family,
             "strategia": strategy,
             "difficolta": move["difficulty"],
+            "difficolta_se": move["difficulty"],
+            "hodoku_score": move.get("hodoku_score", hodoku["score"]),
+            "hodoku_livello": move.get(
+                "hodoku_level",
+                hodoku["level"],
+            ),
+            "difficolta_percepita": move.get(
+                "perceived_difficulty"
+            ),
             "conclusioni": move.get(
                 "n_conclusions",
                 move.get("n_alternatives"),
@@ -1670,6 +1714,11 @@ def analyses_summary_dataframe(analyses):
             "difficolta_percepita": grading.get(
                 "perceived_difficulty",
                 0,
+            ),
+            "hodoku_score": grading.get("hodoku_score"),
+            "hodoku_livello": grading.get("hodoku_level"),
+            "hodoku_livello_step_massimo": grading.get(
+                "hodoku_hardest_step_level"
             ),
             "difficolta_massima": grading["max_difficulty"],
             "numero_step": grading.get("n_steps", len(chain)),

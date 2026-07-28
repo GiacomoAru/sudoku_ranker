@@ -76,6 +76,7 @@ class SudokuWebTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("Sudoku Logic Lab", response.text)
+        self.assertIn("HoDoKu stimato", response.text)
         self.assertIn("/static/app.js", response.text)
 
     def test_submit_returns_json_and_both_plot_urls(self):
@@ -100,6 +101,19 @@ class SudokuWebTests(unittest.TestCase):
         self.assertIn(analysis["status"], {"solved", "stuck"})
         self.assertIn("grading", analysis)
         self.assertIn("chain", analysis)
+        self.assertIn("hodoku_score", analysis["grading"])
+        self.assertIn("hodoku_level", analysis["grading"])
+        self.assertEqual(
+            analysis["grading"]["perceived_scale"],
+            "1-10",
+        )
+        self.assertTrue(
+            1.0
+            <= analysis["grading"]["perceived_difficulty"]
+            <= 10.0
+        )
+        self.assertIn("hodoku_score", analysis["chain"][0])
+        self.assertIn("hodoku_level", analysis["chain"][0])
         self.assertTrue(
             (self.online_root / "puzzles" / f"{payload['puzzle_id']}.json")
             .exists()

@@ -64,6 +64,9 @@ def synthetic_analysis(name, difficulties, activities):
         "grading": {
             "label": "Facile",
             "max_difficulty": max(difficulties),
+            "hodoku_score": 4 * len(chain),
+            "hodoku_level": "Easy",
+            "perceived_difficulty": 2.0 + 0.1 * len(chain),
             "n_steps": len(chain),
         },
     }
@@ -98,6 +101,14 @@ class AggregateDifficultyPlotTests(unittest.TestCase):
         self.assertEqual(
             aggregate["summary"]["mean_steps"],
             2.5,
+        )
+        self.assertEqual(
+            aggregate["summary"]["mean_hodoku_score"],
+            10.0,
+        )
+        self.assertAlmostEqual(
+            aggregate["summary"]["mean_perceived_difficulty"],
+            2.25,
         )
 
     def test_average_histogram_is_per_puzzle(self):

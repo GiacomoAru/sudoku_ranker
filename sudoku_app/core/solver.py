@@ -16,12 +16,10 @@ catena, fino a soluzione completa, blocco (nessuna tecnica implementata
 trova più nulla) o contraddizione (un candidato azzerato, non dovrebbe mai
 succedere su un puzzle valido con solo eliminazioni logicamente corrette).
 
-`grade_difficulty` produce sia la difficoltà teorica sia una difficoltà
-percepita. La label usa il maggiore fra tecnica massima e carico percepito:
-un puzzle non viene sottostimato né per un collo di bottiglia tecnico né per
-una lunga soluzione con poche opportunità. La difficoltà percepita assegna a
-ogni livello tecnico un peso logaritmico e lo corregge in base al numero di
-mosse minime disponibili.
+`grade_difficulty` mantiene separate tre letture: rating SE invariato, stima
+HoDoKu e difficoltà percepita 1-10. La label usa soltanto la tecnica
+cognitivamente più impegnativa; carico cumulativo e scarsità delle mosse
+restano metriche indipendenti per il confronto e l'ordinamento.
 '''
 
 
@@ -38,21 +36,22 @@ import math
 
 from . import canonicalization as sc
 from . import data_structure as sds
+from . import difficulty as difficulty_model
 from . import techniques as st
 
 
 DIFFICULTY_THRESHOLDS = [
-    # Le prime tre fasce distinguono meglio i puzzle semplici. ``Medio``
-    # termina a Naked Pair/Pointing/Claiming; da X-Wing e Hidden Pair in poi
-    # il puzzle è classificato almeno come ``Difficile``.
-    (1.7, "Molto facile"),
-    (2.5, "Facile"),
-    (3.0, "Medio"),
-    (4.4, "Difficile"),
-    (5.6, "Molto difficile"),
-    (6.6, "Esperto"),
-    (7.5, "Diabolico"),
-    (8.5, "Estremo"),
+    # Conversione morbida del solo valore SE. Il grading reale considera
+    # anche la classe cognitiva della tecnica: X-Wing, per esempio, resta
+    # Difficile pur avendo SE 3.2.
+    (2.3, "Molto facile"),
+    (3.4, "Facile"),
+    (4.4, "Medio"),
+    (5.6, "Difficile"),
+    (6.6, "Molto difficile"),
+    (7.5, "Esperto"),
+    (8.5, "Diabolico"),
+    (9.0, "Estremo"),
     (9.5, "Incubo"),
     (float("inf"), "Oltre il limite"),
 ]
@@ -600,8 +599,14 @@ def solve_and_log(
 
         theoretical_weight = _perceived_theoretical_weight(chosen_score)
         scarcity_factor = _scarcity_factor(n_best_distinct_outcomes)
-        perceived_difficulty = (
+        perceived_weight = (
             theoretical_weight * scarcity_factor
+        )
+        perceived_step_raw = math.log10(perceived_weight)
+        perceived_difficulty = (
+            difficulty_model.scale_perceived_difficulty(
+                perceived_step_raw
+            )
         )
 
         apply_move(state, chosen)
@@ -680,6 +685,8 @@ def solve_and_log(
         record["difficulty_level"] = chosen_level
         record["perceived_theoretical_weight"] = theoretical_weight
         record["scarcity_factor"] = scarcity_factor
+        record["perceived_weight"] = perceived_weight
+        record["perceived_difficulty_raw"] = perceived_step_raw
         record["perceived_difficulty"] = perceived_difficulty
 
         chain.append(record)
@@ -1207,25 +1214,41 @@ def trivialize_greedy(
 
 def grade_difficulty(chain, status):
     """
-    Valuta difficoltà teorica, carico di risoluzione e difficoltà percepita.
+    Valuta rating SE, stima HoDoKu e difficoltà percepita.
 
-    La ``label`` dipende esclusivamente dalla tecnica più difficile usata,
-    cioè da ``max_difficulty``. ``perceived_difficulty`` resta una metrica
-    indipendente del carico complessivo, utile per confrontare e ordinare
-    puzzle ma non ancora calibrata sulla stessa scala del rating SE.
+    La ``label`` dipende esclusivamente dalla tecnica cognitivamente più
+    impegnativa. Il carico cumulativo resta visibile sia nel punteggio HoDoKu
+    sia nella metrica percepita, ma non promuove la label editoriale.
     """
     if not chain:
         return {
             "label": "N/A",
             "technique_label": "N/A",
+            "hardest_technique": None,
+            "classification_basis": "hardest_technique",
             "classification_score": 0.0,
             "max_difficulty": 0,
             "max_level": 0,
             "score": 0,
             "workload_score": 0,
             "perceived_difficulty": 0.0,
+            "perceived_difficulty_raw": 0.0,
+            "perceived_scale": "1-10",
             "average_perceived_difficulty": 0.0,
             "max_perceived_step": 0.0,
+            "max_perceived_step_raw": 0.0,
+            "hodoku_score": 0,
+            "hodoku_level": "N/A",
+            "hodoku_level_it": "N/A",
+            "hodoku_score_level": "N/A",
+            "hodoku_hardest_step_level": "N/A",
+            "hodoku_estimated": True,
+            "hodoku_estimated_step_count": 0,
+            "hodoku_exact_step_count": 0,
+            "hodoku_histogram": {},
+            "hodoku_model_version": (
+                difficulty_model.HODOKU_MODEL_VERSION
+            ),
             "histogram": {},
             "se_histogram": {},
             "status": status,
@@ -1285,10 +1308,24 @@ def grade_difficulty(chain, status):
         for level in difficulty_levels
     )
 
-    perceived_step_scores = []
+    hodoku_ratings = []
+    editorial_labels = []
+    perceived_weights = []
+
     for move, score in zip(chain, difficulty_scores):
-        perceived_step_scores.append(
-            move.get("perceived_difficulty")
+        hodoku = difficulty_model.hodoku_technique_rating(
+            move["technique"]
+        )
+        hodoku_ratings.append(hodoku)
+        editorial_labels.append(
+            difficulty_model.editorial_label_for_technique(
+                move["technique"],
+                score,
+            )
+        )
+
+        perceived_weights.append(
+            move.get("perceived_weight")
             or _perceived_step_difficulty(
                 score,
                 move.get(
@@ -1301,22 +1338,81 @@ def grade_difficulty(chain, status):
             )
         )
 
-    perceived_difficulty = math.log10(sum(perceived_step_scores) * math.sqrt(len(perceived_step_scores)))
-    max_perceived_step = math.log10(max(perceived_step_scores))
-    # Alias mantenuto per compatibilità con analisi e notebook precedenti.
-    # La classificazione nominale è deliberatamente solo tecnica: la metrica
-    # percepita rimane separata finché le due scale non saranno calibrate.
+    perceived_raw = math.log10(
+        sum(perceived_weights) * math.sqrt(len(perceived_weights))
+    )
+    average_perceived_raw = math.log10(
+        sum(perceived_weights) / len(perceived_weights)
+    )
+    max_perceived_step_raw = math.log10(max(perceived_weights))
+
+    perceived_difficulty = (
+        difficulty_model.scale_perceived_difficulty(perceived_raw)
+    )
+    average_perceived_difficulty = (
+        difficulty_model.scale_perceived_difficulty(
+            average_perceived_raw
+        )
+    )
+    max_perceived_step = (
+        difficulty_model.scale_perceived_difficulty(
+            max_perceived_step_raw
+        )
+    )
+
+    hardest_index = max(
+        range(len(chain)),
+        key=lambda index: (
+            difficulty_model.EDITORIAL_LABEL_ORDER[
+                editorial_labels[index]
+            ],
+            difficulty_scores[index],
+        ),
+    )
+    technique_label = editorial_labels[hardest_index]
+    hardest_technique = chain[hardest_index]["technique"]
+
+    hodoku_score = sum(
+        rating["score"]
+        for rating in hodoku_ratings
+    )
+    hodoku_hardest_step_level = max(
+        (rating["level"] for rating in hodoku_ratings),
+        key=lambda level: difficulty_model.HODOKU_LEVEL_ORDER[level],
+    )
+    hodoku_score_level = difficulty_model.hodoku_level_from_score(
+        hodoku_score
+    )
+    hodoku_level = difficulty_model.hodoku_puzzle_level(
+        hodoku_score,
+        hodoku_hardest_step_level,
+    )
+    hodoku_estimated_steps = sum(
+        rating["estimated"]
+        for rating in hodoku_ratings
+    )
+    hodoku_histogram = {
+        level: sum(
+            rating["level"] == level
+            for rating in hodoku_ratings
+        )
+        for level in difficulty_model.HODOKU_LEVEL_ORDER
+    }
+
+    # Alias mantenuto per i consumer esistenti. La classificazione nominale
+    # non usa questo numero, ma la tecnica più impegnativa.
     classification_score = max_difficulty
-    technique_label = difficulty_label(max_difficulty)
 
     if status == "solved":
-        label = difficulty_label(max_difficulty)
+        label = technique_label
     else:
         label = "Non risolto"
 
     return {
         "label": label,
         "technique_label": technique_label,
+        "hardest_technique": hardest_technique,
+        "classification_basis": "hardest_technique",
         "classification_score": classification_score,
         "max_difficulty": max_difficulty,
         "max_level": max_level,
@@ -1325,9 +1421,31 @@ def grade_difficulty(chain, status):
         "score": workload_score,
         "workload_score": workload_score,
 
-        # Nuovi indicatori di difficoltà percepita.
+        # Difficoltà percepita: ordinamento invariato, scala leggibile 1-10.
         "perceived_difficulty": perceived_difficulty,
+        "perceived_difficulty_raw": perceived_raw,
+        "perceived_scale": "1-10",
+        "average_perceived_difficulty": (
+            average_perceived_difficulty
+        ),
         "max_perceived_step": max_perceived_step,
+        "max_perceived_step_raw": max_perceived_step_raw,
+
+        # Stima HoDoKu: score cumulativo e livello ufficiale risultante.
+        "hodoku_score": hodoku_score,
+        "hodoku_level": hodoku_level,
+        "hodoku_level_it": (
+            difficulty_model.HODOKU_LEVEL_LABELS_IT[hodoku_level]
+        ),
+        "hodoku_score_level": hodoku_score_level,
+        "hodoku_hardest_step_level": hodoku_hardest_step_level,
+        "hodoku_estimated": True,
+        "hodoku_estimated_step_count": hodoku_estimated_steps,
+        "hodoku_exact_step_count": (
+            len(chain) - hodoku_estimated_steps
+        ),
+        "hodoku_histogram": hodoku_histogram,
+        "hodoku_model_version": difficulty_model.HODOKU_MODEL_VERSION,
 
         "histogram": histogram,
         "se_histogram": se_histogram,

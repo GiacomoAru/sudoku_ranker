@@ -101,9 +101,13 @@ function renderResult(payload) {
     grading.label || "N/A";
   document.querySelector("#max-difficulty").textContent =
     grading.max_difficulty ?? "—";
+  document.querySelector("#hodoku-rating").textContent =
+    Number.isFinite(grading.hodoku_score)
+      ? `${grading.hodoku_score} · ${grading.hodoku_level || "N/A"}`
+      : "—";
   document.querySelector("#perceived-difficulty").textContent =
     Number.isFinite(grading.perceived_difficulty)
-      ? grading.perceived_difficulty.toFixed(3)
+      ? grading.perceived_difficulty.toFixed(2)
       : "—";
   document.querySelector("#step-count").textContent =
     grading.n_steps ?? payload.analysis.chain?.length ?? "—";
@@ -186,7 +190,14 @@ function prepareSolutionPlayer(analysis) {
     ...chain.map((move) => ({
       grid: move.grid_after,
       title: `Passaggio ${move.step}`,
-      technique: `${move.technique} · SE ${move.difficulty}`,
+      technique: (
+        `${move.technique} · SE ${move.difficulty}` +
+        (
+          Number.isFinite(move.hodoku_score)
+            ? ` · HoDoKu +${move.hodoku_score}`
+            : ""
+        )
+      ),
       description: move.description,
       move,
     })),

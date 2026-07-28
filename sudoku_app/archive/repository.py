@@ -36,7 +36,7 @@ CANONICAL_CLASS_SCHEMA_VERSION = 1
 
 # Incrementare questo numero quando cambia il funzionamento del solver
 # o il formato dell'analisi. Le vecchie analisi verranno ricalcolate.
-ANALYSIS_VERSION = 13
+ANALYSIS_VERSION = 14
 
 # Evita anche letture ripetute dal disco durante la stessa esecuzione.
 # La chiave è (puzzle_id, analysis_variant), non soltanto puzzle_id.
@@ -1331,6 +1331,11 @@ def list_sudokus(
             "clues": payload.get("clues"),
             "difficulty_label": grading.get("label"),
             "technique_label": grading.get("technique_label"),
+            "hardest_technique": grading.get("hardest_technique"),
+            "hodoku_level": grading.get("hodoku_level"),
+            "hodoku_hardest_step_level": grading.get(
+                "hodoku_hardest_step_level"
+            ),
             "is_canonical": payload.get("is_canonical"),
             "isomorphic_variant_count": canonical_info.get(
                 "isomorphic_variant_count",

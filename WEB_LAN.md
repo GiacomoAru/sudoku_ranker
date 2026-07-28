@@ -4,6 +4,10 @@ La web app consente di inviare un Sudoku, salvarlo con nomenclatura standard e
 ricevere il JSON dell'analisi, il grafico della catena, la heatmap e il player
 passo-passo della soluzione.
 
+Il riepilogo mostra separatamente SE massimo, stima HoDoKu e perceived
+difficulty su scala 1–10. Anche ogni passaggio del player riporta il proprio
+contributo HoDoKu.
+
 Il server usa `archives/online/`; notebook e script usano per default
 `archives/offline/`. I due archivi restano quindi separati.
 
