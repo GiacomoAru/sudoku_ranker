@@ -3,9 +3,9 @@ from unittest import mock
 
 import numpy as np
 
-import sudoku_solver as solver
-import sudoku_techniques as techniques
-from sudoku_data_structure import SudokuState
+from sudoku_app.core import solver
+from sudoku_app.core import techniques
+from sudoku_app.core.data_structure import SudokuState
 
 
 SOLVED_GRID = np.array([

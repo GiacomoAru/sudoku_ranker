@@ -10,9 +10,7 @@ tecniche implementate non bastano — non è usato per risolvere normalmente.
 '''
 
 
-"""
-Core data structures for the Sudoku solver/grader.
-"""
+"""Strutture dati interne del motore Sudoku."""
 import numpy as np
 from itertools import combinations
 

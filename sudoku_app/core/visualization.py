@@ -35,7 +35,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.ticker import MaxNLocator
 
-from sudoku_techniques import (
+from .techniques import (
     TECHNIQUE_FAMILY,
     TECHNIQUE_FAMILY_ORDER,
     TECHNIQUE_STRATEGY,

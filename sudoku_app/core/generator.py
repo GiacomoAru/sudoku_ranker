@@ -20,7 +20,7 @@ relying only on hardcoded examples.
 
 import random
 import numpy as np
-import sudoku_data_structure as sds
+from . import data_structure as sds
 
 def random_full_grid(rng=None):
     rng = rng or random.Random()

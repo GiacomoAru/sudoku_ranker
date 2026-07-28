@@ -16,7 +16,7 @@ per consentire sia report dettagliati sia aggregazioni per famiglia.
 
 Il registro `TECHNIQUE_FUNCS` in fondo è ordinato per rating SE minimo. Le
 tecniche basate su catene generali, Nishio e forcing dinamiche delegano la
-ricerca al motore di inferenza dedicato in `sudoku_logic_engine`. I risultati
+ricerca al motore di inferenza dedicato in `sudoku_app.core.logic_engine`. I risultati
 sono classificati con tre granularità indipendenti: tecnica, famiglia logica
 e strategia generale. Una cache per stato evita di ricalcolare i rilevatori
 locali e le catene già richiesti durante lo stesso step di analisi.
@@ -51,8 +51,8 @@ candidate; moves that would do nothing are not returned.
 from collections import defaultdict
 from itertools import combinations
 
-from sudoku_data_structure import *
-import sudoku_logic_engine as logic_engine
+from .data_structure import *
+from . import logic_engine
 
 TECHNIQUE_DIFFICULTY = {
     # Tecniche elementari (scala SE 1.2.1).
@@ -2690,4 +2690,3 @@ TECHNIQUE_FUNCS = [
     (spec["minimum_difficulty"], spec["runner"])
     for spec in TECHNIQUE_SPECS
 ]
-

@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sudoku Logic Lab</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">LAN ANALYSIS CONSOLE</p>
+        <h1>Sudoku Logic Lab</h1>
+        <p class="lede">
+          Invia una griglia al motore logico e ricevi analisi, catena di
+          difficoltà e mappa delle tecniche.
+        </p>
+      </div>
+      <div class="connection" id="connection-status">
+        <span class="status-dot"></span>
+        <span>Verifica server…</span>
+      </div>
+    </header>
+
+    <section class="workspace">
+      <form class="input-panel card" id="analysis-form">
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker">INPUT</p>
+            <h2>Nuovo Sudoku</h2>
+          </div>
+          <button class="button button-quiet" type="button" id="clear-grid">
+            Pulisci
+          </button>
+        </div>
+
+        <div class="nomenclature-fields">
+          <label class="field">
+            <span>Provenienza</span>
+            <input
+              id="puzzle-provenience"
+              name="provenience"
+              type="text"
+              maxlength="60"
+              value="web"
+              placeholder="es. settimana_sudoku"
+              required
+            >
+          </label>
+          <label class="field">
+            <span>Tag</span>
+            <input
+              id="puzzle-tag"
+              name="tag"
+              type="text"
+              maxlength="80"
+              placeholder="es. 28_07_2026"
+              required
+            >
+          </label>
+          <label class="field">
+            <span>Difficoltà dichiarata</span>
+            <input
+              id="puzzle-difficulty"
+              name="difficulty"
+              type="text"
+              maxlength="40"
+              placeholder="es. sfida"
+              required
+            >
+          </label>
+        </div>
+
+        <div
+          class="sudoku-grid"
+          id="sudoku-grid"
+          aria-label="Griglia Sudoku 9 per 9"
+        ></div>
+
+        <label class="field">
+          <span>Oppure incolla 81 caratteri</span>
+          <textarea
+            id="grid-string"
+            rows="3"
+            spellcheck="false"
+            placeholder="Usa 0 o . per le celle vuote"
+          ></textarea>
+        </label>
+
+        <p class="hint">
+          Analisi predefinita: <strong>profile</strong>, finestra
+          <strong>3.0</strong>. Il risultato viene salvato nell’archivio web.
+        </p>
+
+        <button class="button button-primary" type="submit" id="submit-button">
+          <span>Analizza e salva</span>
+          <span class="button-arrow">→</span>
+        </button>
+
+        <div class="request-status" id="request-status" hidden></div>
+      </form>
+
+      <section class="result-panel" id="result-panel" hidden>
+        <article class="summary card">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">RISULTATO</p>
+              <h2 id="result-name">Analisi</h2>
+            </div>
+            <span class="result-label" id="difficulty-label">—</span>
+          </div>
+
+          <dl class="metrics">
+            <div>
+              <dt>Max difficulty</dt>
+              <dd id="max-difficulty">—</dd>
+            </div>
+            <div>
+              <dt>Perceived</dt>
+              <dd id="perceived-difficulty">—</dd>
+            </div>
+            <div>
+              <dt>Step</dt>
+              <dd id="step-count">—</dd>
+            </div>
+            <div>
+              <dt>Stato</dt>
+              <dd id="analysis-status">—</dd>
+            </div>
+          </dl>
+
+          <p class="identity" id="identity-summary"></p>
+        </article>
+
+        <article class="player-card card">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">RISOLUZIONE</p>
+              <h2 id="player-title">Griglia iniziale</h2>
+            </div>
+            <span class="step-badge" id="player-step">0 / 0</span>
+          </div>
+
+          <div class="solution-layout">
+            <div
+              class="solution-grid"
+              id="solution-grid"
+              aria-label="Passaggio corrente della soluzione"
+            ></div>
+            <div class="step-copy">
+              <p class="step-technique" id="step-technique">Griglia iniziale</p>
+              <p class="step-description" id="step-description">
+                I valori originali del puzzle.
+              </p>
+            </div>
+          </div>
+
+          <div class="player-controls">
+            <button class="icon-button" id="first-step" type="button" title="Inizio">
+              |←
+            </button>
+            <button class="icon-button" id="previous-step" type="button" title="Precedente">
+              ←
+            </button>
+            <input
+              id="step-slider"
+              type="range"
+              min="0"
+              max="1"
+              value="0"
+              aria-label="Passaggio della soluzione"
+            >
+            <button class="icon-button" id="next-step" type="button" title="Successivo">
+              →
+            </button>
+            <button class="icon-button" id="last-step" type="button" title="Soluzione">
+              →|
+            </button>
+          </div>
+          <div class="highlight-legend">
+            <span><i class="legend-primary"></i>Celle principali</span>
+            <span><i class="legend-secondary"></i>Celle collegate</span>
+          </div>
+        </article>
+
+        <article class="plot-card card">
+          <div class="plot-heading">
+            <p class="section-kicker">GRAFICO 01</p>
+            <h2>Catena di difficoltà</h2>
+          </div>
+          <div class="plot-frame">
+            <img id="difficulty-plot" alt="Grafico della catena di difficoltà">
+          </div>
+        </article>
+
+        <article class="plot-card card">
+          <div class="plot-heading">
+            <p class="section-kicker">GRAFICO 02</p>
+            <h2>Heatmap delle tecniche</h2>
+          </div>
+          <div class="plot-frame">
+            <img id="heatmap-plot" alt="Heatmap delle tecniche disponibili">
+          </div>
+        </article>
+
+        <details class="json-card card">
+          <summary>
+            <span>
+              <span class="section-kicker">DATI</span>
+              JSON completo dell’analisi
+            </span>
+            <span class="summary-action">Apri</span>
+          </summary>
+          <div class="json-actions">
+            <button class="button button-quiet" id="download-json" type="button">
+              Scarica JSON
+            </button>
+          </div>
+          <pre id="analysis-json"></pre>
+        </details>
+      </section>
+    </section>
+  </main>
+
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

@@ -5,9 +5,9 @@ import unittest
 
 import numpy as np
 
-import sudoku_archive as archive
-import sudoku_canonicalization as canonical
-import sudoku_solver as solver
+from sudoku_app.archive import repository as archive
+from sudoku_app.core import canonicalization as canonical
+from sudoku_app.core import solver
 
 
 PUZZLE = (
@@ -17,6 +17,21 @@ PUZZLE = (
 
 
 class CanonicalizationTests(unittest.TestCase):
+    def test_default_archive_paths_are_anchored_to_project_root(self):
+        project_root = Path(archive.__file__).resolve().parents[2]
+
+        self.assertEqual(
+            archive.ARCHIVE_PROFILE_PATHS["offline"],
+            project_root / "archives" / "offline",
+        )
+        self.assertEqual(
+            archive.ARCHIVE_PROFILE_PATHS["online"],
+            project_root / "archives" / "online",
+        )
+        self.assertTrue(
+            archive.ARCHIVE_PROFILE_PATHS["offline"].is_absolute()
+        )
+
     def test_all_random_isomorphs_have_the_same_exact_minlex_form(self):
         expected = canonical.canonical_string(PUZZLE)
 

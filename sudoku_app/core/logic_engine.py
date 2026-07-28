@@ -13,8 +13,8 @@ coppie e X-Wing; il livello nested puo' usare una catena statica come
 sotto-prova.  Nessuna funzione modifica il ``SudokuState`` ricevuto.
 
 L'API pubblica e' intenzionalmente piccola: ``find_logic_deductions``
-restituisce deduzioni neutrali.  ``sudoku_techniques`` le converte nel formato
-Move usato dal resto del progetto, mantenendo le interfacce storiche.
+restituisce deduzioni neutrali. ``sudoku_app.core.techniques`` le converte nel
+formato Move usato dal resto del progetto.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from itertools import combinations
 from threading import RLock
 
-from sudoku_data_structure import UNITS, UNIT_KINDS, peers
+from .data_structure import UNITS, UNIT_KINDS, peers
 
 
 Candidate = tuple[int, int, int]

@@ -36,9 +36,9 @@ logical conclusions.
 from collections import defaultdict
 import math
 
-import sudoku_canonicalization as sc
-import sudoku_data_structure as sds
-import sudoku_techniques as st
+from . import canonicalization as sc
+from . import data_structure as sds
+from . import techniques as st
 
 
 DIFFICULTY_THRESHOLDS = [

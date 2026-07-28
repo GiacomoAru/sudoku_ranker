@@ -6,7 +6,7 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 
-import sudoku_visualization as visualization
+from sudoku_app.core import visualization
 
 
 def synthetic_move(step, difficulty, activity, outcomes, conclusions):

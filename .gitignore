@@ -3,6 +3,10 @@
 .agents/
 old_files/
 sudoku.code-workspace
-sudoku_data/
+archives/offline/
+archives/online/
+.sudoku-web.pid
 __pycache__/
 *.py[cod]
+*.zip
+!archives/backups/sudoku_data.zip

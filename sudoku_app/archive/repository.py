@@ -9,15 +9,24 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
-import sudoku_canonicalization as sc
-import sudoku_data_structure as sds
-import sudoku_solver as ss
+from ..core import canonicalization as sc
+from ..core import data_structure as sds
+from ..core import solver as ss
 
 # ---------------------------------------------------------------------------
 # Configurazione archivio
 # ---------------------------------------------------------------------------
 
-SUDOKU_DATA_DIR = Path("sudoku_data")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ARCHIVES_ROOT = PROJECT_ROOT / "archives"
+
+ARCHIVE_PROFILE_PATHS = {
+    "offline": ARCHIVES_ROOT / "offline",
+    "online": ARCHIVES_ROOT / "online",
+}
+ACTIVE_ARCHIVE_PROFILE = "offline"
+
+SUDOKU_DATA_DIR = ARCHIVE_PROFILE_PATHS[ACTIVE_ARCHIVE_PROFILE]
 SUDOKU_PUZZLES_DIR = SUDOKU_DATA_DIR / "puzzles"
 SUDOKU_ANALYSES_DIR = SUDOKU_DATA_DIR / "analyses"
 SUDOKU_CANONICAL_DIR = SUDOKU_DATA_DIR / "canonical"
@@ -37,6 +46,60 @@ _ANALYSIS_MEMORY_CACHE = {}
 # ---------------------------------------------------------------------------
 # Funzioni interne
 # ---------------------------------------------------------------------------
+
+def configure_archive(profile="offline", data_dir=None):
+    """
+    Seleziona l'archivio usato dal processo corrente.
+
+    ``offline`` è il profilo predefinito e usa ``archives/offline``.
+    ``online`` usa ``archives/online``. Entrambi sono ancorati alla radice del
+    progetto e non alla directory da cui Python è stato avviato. ``data_dir``
+    permette di fornire una radice esplicita, utile per server e test.
+
+    La selezione è di processo: va eseguita all'avvio, prima di servire
+    richieste o avviare analisi concorrenti.
+    """
+    global ACTIVE_ARCHIVE_PROFILE
+    global SUDOKU_DATA_DIR
+    global SUDOKU_PUZZLES_DIR
+    global SUDOKU_ANALYSES_DIR
+    global SUDOKU_CANONICAL_DIR
+
+    profile = str(profile).strip().casefold()
+
+    if profile not in ARCHIVE_PROFILE_PATHS:
+        allowed = ", ".join(sorted(ARCHIVE_PROFILE_PATHS))
+        raise ValueError(
+            f"Profilo archivio non valido: {profile!r}. "
+            f"Valori ammessi: {allowed}."
+        )
+
+    root = (
+        Path(data_dir)
+        if data_dir is not None
+        else ARCHIVE_PROFILE_PATHS[profile]
+    )
+
+    ACTIVE_ARCHIVE_PROFILE = profile
+    SUDOKU_DATA_DIR = root
+    SUDOKU_PUZZLES_DIR = root / "puzzles"
+    SUDOKU_ANALYSES_DIR = root / "analyses"
+    SUDOKU_CANONICAL_DIR = root / "canonical"
+    _ANALYSIS_MEMORY_CACHE.clear()
+    _ensure_sudoku_directories()
+    return archive_configuration()
+
+
+def archive_configuration():
+    """Restituisce il profilo e i percorsi dell'archivio attivo."""
+    return {
+        "profile": ACTIVE_ARCHIVE_PROFILE,
+        "data_dir": SUDOKU_DATA_DIR,
+        "puzzles_dir": SUDOKU_PUZZLES_DIR,
+        "analyses_dir": SUDOKU_ANALYSES_DIR,
+        "canonical_dir": SUDOKU_CANONICAL_DIR,
+    }
+
 
 def _ensure_sudoku_directories():
     SUDOKU_PUZZLES_DIR.mkdir(parents=True, exist_ok=True)
@@ -326,7 +389,7 @@ def _current_analysis_payloads(puzzle_id):
     return variants
 
 
-def _write_json(path, data):
+def _write_json(path, data, compact=False):
     """Scrive un JSON in modo atomico per evitare file parziali."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -337,7 +400,8 @@ def _write_json(path, data):
         json.dumps(
             data,
             ensure_ascii=False,
-            indent=2,
+            indent=None if compact else 2,
+            separators=(",", ":") if compact else None,
         ),
         encoding="utf-8",
     )
@@ -614,6 +678,63 @@ def _restore_move(move):
         if field in restored:
             restored[field] = _restore_candidates(restored[field])
 
+    availability = restored.get("availability", {})
+
+    if availability:
+        full_by_technique = availability.get("by_technique", {})
+        full_by_family = availability.get("by_family", {})
+        frontier = availability.get("frontier", {})
+        best_by_technique = frontier.get("by_technique", {})
+        best_by_family = frontier.get("by_family", {})
+
+        def metric_map(entries, metric):
+            return {
+                str(name): int(values.get(metric, 0))
+                for name, values in entries.items()
+                if int(values.get(metric, 0)) > 0
+            }
+
+        restored.setdefault(
+            "applicable_by_technique",
+            metric_map(full_by_technique, "conclusion_count"),
+        )
+        restored.setdefault(
+            "applicable_by_family",
+            metric_map(full_by_family, "conclusion_count"),
+        )
+        restored.setdefault(
+            "best_applicable_by_technique",
+            metric_map(best_by_technique, "conclusion_count"),
+        )
+        restored.setdefault(
+            "best_applicable_by_family",
+            metric_map(best_by_family, "conclusion_count"),
+        )
+        restored.setdefault(
+            "proofs_by_technique",
+            metric_map(full_by_technique, "proof_count"),
+        )
+        restored.setdefault(
+            "proofs_by_family",
+            metric_map(full_by_family, "proof_count"),
+        )
+        restored.setdefault(
+            "best_proofs_by_technique",
+            metric_map(best_by_technique, "proof_count"),
+        )
+        restored.setdefault(
+            "best_proofs_by_family",
+            metric_map(best_by_family, "proof_count"),
+        )
+        restored.setdefault(
+            "distinct_outcomes_by_technique",
+            metric_map(full_by_technique, "distinct_outcome_count"),
+        )
+        restored.setdefault(
+            "distinct_outcomes_by_family",
+            metric_map(full_by_family, "distinct_outcome_count"),
+        )
+
     return restored
 
 
@@ -648,6 +769,98 @@ def _restore_analysis(data):
     analysis["grading"] = grading
 
     return analysis
+
+
+_REDUNDANT_MOVE_FIELDS = {
+    "applicable_by_technique",
+    "applicable_by_family",
+    "best_applicable_by_technique",
+    "best_applicable_by_family",
+    "proofs_by_technique",
+    "proofs_by_family",
+    "best_proofs_by_technique",
+    "best_proofs_by_family",
+    "distinct_outcomes_by_technique",
+    "distinct_outcomes_by_family",
+}
+
+
+def _compact_analysis_for_storage(analysis):
+    """
+    Produce il formato JSON semplice usato su disco.
+
+    Le griglie diventano stringhe da 81 cifre e le mappe legacy ricavabili da
+    ``availability`` non vengono duplicate. ``_restore_analysis`` ricostruisce
+    comunque l'interfaccia storica quando il record viene caricato.
+    """
+    compact = _to_json_value(analysis)
+
+    for field in ("original", "solved_grid"):
+        if compact.get(field) is not None:
+            compact[field] = _grid_to_string(compact[field])
+
+    for field in ("puzzle_id", "canonical_id", "analysis_variant"):
+        compact.pop(field, None)
+
+    for move in compact.get("chain", []):
+        for field in _REDUNDANT_MOVE_FIELDS:
+            move.pop(field, None)
+
+        for field in ("grid_before", "grid_after"):
+            if move.get(field) is not None:
+                move[field] = _grid_to_string(move[field])
+
+    return compact
+
+
+def compact_analysis_archive(dry_run=True):
+    """
+    Converte i file di analisi esistenti nel formato compatto schema 3.
+
+    Il contenuto logico e la versione del solver non cambiano. Con
+    ``dry_run=True`` restituisce soltanto la stima delle dimensioni.
+    """
+    if not isinstance(dry_run, bool):
+        raise TypeError("dry_run deve essere booleano.")
+
+    _ensure_sudoku_directories()
+    paths = sorted(SUDOKU_ANALYSES_DIR.glob("*/analysis*.json"))
+    before_bytes = 0
+    after_bytes = 0
+    rewritten_files = 0
+
+    for path in paths:
+        payload = _read_json(path)
+        before_bytes += path.stat().st_size
+        compact_payload = dict(payload)
+        compact_payload["schema_version"] = 3
+        compact_payload["analysis"] = _compact_analysis_for_storage(
+            payload.get("analysis", {})
+        )
+        encoded = json.dumps(
+            compact_payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        after_bytes += len(encoded)
+
+        if not dry_run:
+            _write_json(path, compact_payload, compact=True)
+            rewritten_files += 1
+
+    return {
+        "dry_run": dry_run,
+        "file_count": len(paths),
+        "rewritten_file_count": rewritten_files,
+        "before_bytes": before_bytes,
+        "after_bytes": after_bytes,
+        "saved_bytes": before_bytes - after_bytes,
+        "saved_ratio": (
+            (before_bytes - after_bytes) / before_bytes
+            if before_bytes
+            else 0.0
+        ),
+    }
 
 
 def _resolve_puzzle_path(reference):
@@ -1464,7 +1677,7 @@ def save_analysis(analysis):
     analysis["canonical_id"] = canonical_id
 
     payload = {
-        "schema_version": 2,
+        "schema_version": 3,
         "analysis_version": ANALYSIS_VERSION,
         "puzzle_id": puzzle_id,
         "canonical_id": canonical_id,
@@ -1472,11 +1685,11 @@ def save_analysis(analysis):
         "analysis_mode": mode,
         "profile_difficulty_window": window,
         "created_at": _current_timestamp(),
-        "analysis": _to_json_value(analysis),
+        "analysis": _compact_analysis_for_storage(analysis),
     }
 
     path = _analysis_path(puzzle_id, mode, window)
-    _write_json(path, payload)
+    _write_json(path, payload, compact=True)
 
     cache_key = _analysis_cache_key(puzzle_id, mode, window)
     _ANALYSIS_MEMORY_CACHE[cache_key] = analysis

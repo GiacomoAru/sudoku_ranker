@@ -1,5 +1,5 @@
 """
-Canonicalizzazione esatta e randomizzazione dei Sudoku classici 9x9.
+Canonicalizzazione esatta e randomizzazione dei Sudoku classici 9×9.
 
 La forma canonica è il minimo lessicografico tra tutte le immagini ottenibili
 con il gruppo standard delle simmetrie del Sudoku:
