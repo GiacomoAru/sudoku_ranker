@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlencode
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -13,9 +13,11 @@ from .schemas import (
     HealthResponse,
     JobAccepted,
     JobStatus,
+    PhotoRecognitionResponse,
     SudokuSubmission,
 )
 from .service import SudokuWebService
+from .photo_recognition import MAX_IMAGE_BYTES, PhotoRecognitionError
 
 
 STATIC_DIRECTORY = Path(__file__).resolve().parent / "static"
@@ -89,9 +91,10 @@ def create_app(data_dir=None, job_queue_capacity=16):
 
     app = FastAPI(
         title="Sudoku Logic Lab",
-        version="0.1.0",
+        version="0.2.0",
         description=(
-            "API LAN minima per salvare Sudoku e ricevere analisi logiche."
+            "API LAN per riconoscere Sudoku da foto, salvarli e ricevere "
+            "analisi logiche."
         ),
         lifespan=lifespan,
     )
@@ -129,6 +132,68 @@ def create_app(data_dir=None, job_queue_capacity=16):
                 status_code=422,
                 detail=str(error),
             ) from error
+
+    @app.post(
+        "/api/v1/photos/recognise",
+        response_model=PhotoRecognitionResponse,
+    )
+    def recognise_photo(photo: UploadFile = File(...)):
+        content_type = (photo.content_type or "").casefold()
+
+        if content_type not in {
+            "image/jpeg",
+            "image/png",
+            "image/webp",
+        }:
+            raise HTTPException(
+                status_code=415,
+                detail="Formato non supportato: usa JPEG, PNG o WebP.",
+            )
+
+        image_bytes = photo.file.read(MAX_IMAGE_BYTES + 1)
+
+        try:
+            return service.recognise_photo(
+                image_bytes,
+                filename=photo.filename,
+                content_type=content_type,
+            )
+        except PhotoRecognitionError as error:
+            detail = {
+                "message": str(error),
+                "photo_id": getattr(error, "photo_id", None),
+            }
+            raise HTTPException(
+                status_code=422,
+                detail=detail,
+            ) from error
+
+    @app.get(
+        "/api/v1/photos/{photo_id}/{kind}",
+        response_class=FileResponse,
+    )
+    def photo_media(photo_id: str, kind: str):
+        try:
+            path, payload = service.photo_archive.media_path(
+                photo_id,
+                kind,
+            )
+        except (KeyError, FileNotFoundError) as error:
+            raise HTTPException(
+                status_code=404,
+                detail="Foto o anteprima non trovata.",
+            ) from error
+
+        media_type = (
+            "image/png"
+            if kind == "rectified"
+            else payload.get("content_type", "application/octet-stream")
+        )
+        return FileResponse(
+            path,
+            media_type=media_type,
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.post(
         "/api/v1/jobs",

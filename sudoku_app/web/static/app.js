@@ -11,6 +11,7 @@ let currentAnalysis = null;
 let currentName = "sudoku-analysis";
 let solutionStates = [];
 let currentSolutionState = 0;
+let currentPhotoId = null;
 
 const cells = Array.from({ length: 81 }, (_, index) => {
   const input = document.createElement("input");
@@ -29,6 +30,8 @@ const cells = Array.from({ length: 81 }, (_, index) => {
 
   input.addEventListener("input", () => {
     input.value = input.value.replace(/[^1-9]/g, "").slice(-1);
+    input.classList.remove("ocr-low-confidence");
+    input.removeAttribute("title");
     updateStringFromCells();
   });
 
@@ -71,8 +74,10 @@ gridStringElement.addEventListener("input", () => {
 document.querySelector("#clear-grid").addEventListener("click", () => {
   cells.forEach((cell) => {
     cell.value = "";
+    cell.classList.remove("ocr-low-confidence");
   });
   gridStringElement.value = "";
+  resetPhoto();
   cells[0].focus();
 });
 
@@ -85,11 +90,145 @@ function setRequestStatus(message, isError = false) {
 function readableError(payload, fallback) {
   if (!payload) return fallback;
   if (typeof payload.detail === "string") return payload.detail;
+  if (
+    payload.detail &&
+    typeof payload.detail === "object" &&
+    typeof payload.detail.message === "string"
+  ) {
+    const archived = payload.detail.photo_id
+      ? ` Foto archiviata con ID ${payload.detail.photo_id}.`
+      : "";
+    return `${payload.detail.message}${archived}`;
+  }
   if (Array.isArray(payload.detail)) {
     return payload.detail.map((item) => item.msg).join("; ");
   }
   return fallback;
 }
+
+const photoInput = document.querySelector("#photo-input");
+const photoStatus = document.querySelector("#photo-status");
+const photoReview = document.querySelector("#photo-review");
+const photoReviewNote = document.querySelector("#photo-review-note");
+const clearPhotoButton = document.querySelector("#clear-photo");
+
+function setPhotoStatus(message, isError = false) {
+  photoStatus.hidden = false;
+  photoStatus.textContent = message;
+  photoStatus.classList.toggle("error", isError);
+}
+
+function clearOcrHighlights() {
+  cells.forEach((cell) => {
+    cell.classList.remove("ocr-low-confidence");
+    cell.removeAttribute("title");
+  });
+}
+
+function resetPhoto() {
+  currentPhotoId = null;
+  photoInput.value = "";
+  photoStatus.hidden = true;
+  photoReview.hidden = true;
+  photoReviewNote.hidden = true;
+  clearPhotoButton.hidden = true;
+  clearOcrHighlights();
+  document.querySelector("#photo-original-preview").removeAttribute("src");
+  document.querySelector("#photo-rectified-preview").removeAttribute("src");
+}
+
+async function recognisePhoto(file) {
+  const formData = new FormData();
+  formData.append("photo", file);
+  photoInput.disabled = true;
+  clearOcrHighlights();
+  setPhotoStatus(
+    "Foto caricata. Individuo la griglia, correggo la prospettiva e leggo le cifre…"
+  );
+
+  try {
+    const response = await fetch("/api/v1/photos/recognise", {
+      method: "POST",
+      body: formData,
+    });
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        readableError(payload, `Errore OCR HTTP ${response.status}`)
+      );
+    }
+
+    currentPhotoId = payload.photo_id;
+    updateCellsFromString(payload.grid);
+    gridStringElement.value = payload.grid;
+    payload.low_confidence_indices.forEach((index) => {
+      cells[index]?.classList.add("ocr-low-confidence");
+    });
+    payload.cells.forEach((recognisedCell) => {
+      if (!recognisedCell.detected) return;
+      const alternatives = recognisedCell.candidates
+        .map((candidate) => (
+          `${candidate.digit} (${(candidate.confidence * 100).toFixed(0)}%)`
+        ))
+        .join(", ");
+      cells[recognisedCell.index].title =
+        `OCR ${(recognisedCell.confidence * 100).toFixed(0)}%` +
+        (alternatives ? ` · alternative: ${alternatives}` : "");
+    });
+
+    const cacheToken = `?_=${Date.now()}`;
+    document.querySelector("#photo-original-preview").src =
+      `${payload.original_url}${cacheToken}`;
+    document.querySelector("#photo-rectified-preview").src =
+      `${payload.rectified_url}${cacheToken}`;
+    photoReview.hidden = false;
+    photoReviewNote.hidden = false;
+    clearPhotoButton.hidden = false;
+
+    const confidence = (payload.mean_confidence * 100).toFixed(0);
+    const uncertain = payload.low_confidence_indices.length;
+    const warningText = payload.warnings.length
+      ? ` ${payload.warnings.join(" ")}`
+      : "";
+    setPhotoStatus(
+      `${payload.detected_digit_count} cifre rilevate · confidenza media ` +
+      `${confidence}% · ${uncertain} celle da controllare.${warningText}`
+    );
+    cells[payload.low_confidence_indices[0] ?? 0].focus();
+  } catch (error) {
+    currentPhotoId = null;
+    photoReview.hidden = true;
+    photoReviewNote.hidden = true;
+    clearPhotoButton.hidden = true;
+    setPhotoStatus(
+      error.message || "Errore durante il riconoscimento della foto.",
+      true
+    );
+  } finally {
+    photoInput.disabled = false;
+  }
+}
+
+photoInput.addEventListener("change", () => {
+  const [file] = photoInput.files;
+
+  if (file) recognisePhoto(file);
+});
+
+clearPhotoButton.addEventListener("click", resetPhoto);
+
+const jsonDetailsElement = document.querySelector(".json-card");
+const jsonSummaryAction = jsonDetailsElement.querySelector(".summary-action");
+
+function updateJsonSummaryAction() {
+  jsonSummaryAction.textContent = jsonDetailsElement.open
+    ? "Chiudi"
+    : "Apri";
+}
+
+jsonDetailsElement.addEventListener("toggle", updateJsonSummaryAction);
+updateJsonSummaryAction();
 
 function renderResult(payload) {
   const grading = payload.analysis.grading || {};
@@ -105,7 +244,7 @@ function renderResult(payload) {
     Number.isFinite(grading.hodoku_score)
       ? `${grading.hodoku_score} · ${grading.hodoku_level || "N/A"}`
       : "—";
-  document.querySelector("#perceived-difficulty").textContent =
+  document.querySelector("#perceived").textContent =
     Number.isFinite(grading.perceived_difficulty)
       ? grading.perceived_difficulty.toFixed(2)
       : "—";
@@ -306,6 +445,7 @@ formElement.addEventListener("submit", async (event) => {
         ).value,
         analysis_mode: "profile",
         profile_difficulty_window: 3.0,
+        photo_id: currentPhotoId,
       }),
     });
     const payload = await response.json();
@@ -319,6 +459,11 @@ formElement.addEventListener("submit", async (event) => {
     setRequestStatus(
       "Analisi completata e salvata nell’archivio web separato."
     );
+    if (currentPhotoId) {
+      setPhotoStatus(
+        `Foto ${currentPhotoId} confermata e collegata al Sudoku salvato.`
+      );
+    }
   } catch (error) {
     setRequestStatus(error.message || "Errore durante l’analisi.", true);
   } finally {

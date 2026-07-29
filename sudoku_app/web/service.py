@@ -13,6 +13,12 @@ from ..core import solver
 from ..core import visualization
 
 from .schemas import SudokuSubmission
+from .photo_archive import PhotoArchive
+from .photo_recognition import (
+    MAX_IMAGE_BYTES,
+    RECOGNITION_VERSION,
+    SudokuPhotoRecognizer,
+)
 from .serialization import to_jsonable
 
 
@@ -46,10 +52,27 @@ class SudokuWebService:
             "online",
             data_dir=data_dir,
         )
+        self.photo_archive = PhotoArchive(
+            self.archive_configuration["data_dir"],
+        )
+        self.photo_recognizer = SudokuPhotoRecognizer()
 
     def analyse(self, submission: SudokuSubmission):
         grid = archive.normalise_sudoku_grid(submission.grid)
         _validate_given_digits(grid)
+        source_metadata = {"source": "web"}
+
+        if submission.photo_id:
+            try:
+                self.photo_archive.load(submission.photo_id)
+            except KeyError as error:
+                raise ValueError(
+                    "La foto collegata non esiste nell'archivio web."
+                ) from error
+            source_metadata = {
+                "source": "web-photo",
+                "photo_id": submission.photo_id,
+            }
 
         with self._lock:
             puzzle = archive.save_with_standard_nomenclature(
@@ -57,8 +80,14 @@ class SudokuWebService:
                 provenience=submission.provenience,
                 tag=submission.tag,
                 difficulty=submission.difficulty,
-                metadata={"source": "web"},
+                metadata=source_metadata,
             )
+            if submission.photo_id:
+                self.photo_archive.confirm(
+                    submission.photo_id,
+                    submission.grid,
+                    puzzle_id=puzzle["id"],
+                )
             analysis = archive.analyse_puzzle_cached(
                 puzzle["id"],
                 force=submission.force,
@@ -70,6 +99,43 @@ class SudokuWebService:
             puzzle = archive.load_sudoku(puzzle["id"])
 
         return puzzle, analysis
+
+    def recognise_photo(self, image_bytes, filename, content_type):
+        upload = self.photo_archive.save_upload(
+            image_bytes,
+            filename=filename,
+            content_type=content_type,
+        )
+        photo_id = upload["photo_id"]
+
+        try:
+            recognition = self.photo_recognizer.recognise(image_bytes)
+        except Exception as error:
+            self.photo_archive.save_failure(
+                photo_id,
+                str(error),
+                algorithm_version=RECOGNITION_VERSION,
+            )
+            setattr(error, "photo_id", photo_id)
+            raise
+
+        rectified_png = recognition.pop("rectified_png")
+        self.photo_archive.save_recognition(
+            photo_id,
+            recognition,
+            rectified_png,
+        )
+
+        return {
+            "photo_id": photo_id,
+            **recognition,
+            "original_url": (
+                f"/api/v1/photos/{photo_id}/original"
+            ),
+            "rectified_url": (
+                f"/api/v1/photos/{photo_id}/rectified"
+            ),
+        }
 
     def render_plot(
         self,
@@ -128,6 +194,8 @@ class SudokuWebService:
             ),
             "analysis_worker_count": worker_count,
             "job_queue_capacity": queue_capacity,
+            "photo_recognition_version": RECOGNITION_VERSION,
+            "max_photo_size_mb": MAX_IMAGE_BYTES // (1024 * 1024),
         }
 
     @staticmethod

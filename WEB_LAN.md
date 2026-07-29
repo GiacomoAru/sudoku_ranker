@@ -139,6 +139,9 @@ Gli script in `scripts/` gestiscono intenzionalmente la porta predefinita
 - `POST /api/v1/analyses`
 - `POST /api/v1/jobs`
 - `GET /api/v1/jobs/{job_id}`
+- `POST /api/v1/photos/recognise`
+- `GET /api/v1/photos/{photo_id}/original`
+- `GET /api/v1/photos/{photo_id}/rectified`
 - `GET /api/v1/analyses/{puzzle_id}/plots/difficulty-chain.png`
 - `GET /api/v1/analyses/{puzzle_id}/plots/technique-heatmap.png`
 
@@ -151,9 +154,76 @@ mentre un singolo worker esegue le analisi. La coda contiene al massimo 16
 job. Questa serializzazione protegge l'attuale archivio JSON; un futuro pool
 di processi richiederà anche una persistenza transazionale.
 
-## 8. Limite di sicurezza attuale
+## 8. Riconoscimento Sudoku da foto
+
+Dalla sezione **Foto OCR** puoi scattare una foto con il telefono oppure
+scegliere un file JPEG, PNG o WebP fino a 12 MB. Il riconoscimento avviene
+interamente sul computer server:
+
+1. viene individuato il bordo esterno del Sudoku;
+2. la prospettiva viene corretta;
+3. le 81 celle vengono segmentate e classificate;
+4. la griglia riconosciuta viene riportata negli input modificabili;
+5. le celle a bassa confidenza sono evidenziate in arancione.
+
+Prima di premere **Analizza e salva**, confronta sempre la griglia con
+l'anteprima raddrizzata. Correggendo gli input e inviando il Sudoku, la foto
+viene marcata come confermata e collegata alla griglia corretta.
+
+Le immagini non finiscono nei JSON dei puzzle. Sono conservate separatamente:
+
+```text
+archives/online/photos/<photo_id>/
+    original.jpg       file ricevuto, estensione variabile
+    rectified.png      griglia corretta prospetticamente
+    metadata.json      OCR, confidenze, stato e revisione umana
+```
+
+Anche gli upload in cui la griglia non viene trovata sono conservati con stato
+`failed`: sono esempi utili per migliorare in seguito il rilevatore. Dopo la
+conferma, `metadata.json` contiene la coppia fra foto e griglia revisionata,
+adatta alla costruzione di un dataset supervisionato.
+
+Per risultati migliori:
+
+- inquadra tutto il bordo esterno;
+- evita ombre nette, riflessi e pieghe della carta;
+- usa una risoluzione sufficiente, senza zoom digitale eccessivo;
+- preferisci una ripresa quasi frontale;
+- verifica soprattutto cifre stampate con font insoliti.
+
+Le immagini ad alta risoluzione fino a 12000 px per lato vengono conservate
+nel formato originale e ridimensionate soltanto in memoria per l'elaborazione.
+Il rilevatore prova prima il bordo quadrangolare classico; sulle pagine curve
+usa come fallback la periodicità delle dieci linee orizzontali e verticali.
+
+Per riprovare le foto fallite dopo un aggiornamento dell'algoritmo:
+
+```powershell
+# anteprima senza modificare l'archivio
+.\.venv\Scripts\python.exe .\scripts\reprocess_photos.py
+
+# applica i nuovi risultati, conservando lo storico dei tentativi
+.\.venv\Scripts\python.exe .\scripts\reprocess_photos.py --apply
+```
+
+API aggiuntive:
+
+- `POST /api/v1/photos/recognise`
+- `GET /api/v1/photos/{photo_id}/original`
+- `GET /api/v1/photos/{photo_id}/rectified`
+
+L'endpoint di analisi accetta il campo opzionale `photo_id`, usato per
+registrare la griglia corretta e collegarla al puzzle salvato.
+
+## 9. Privacy e limite di sicurezza attuale
 
 Questa configurazione è pensata per la rete domestica fidata. Non configurare
 port forwarding verso Internet: al momento non ci sono autenticazione, TLS,
 rate limiting né protezione da upload ostili. La pubblicazione online andrà
 fatta dietro un reverse proxy HTTPS e dopo aver aggiunto autenticazione.
+
+Le foto possono contenere sfondo e dettagli dell'ambiente. Rimangono sul
+computer server e `archives/` è esclusa da Git, ma vanno comunque considerate
+dati personali: prima di condividere backup o dataset, ritaglia o elimina le
+immagini non necessarie.

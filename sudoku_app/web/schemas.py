@@ -24,6 +24,14 @@ class SudokuSubmission(BaseModel):
         le=10.0,
     )
     force: bool = False
+    photo_id: str | None = Field(
+        default=None,
+        pattern=r"^[a-f0-9]{24}$",
+        description=(
+            "Identificatore opzionale della foto da collegare al Sudoku "
+            "confermato."
+        ),
+    )
 
     @field_validator("grid")
     @classmethod
@@ -79,6 +87,8 @@ class HealthResponse(BaseModel):
     default_profile_difficulty_window: float
     analysis_worker_count: int
     job_queue_capacity: int
+    photo_recognition_version: str
+    max_photo_size_mb: int
 
 
 class JobAccepted(BaseModel):
@@ -95,3 +105,20 @@ class JobStatus(BaseModel):
     completed_at: str | None
     result: AnalysisEnvelope | None
     error: str | None
+
+
+class PhotoRecognitionResponse(BaseModel):
+    photo_id: str
+    algorithm_version: str
+    grid: str
+    detected_digit_count: int
+    mean_confidence: float
+    grid_detection_confidence: float
+    grid_detection_method: str
+    low_confidence_indices: list[int]
+    cells: list[dict[str, Any]]
+    warnings: list[str]
+    source_size: dict[str, int]
+    grid_corners: list[list[float]]
+    original_url: str
+    rectified_url: str

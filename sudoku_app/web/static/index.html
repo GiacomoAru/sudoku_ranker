@@ -13,8 +13,8 @@
         <p class="eyebrow">LAN ANALYSIS CONSOLE</p>
         <h1>Sudoku Logic Lab</h1>
         <p class="lede">
-          Invia una griglia al motore logico e ricevi analisi, catena di
-          difficoltà e mappa delle tecniche.
+          Fotografa o inserisci una griglia, poi inviala al motore logico per
+          ricevere analisi, catena di difficoltà e mappa delle tecniche.
         </p>
       </div>
       <div class="connection" id="connection-status">
@@ -72,6 +72,54 @@
           </label>
         </div>
 
+        <section class="photo-capture" aria-labelledby="photo-capture-title">
+          <div class="photo-capture-heading">
+            <div>
+              <p class="section-kicker">FOTO OCR</p>
+              <h3 id="photo-capture-title">Riconosci da una foto</h3>
+            </div>
+            <button
+              class="button button-quiet"
+              type="button"
+              id="clear-photo"
+              hidden
+            >
+              Scollega
+            </button>
+          </div>
+          <label class="photo-dropzone" for="photo-input">
+            <input
+              id="photo-input"
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              capture="environment"
+            >
+            <span class="photo-icon" aria-hidden="true">◎</span>
+            <span>
+              <strong>Scatta o scegli una foto</strong>
+              <small>JPEG, PNG o WebP · massimo 12 MB</small>
+            </span>
+          </label>
+          <div class="photo-status" id="photo-status" hidden></div>
+          <div class="photo-review" id="photo-review" hidden>
+            <figure>
+              <img id="photo-original-preview" alt="Foto originale del Sudoku">
+              <figcaption>Originale archiviato</figcaption>
+            </figure>
+            <figure>
+              <img
+                id="photo-rectified-preview"
+                alt="Sudoku raddrizzato automaticamente"
+              >
+              <figcaption>Griglia raddrizzata</figcaption>
+            </figure>
+          </div>
+          <p class="photo-review-note" id="photo-review-note" hidden>
+            Controlla la griglia sotto. Le celle arancioni hanno confidenza
+            bassa o sono state corrette per coerenza.
+          </p>
+        </section>
+
         <div
           class="sudoku-grid"
           id="sudoku-grid"
@@ -83,6 +131,8 @@
           <textarea
             id="grid-string"
             rows="3"
+            inputmode="numeric"
+            autocomplete="off"
             spellcheck="false"
             placeholder="Usa 0 o . per le celle vuote"
           ></textarea>
@@ -112,23 +162,43 @@
           </div>
 
           <dl class="metrics">
-            <div>
+            <div
+              class="metric-help"
+              tabindex="0"
+              title="Rating Sudoku Explainer della tecnica più difficile usata."
+            >
               <dt>SE massimo</dt>
               <dd id="max-difficulty">—</dd>
             </div>
-            <div>
+            <div
+              class="metric-help"
+              tabindex="0"
+              title="Somma stimata dei punteggi HoDoKu e relativo livello."
+            >
               <dt>HoDoKu stimato</dt>
               <dd id="hodoku-rating">—</dd>
             </div>
-            <div>
-              <dt>Perceived 1–10</dt>
-              <dd id="perceived-difficulty">—</dd>
+            <div
+              class="metric-help"
+              tabindex="0"
+              title="Carico percepito della catena su scala continua da 1 a 10."
+            >
+              <dt>Perceived</dt>
+              <dd id="perceived">—</dd>
             </div>
-            <div>
+            <div
+              class="metric-help"
+              tabindex="0"
+              title="Numero di mosse logiche nella catena di risoluzione."
+            >
               <dt>Step</dt>
               <dd id="step-count">—</dd>
             </div>
-            <div>
+            <div
+              class="metric-help"
+              tabindex="0"
+              title="Esito del motore logico: risolto, bloccato o interrotto."
+            >
               <dt>Stato</dt>
               <dd id="analysis-status">—</dd>
             </div>

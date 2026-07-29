@@ -59,6 +59,11 @@ class SudokuWebTests(unittest.TestCase):
             response.json()["default_profile_difficulty_window"],
             3.0,
         )
+        self.assertEqual(
+            response.json()["photo_recognition_version"],
+            "opencv-hog-synthetic-v2",
+        )
+        self.assertEqual(response.json()["max_photo_size_mb"], 12)
         self.assertTrue(
             (
                 self.offline_root
@@ -77,7 +82,20 @@ class SudokuWebTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Sudoku Logic Lab", response.text)
         self.assertIn("HoDoKu stimato", response.text)
+        self.assertIn("<dt>Perceived</dt>", response.text)
+        self.assertNotIn("Perceived 1–10", response.text)
+        self.assertIn('inputmode="numeric"', response.text)
+        self.assertIn('class="metric-help"', response.text)
+        self.assertIn("Riconosci da una foto", response.text)
         self.assertIn("/static/app.js", response.text)
+
+        javascript = self.client.get("/static/app.js")
+        self.assertEqual(javascript.status_code, 200)
+        self.assertIn('"Chiudi"', javascript.text)
+        self.assertIn(
+            'addEventListener("toggle", updateJsonSummaryAction)',
+            javascript.text,
+        )
 
     def test_submit_returns_json_and_both_plot_urls(self):
         response = self.client.post(

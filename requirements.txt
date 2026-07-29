@@ -2,7 +2,9 @@ fastapi==0.140.7
 httpx==0.28.1
 matplotlib==3.11.0
 numpy==2.4.6
+opencv-python-headless==4.13.0.92
 pandas==3.0.3
+pillow==12.1.1
 pydantic==2.13.4
+python-multipart==0.0.22
 uvicorn==0.51.0
-
