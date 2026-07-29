@@ -11,7 +11,9 @@ from pathlib import Path
 import numpy as np
 from ..core import canonicalization as sc
 from ..core import data_structure as sds
+from ..core import difficulty as difficulty_model
 from ..core import solver as ss
+from ..core import techniques as st
 
 # ---------------------------------------------------------------------------
 # Configurazione archivio
@@ -31,12 +33,13 @@ SUDOKU_PUZZLES_DIR = SUDOKU_DATA_DIR / "puzzles"
 SUDOKU_ANALYSES_DIR = SUDOKU_DATA_DIR / "analyses"
 SUDOKU_CANONICAL_DIR = SUDOKU_DATA_DIR / "canonical"
 
-PUZZLE_SCHEMA_VERSION = 2
+PUZZLE_SCHEMA_VERSION = 3
 CANONICAL_CLASS_SCHEMA_VERSION = 1
 
 # Incrementare questo numero quando cambia il funzionamento del solver
 # o il formato dell'analisi. Le vecchie analisi verranno ricalcolate.
-ANALYSIS_VERSION = 14
+ANALYSIS_VERSION = 15
+ANALYSIS_SCHEMA_VERSION = 4
 
 # Evita anche letture ripetute dal disco durante la stessa esecuzione.
 # La chiave è (puzzle_id, analysis_variant), non soltanto puzzle_id.
@@ -144,6 +147,31 @@ def normalise_sudoku_grid(grid):
         raise ValueError("La griglia può contenere solamente valori da 0 a 9.")
 
     return array.copy()
+
+
+def validate_unique_sudoku(grid):
+    """Valida l'invariante fondamentale dell'archivio: una sola soluzione."""
+    grid = normalise_sudoku_grid(grid)
+    for unit in sds.UNITS:
+        values = [
+            int(grid[row, column])
+            for row, column in unit
+            if int(grid[row, column]) != 0
+        ]
+        if len(values) != len(set(values)):
+            raise ValueError(
+                "La griglia iniziale contiene cifre duplicate in una "
+                "riga, colonna o box."
+            )
+
+    solution_count = sds.count_solutions(grid, limit=2)
+    if solution_count == 0:
+        raise ValueError("Il Sudoku non ha alcuna soluzione valida.")
+    if solution_count > 1:
+        raise ValueError(
+            "Il Sudoku deve avere una soluzione unica; ne esiste più di una."
+        )
+    return grid
 
 
 def _grid_to_string(grid):
@@ -304,6 +332,7 @@ def _analysis_payload_is_current(
     """Verifica versione, Sudoku e variante richiesta."""
     if (
         payload.get("puzzle_id") != puzzle_id
+        or payload.get("schema_version") != ANALYSIS_SCHEMA_VERSION
         or payload.get("analysis_version") != ANALYSIS_VERSION
     ):
         return False
@@ -678,63 +707,6 @@ def _restore_move(move):
         if field in restored:
             restored[field] = _restore_candidates(restored[field])
 
-    availability = restored.get("availability", {})
-
-    if availability:
-        full_by_technique = availability.get("by_technique", {})
-        full_by_family = availability.get("by_family", {})
-        frontier = availability.get("frontier", {})
-        best_by_technique = frontier.get("by_technique", {})
-        best_by_family = frontier.get("by_family", {})
-
-        def metric_map(entries, metric):
-            return {
-                str(name): int(values.get(metric, 0))
-                for name, values in entries.items()
-                if int(values.get(metric, 0)) > 0
-            }
-
-        restored.setdefault(
-            "applicable_by_technique",
-            metric_map(full_by_technique, "conclusion_count"),
-        )
-        restored.setdefault(
-            "applicable_by_family",
-            metric_map(full_by_family, "conclusion_count"),
-        )
-        restored.setdefault(
-            "best_applicable_by_technique",
-            metric_map(best_by_technique, "conclusion_count"),
-        )
-        restored.setdefault(
-            "best_applicable_by_family",
-            metric_map(best_by_family, "conclusion_count"),
-        )
-        restored.setdefault(
-            "proofs_by_technique",
-            metric_map(full_by_technique, "proof_count"),
-        )
-        restored.setdefault(
-            "proofs_by_family",
-            metric_map(full_by_family, "proof_count"),
-        )
-        restored.setdefault(
-            "best_proofs_by_technique",
-            metric_map(best_by_technique, "proof_count"),
-        )
-        restored.setdefault(
-            "best_proofs_by_family",
-            metric_map(best_by_family, "proof_count"),
-        )
-        restored.setdefault(
-            "distinct_outcomes_by_technique",
-            metric_map(full_by_technique, "distinct_outcome_count"),
-        )
-        restored.setdefault(
-            "distinct_outcomes_by_family",
-            metric_map(full_by_family, "distinct_outcome_count"),
-        )
-
     return restored
 
 
@@ -754,34 +726,27 @@ def _restore_analysis(data):
         for move in analysis.get("chain", [])
     ]
 
-    grading = dict(analysis.get("grading", {}))
-
-    grading["histogram"] = {
-        int(level): int(count)
-        for level, count in grading.get("histogram", {}).items()
-    }
-
-    grading["se_histogram"] = {
-        float(score): int(count)
-        for score, count in grading.get("se_histogram", {}).items()
-    }
-
-    analysis["grading"] = grading
-
     return analysis
 
 
-_REDUNDANT_MOVE_FIELDS = {
-    "applicable_by_technique",
-    "applicable_by_family",
-    "best_applicable_by_technique",
-    "best_applicable_by_family",
-    "proofs_by_technique",
-    "proofs_by_family",
-    "best_proofs_by_technique",
-    "best_proofs_by_family",
-    "distinct_outcomes_by_technique",
-    "distinct_outcomes_by_family",
+_STORED_MOVE_FIELDS = {
+    "technique",
+    "family",
+    "technical_difficulty",
+    "resolution_load",
+    "perceived_difficulty",
+    "description",
+    "placements",
+    "eliminations",
+    "highlight",
+    "logic",
+    "step",
+    "grid_after",
+    "available_move_count",
+    "frontier_move_count",
+    "available_by_technique",
+    "frontier_by_technique",
+    "capped_techniques",
 }
 
 
@@ -789,9 +754,8 @@ def _compact_analysis_for_storage(analysis):
     """
     Produce il formato JSON semplice usato su disco.
 
-    Le griglie diventano stringhe da 81 cifre e le mappe legacy ricavabili da
-    ``availability`` non vengono duplicate. ``_restore_analysis`` ricostruisce
-    comunque l'interfaccia storica quando il record viene caricato.
+    Le griglie diventano stringhe da 81 cifre e ogni mossa conserva soltanto
+    i campi necessari a player, rating e heatmap.
     """
     compact = _to_json_value(analysis)
 
@@ -799,23 +763,186 @@ def _compact_analysis_for_storage(analysis):
         if compact.get(field) is not None:
             compact[field] = _grid_to_string(compact[field])
 
+    original = normalise_sudoku_grid(compact["original"])
+    if sds.count_solutions(original, limit=2) != 1:
+        raise ValueError(
+            "Impossibile migrare un'analisi di un Sudoku non univoco."
+        )
+    compact["unique_solution"] = True
+    compact["solved_grid"] = _grid_to_string(
+        sds.backtracking_solve(original)
+    )
+
     for field in ("puzzle_id", "canonical_id", "analysis_variant"):
         compact.pop(field, None)
 
-    for move in compact.get("chain", []):
-        for field in _REDUNDANT_MOVE_FIELDS:
-            move.pop(field, None)
+    migrated_chain = []
+    for source_move in compact.get("chain", []):
+        move = dict(source_move)
+        technical_difficulty = float(
+            move.get(
+                "technical_difficulty",
+                move.get(
+                    "difficulty",
+                    st.TECHNIQUE_DIFFICULTY[
+                        move["technique"]
+                    ],
+                ),
+            )
+        )
+        resolution_load = int(
+            move.get(
+                "resolution_load",
+                move.get(
+                    "hodoku_score",
+                    difficulty_model.hodoku_technique_rating(
+                        move["technique"]
+                    )["score"],
+                ),
+            )
+        )
 
-        for field in ("grid_before", "grid_after"):
-            if move.get(field) is not None:
-                move[field] = _grid_to_string(move[field])
+        availability = move.get("availability", {})
+        available_entries = availability.get("by_technique", {})
+        frontier_entries = availability.get(
+            "frontier",
+            {},
+        ).get("by_technique", {})
 
-    return compact
+        def old_metric_map(entries):
+            result = {}
+            for technique, values in entries.items():
+                if isinstance(values, dict):
+                    value = values.get(
+                        "distinct_outcome_count",
+                        values.get("conclusion_count", 0),
+                    )
+                else:
+                    value = values
+                value = min(int(value), ss.MAX_MOVES_PER_TECHNIQUE)
+                if value > 0:
+                    result[str(technique)] = value
+            return result
+
+        available_by_technique = old_metric_map(
+            move.get("available_by_technique", {})
+            or move.get("applicable_by_technique", {})
+            or available_entries
+        )
+        frontier_by_technique = old_metric_map(
+            move.get("frontier_by_technique", {})
+            or move.get("best_applicable_by_technique", {})
+            or frontier_entries
+        )
+        available_move_count = max(
+            1,
+            min(
+                int(
+                    move.get(
+                        "available_move_count",
+                        move.get(
+                            "n_distinct_outcomes",
+                            move.get("n_alternatives", 1),
+                        ),
+                    )
+                ),
+                sum(available_by_technique.values()) or 1,
+            ),
+        )
+        frontier_move_count = max(
+            1,
+            min(
+                int(
+                    move.get(
+                        "frontier_move_count",
+                        move.get(
+                            "n_best_distinct_outcomes",
+                            move.get("n_best_alternatives", 1),
+                        ),
+                    )
+                ),
+                sum(frontier_by_technique.values()) or 1,
+            ),
+        )
+
+        migrated = {
+            key: move[key]
+            for key in (
+                "technique",
+                "family",
+                "description",
+                "placements",
+                "eliminations",
+                "highlight",
+                "logic",
+                "step",
+                "grid_after",
+            )
+            if key in move
+        }
+        migrated.update({
+            "technical_difficulty": technical_difficulty,
+            "resolution_load": resolution_load,
+            "perceived_difficulty": round(
+                ss._perceived_step_difficulty(
+                    technical_difficulty,
+                    frontier_move_count,
+                ),
+                2,
+            ),
+            "available_move_count": available_move_count,
+            "frontier_move_count": frontier_move_count,
+            "available_by_technique": available_by_technique,
+            "frontier_by_technique": frontier_by_technique,
+        })
+        capped = set(move.get("capped_techniques", ()))
+        capped.update(
+            technique
+            for technique, values in (
+                move.get("applicable_by_technique", {})
+                or available_entries
+            ).items()
+            if int(
+                values.get("distinct_outcome_count", 0)
+                if isinstance(values, dict)
+                else values
+            ) > ss.MAX_MOVES_PER_TECHNIQUE
+        )
+        if capped:
+            migrated["capped_techniques"] = sorted(capped)
+
+        if migrated.get("grid_after") is not None:
+            migrated["grid_after"] = _grid_to_string(
+                migrated["grid_after"]
+            )
+        migrated_chain.append(migrated)
+
+    compact["chain"] = migrated_chain
+    compact["grading"] = ss.grade_difficulty(
+        migrated_chain,
+        compact.get("status", "stuck"),
+    )
+    allowed_analysis_fields = {
+        "name",
+        "original",
+        "solved_grid",
+        "unique_solution",
+        "chain",
+        "status",
+        "grading",
+        "analysis_mode",
+        "profile_difficulty_window",
+    }
+    return {
+        key: value
+        for key, value in compact.items()
+        if key in allowed_analysis_fields
+    }
 
 
 def compact_analysis_archive(dry_run=True):
     """
-    Converte i file di analisi esistenti nel formato compatto schema 3.
+    Converte i file di analisi esistenti nel formato compatto corrente.
 
     Il contenuto logico e la versione del solver non cambiano. Con
     ``dry_run=True`` restituisce soltanto la stima delle dimensioni.
@@ -828,15 +955,26 @@ def compact_analysis_archive(dry_run=True):
     before_bytes = 0
     after_bytes = 0
     rewritten_files = 0
+    invalid_files = []
 
     for path in paths:
         payload = _read_json(path)
-        before_bytes += path.stat().st_size
+        original_size = path.stat().st_size
+        before_bytes += original_size
         compact_payload = dict(payload)
-        compact_payload["schema_version"] = 3
-        compact_payload["analysis"] = _compact_analysis_for_storage(
-            payload.get("analysis", {})
-        )
+        compact_payload["schema_version"] = ANALYSIS_SCHEMA_VERSION
+        compact_payload["analysis_version"] = ANALYSIS_VERSION
+        try:
+            compact_payload["analysis"] = _compact_analysis_for_storage(
+                payload.get("analysis", {})
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            invalid_files.append({
+                "path": str(path),
+                "reason": str(error),
+            })
+            after_bytes += original_size
+            continue
         encoded = json.dumps(
             compact_payload,
             ensure_ascii=False,
@@ -851,6 +989,9 @@ def compact_analysis_archive(dry_run=True):
     return {
         "dry_run": dry_run,
         "file_count": len(paths),
+        "valid_file_count": len(paths) - len(invalid_files),
+        "invalid_file_count": len(invalid_files),
+        "invalid_files": invalid_files,
         "rewritten_file_count": rewritten_files,
         "before_bytes": before_bytes,
         "after_bytes": after_bytes,
@@ -927,7 +1068,7 @@ def save_sudoku(grid, name=None, metadata=None):
     """
     _ensure_sudoku_directories()
 
-    grid = normalise_sudoku_grid(grid)
+    grid = validate_unique_sudoku(grid)
     puzzle_id = sudoku_id(grid)
     path = _puzzle_path(puzzle_id)
 
@@ -951,6 +1092,7 @@ def save_sudoku(grid, name=None, metadata=None):
         "name": stored_name,
         "grid": _grid_to_string(grid),
         "clues": int(np.count_nonzero(grid)),
+        "unique_solution": True,
         "metadata": _to_json_value(stored_metadata),
         **canonical_fields,
         "created_at": existing.get(
@@ -1053,13 +1195,16 @@ def load_sudoku(reference):
     path = _resolve_puzzle_path(reference)
     payload = _read_json(path)
 
-    if payload.get("schema_version", 1) not in (1, PUZZLE_SCHEMA_VERSION):
+    if payload.get("schema_version", 1) not in (1, 2, PUZZLE_SCHEMA_VERSION):
         raise ValueError(
             f"Versione del file Sudoku non supportata: "
             f"{payload.get('schema_version')}."
         )
 
     grid = normalise_sudoku_grid(payload["grid"])
+    payload["unique_solution"] = (
+        sds.count_solutions(grid, limit=2) == 1
+    )
 
     if not payload.get("canonical_id"):
         # Compatibilità di lettura con lo schema 1. La migrazione esplicita
@@ -1329,13 +1474,14 @@ def list_sudokus(
             "canonical_id": payload.get("canonical_id"),
             "name": payload.get("name"),
             "clues": payload.get("clues"),
-            "difficulty_label": grading.get("label"),
-            "technique_label": grading.get("technique_label"),
-            "hardest_technique": grading.get("hardest_technique"),
-            "hodoku_level": grading.get("hodoku_level"),
-            "hodoku_hardest_step_level": grading.get(
-                "hodoku_hardest_step_level"
+            "technical_difficulty_label": grading.get(
+                "technical_difficulty_label"
             ),
+            "hardest_technique": grading.get("hardest_technique"),
+            "resolution_load_level": grading.get(
+                "resolution_load_level"
+            ),
+            "unique_solution": payload.get("unique_solution"),
             "is_canonical": payload.get("is_canonical"),
             "isomorphic_variant_count": canonical_info.get(
                 "isomorphic_variant_count",
@@ -1530,17 +1676,32 @@ def migrate_canonical_archive(dry_run=True, workers=None):
         path, payload = item
         version = payload.get("schema_version", 1)
 
-        if version not in (1, PUZZLE_SCHEMA_VERSION):
+        if version not in (1, 2, PUZZLE_SCHEMA_VERSION):
             raise ValueError(
                 f"Versione puzzle non supportata in {path}: {version}."
             )
 
-        grid = normalise_sudoku_grid(payload["grid"])
+        try:
+            grid = validate_unique_sudoku(payload["grid"])
+        except (TypeError, ValueError) as error:
+            return {
+                "valid": False,
+                "path": path,
+                "id": str(payload.get("id", path.stem)),
+                "name": payload.get("name"),
+                "reason": str(error),
+            }
         canonical_fields = _canonical_fields(grid, payload)
-        return path, payload, {
-            **payload,
-            "schema_version": PUZZLE_SCHEMA_VERSION,
-            **canonical_fields,
+        return {
+            "valid": True,
+            "path": path,
+            "payload": payload,
+            "updated": {
+                **payload,
+                "schema_version": PUZZLE_SCHEMA_VERSION,
+                "unique_solution": True,
+                **canonical_fields,
+            },
         }
 
     if workers == 1 or len(payloads) < 2:
@@ -1549,11 +1710,26 @@ def migrate_canonical_archive(dry_run=True, workers=None):
         with ThreadPoolExecutor(max_workers=workers) as executor:
             prepared = list(executor.map(prepare_record, payloads))
 
+    invalid_puzzles = [
+        {
+            "id": item["id"],
+            "name": item["name"],
+            "path": str(item["path"]),
+            "reason": item["reason"],
+        }
+        for item in prepared
+        if not item["valid"]
+    ]
     prepared_records = []
     classes = {}
     updated_files = 0
 
-    for path, payload, updated in prepared:
+    for item in prepared:
+        if not item["valid"]:
+            continue
+        path = item["path"]
+        payload = item["payload"]
+        updated = item["updated"]
         if updated != payload:
             updated_files += 1
 
@@ -1641,7 +1817,10 @@ def migrate_canonical_archive(dry_run=True, workers=None):
     return {
         "dry_run": dry_run,
         "workers": workers,
-        "puzzle_count": len(prepared_records),
+        "puzzle_count": len(payloads),
+        "valid_puzzle_count": len(prepared_records),
+        "invalid_puzzle_count": len(invalid_puzzles),
+        "invalid_puzzles": invalid_puzzles,
         "canonical_class_count": len(classes),
         "isomorphic_duplicate_count": (
             len(prepared_records) - len(classes)
@@ -1682,7 +1861,7 @@ def save_analysis(analysis):
     analysis["canonical_id"] = canonical_id
 
     payload = {
-        "schema_version": 3,
+        "schema_version": ANALYSIS_SCHEMA_VERSION,
         "analysis_version": ANALYSIS_VERSION,
         "puzzle_id": puzzle_id,
         "canonical_id": canonical_id,

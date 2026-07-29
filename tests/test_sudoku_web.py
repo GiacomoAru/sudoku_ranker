@@ -81,8 +81,8 @@ class SudokuWebTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("Sudoku Logic Lab", response.text)
-        self.assertIn("HoDoKu stimato", response.text)
-        self.assertIn("<dt>Perceived</dt>", response.text)
+        self.assertIn("<dt>Carico di risoluzione</dt>", response.text)
+        self.assertIn("<dt>Difficoltà percepita</dt>", response.text)
         self.assertNotIn("Perceived 1–10", response.text)
         self.assertIn('inputmode="numeric"', response.text)
         self.assertIn('class="metric-help"', response.text)
@@ -171,19 +171,16 @@ class SudokuWebTests(unittest.TestCase):
         self.assertIn(analysis["status"], {"solved", "stuck"})
         self.assertIn("grading", analysis)
         self.assertIn("chain", analysis)
-        self.assertIn("hodoku_score", analysis["grading"])
-        self.assertIn("hodoku_level", analysis["grading"])
-        self.assertEqual(
-            analysis["grading"]["perceived_scale"],
-            "1-10",
+        self.assertTrue(analysis["unique_solution"])
+        self.assertIn("technical_difficulty", analysis["grading"])
+        self.assertIn("resolution_load", analysis["grading"])
+        self.assertIn("resolution_load_level", analysis["grading"])
+        self.assertGreater(
+            analysis["grading"]["perceived_difficulty"],
+            0.0,
         )
-        self.assertTrue(
-            1.0
-            <= analysis["grading"]["perceived_difficulty"]
-            <= 10.0
-        )
-        self.assertIn("hodoku_score", analysis["chain"][0])
-        self.assertIn("hodoku_level", analysis["chain"][0])
+        self.assertIn("technical_difficulty", analysis["chain"][0])
+        self.assertIn("resolution_load", analysis["chain"][0])
         self.assertTrue(
             (self.online_root / "puzzles" / f"{payload['puzzle_id']}.json")
             .exists()
@@ -224,13 +221,14 @@ class SudokuWebTests(unittest.TestCase):
             analysis_path.read_text(encoding="utf-8")
         )
         stored_move = stored_analysis["analysis"]["chain"][0]
-        self.assertEqual(stored_analysis["schema_version"], 3)
+        self.assertEqual(stored_analysis["schema_version"], 4)
         self.assertIsInstance(
             stored_analysis["analysis"]["original"],
             str,
         )
-        self.assertNotIn("applicable_by_technique", stored_move)
-        self.assertIn(
+        self.assertIn("available_by_technique", stored_move)
+        self.assertNotIn("availability", stored_move)
+        self.assertNotIn(
             "applicable_by_technique",
             archive.load_analysis(payload["puzzle_id"])["chain"][0],
         )

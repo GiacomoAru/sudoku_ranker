@@ -1,15 +1,8 @@
 '''
 ## 5. Visualizzazione
 
-Le visualizzazioni distinguono sempre tra:
-
-- prove logiche enumerate;
-- risultati complessivi distinti;
-- conclusioni atomiche uniche.
-
-La misura predefinita e il numero di conclusioni atomiche uniche, per evitare
-che tecniche basate su catene dominino i grafici soltanto perche possono
-produrre molte prove equivalenti.
+Le visualizzazioni usano il numero di mosse logiche distinte, già limitato dal
+solver per evitare che le tecniche a catena dominino grafici e tempi.
 
 `plot_technique_activity` offre tre granularita, combinabili con la
 profondita `deep` oppure `superficial`:
@@ -35,7 +28,6 @@ import numpy as np
 import pandas as pd
 from matplotlib.ticker import MaxNLocator
 
-from .difficulty import hodoku_technique_rating
 from .techniques import (
     TECHNIQUE_FAMILY,
     TECHNIQUE_FAMILY_ORDER,
@@ -109,21 +101,11 @@ _HEATMAP_VIEW_ALIASES = {
 }
 
 _HEATMAP_METRIC_ALIASES = {
-    "conclusion": "conclusion_count",
-    "conclusions": "conclusion_count",
-    "conclusione": "conclusion_count",
-    "conclusioni": "conclusion_count",
-    "conclusion_count": "conclusion_count",
-    "outcome": "distinct_outcome_count",
-    "outcomes": "distinct_outcome_count",
-    "risultato": "distinct_outcome_count",
-    "risultati": "distinct_outcome_count",
-    "distinct_outcome_count": "distinct_outcome_count",
-    "proof": "proof_count",
-    "proofs": "proof_count",
-    "prova": "proof_count",
-    "prove": "proof_count",
-    "proof_count": "proof_count",
+    "move": "move_count",
+    "moves": "move_count",
+    "mossa": "move_count",
+    "mosse": "move_count",
+    "move_count": "move_count",
 }
 
 _HEATMAP_SCALE_ALIASES = {
@@ -138,9 +120,7 @@ _HEATMAP_SCALE_ALIASES = {
 }
 
 _METRIC_LABELS = {
-    "conclusion_count": "Conclusioni uniche",
-    "distinct_outcome_count": "Risultati distinti",
-    "proof_count": "Prove enumerate",
+    "move_count": "Mosse disponibili",
 }
 
 
@@ -237,18 +217,11 @@ def _difficulty_histogram_levels(difficulties):
 
 
 def _same_technique_conclusions(move):
-    """Numero di conclusioni attribuite alla tecnica scelta nello step."""
-    availability = move.get("availability", {})
-    technique = move.get("technique")
-
-    entry = availability.get("by_technique", {}).get(technique)
-    if entry is not None:
-        return max(int(entry.get("conclusion_count", 0)), 1)
-
+    """Numero di mosse disponibili della tecnica scelta nello step."""
     return max(
         int(
-            move.get("applicable_by_technique", {}).get(
-                technique,
+            move.get("available_by_technique", {}).get(
+                move.get("technique"),
                 1,
             )
         ),
@@ -257,33 +230,11 @@ def _same_technique_conclusions(move):
 
 
 def _comparable_alternatives(chain):
-    """Restituisce la numerosità minima più significativa disponibile."""
-    if all(
-        move.get("n_best_distinct_outcomes") is not None
+    """Restituisce le mosse disponibili alla difficoltà minima."""
+    return [
+        max(int(move.get("frontier_move_count", 1)), 1)
         for move in chain
-    ):
-        values = [
-            max(int(move["n_best_distinct_outcomes"]), 1)
-            for move in chain
-        ]
-        return values, "Risultati distinti alla difficoltà minima"
-
-    if all(move.get("n_best_conclusions") is not None for move in chain):
-        values = [
-            max(int(move["n_best_conclusions"]), 1)
-            for move in chain
-        ]
-        return values, "Conclusioni uniche alla difficoltà minima"
-
-    if all(move.get("n_best_alternatives") is not None for move in chain):
-        values = [
-            max(int(move["n_best_alternatives"]), 1)
-            for move in chain
-        ]
-        return values, "Alternative alla stessa difficoltà"
-
-    values = [_same_technique_conclusions(move) for move in chain]
-    return values, "Conclusioni della tecnica scelta"
+    ], "Mosse disponibili alla difficoltà minima"
 
 
 def aggregate_difficulty_chain(analyses):
@@ -323,32 +274,20 @@ def aggregate_difficulty_chain(analyses):
             if len(chain) > step_index
         ]
         difficulties = np.asarray([
-            float(move["difficulty"])
+            float(move["technical_difficulty"])
             for move in active_moves
         ])
-        best_outcomes = np.asarray([
+        frontier_moves = np.asarray([
             _positive_step_value(
                 move,
-                "n_best_distinct_outcomes",
-                "n_best_conclusions",
-                "n_best_alternatives",
+                "frontier_move_count",
             )
             for move in active_moves
         ], dtype=float)
-        best_conclusions = np.asarray([
+        available_moves = np.asarray([
             _positive_step_value(
                 move,
-                "n_best_conclusions",
-                "n_best_alternatives",
-            )
-            for move in active_moves
-        ], dtype=float)
-        all_outcomes = np.asarray([
-            _positive_step_value(
-                move,
-                "n_distinct_outcomes",
-                "n_conclusions",
-                "n_alternatives",
+                "available_move_count",
             )
             for move in active_moves
         ], dtype=float)
@@ -357,18 +296,19 @@ def aggregate_difficulty_chain(analyses):
             "step": step_index + 1,
             "puzzle_count": len(active_moves),
             "coverage": len(active_moves) / analysis_count,
-            "mean_difficulty": float(difficulties.mean()),
-            "std_difficulty": float(difficulties.std()),
-            "median_difficulty": float(np.median(difficulties)),
-            "mean_best_distinct_outcomes": float(best_outcomes.mean()),
-            "mean_best_conclusions": float(best_conclusions.mean()),
-            "mean_distinct_outcomes": float(all_outcomes.mean()),
+            "mean_technical_difficulty": float(difficulties.mean()),
+            "std_technical_difficulty": float(difficulties.std()),
+            "median_technical_difficulty": float(
+                np.median(difficulties)
+            ),
+            "mean_frontier_move_count": float(frontier_moves.mean()),
+            "mean_available_move_count": float(available_moves.mean()),
         })
 
     per_puzzle_histograms = []
     for chain in chains:
         levels = _difficulty_histogram_levels([
-            float(move["difficulty"])
+            float(move["technical_difficulty"])
             for move in chain
         ])
         per_puzzle_histograms.append(
@@ -390,8 +330,8 @@ def aggregate_difficulty_chain(analyses):
         ),
     })
 
-    max_difficulties = np.asarray([
-        max(float(move["difficulty"]) for move in chain)
+    technical_difficulties = np.asarray([
+        max(float(move["technical_difficulty"]) for move in chain)
         for chain in chains
     ])
     grading_rows = [
@@ -399,8 +339,8 @@ def aggregate_difficulty_chain(analyses):
         for analysis in analyses
         if analysis.get("chain")
     ]
-    hodoku_scores = np.asarray([
-        float(grading.get("hodoku_score", 0))
+    resolution_loads = np.asarray([
+        float(grading.get("resolution_load", 0))
         for grading in grading_rows
     ])
     perceived_scores = np.asarray([
@@ -408,7 +348,10 @@ def aggregate_difficulty_chain(analyses):
         for grading in grading_rows
     ])
     labels = [
-        analysis.get("grading", {}).get("label", "N/A")
+        analysis.get("grading", {}).get(
+            "technical_difficulty_label",
+            "N/A",
+        )
         for analysis in analyses
         if analysis.get("chain")
     ]
@@ -426,8 +369,10 @@ def aggregate_difficulty_chain(analyses):
             "std_steps": float(chain_lengths.std()),
             "min_steps": int(chain_lengths.min()),
             "max_steps": int(chain_lengths.max()),
-            "mean_max_difficulty": float(max_difficulties.mean()),
-            "mean_hodoku_score": float(hodoku_scores.mean()),
+            "mean_technical_difficulty": float(
+                technical_difficulties.mean()
+            ),
+            "mean_resolution_load": float(resolution_loads.mean()),
             "mean_perceived_difficulty": float(
                 perceived_scores.mean()
             ),
@@ -454,34 +399,23 @@ _FAMILY_TO_STRATEGY = _family_to_strategy_map()
 
 def _scope_for_step(step, depth):
     """Restituisce lo scope di inventario richiesto per uno step."""
-    availability = step.get("availability")
-
-    if availability:
-        if depth == "superficial":
-            return availability.get("frontier", {})
-        return availability
-
-    # Compatibilita con analisi precedenti al nuovo inventario.
-    if depth == "superficial":
-        by_technique = step.get(
-            "best_applicable_by_technique",
-            step.get("applicable_by_technique", {}),
-        )
-        by_family = step.get(
-            "best_applicable_by_family",
-            step.get("applicable_by_family", {}),
-        )
-    else:
-        by_technique = step.get("applicable_by_technique", {})
-        by_family = step.get("applicable_by_family", {})
+    by_technique = step.get(
+        "frontier_by_technique"
+        if depth == "superficial"
+        else "available_by_technique",
+        {},
+    )
+    by_family = defaultdict(int)
+    for technique, value in by_technique.items():
+        by_family[technique_family(technique)] += int(value)
 
     return {
         "by_technique": {
-            name: {"conclusion_count": int(value)}
+            name: {"move_count": int(value)}
             for name, value in by_technique.items()
         },
         "by_family": {
-            name: {"conclusion_count": int(value)}
+            name: {"move_count": int(value)}
             for name, value in by_family.items()
         },
     }
@@ -708,34 +642,13 @@ def draw_step(analysis, step_index, figsize=(5.4, 5.4), show=True):
     )
 
     same_technique = _same_technique_conclusions(move)
-    best_conclusions = max(
-        int(
-            move.get(
-                "n_best_conclusions",
-                move.get("n_best_alternatives", 1),
-            )
-        ),
-        1,
-    )
-    total_conclusions = max(
-        int(
-            move.get(
-                "n_conclusions",
-                move.get("n_alternatives", 1),
-            )
-        ),
-        1,
-    )
-    proofs = move.get("n_proofs")
-
+    frontier_moves = max(int(move.get("frontier_move_count", 1)), 1)
+    total_moves = max(int(move.get("available_move_count", 1)), 1)
     availability_text = (
-        f"Conclusioni della tecnica: {same_technique} | "
-        f"alla difficoltà minima: {best_conclusions} | "
-        f"nell inventario: {total_conclusions}"
+        f"Mosse della tecnica: {same_technique} | "
+        f"alla difficoltà minima: {frontier_moves} | "
+        f"nell'inventario: {total_moves}"
     )
-
-    if proofs is not None:
-        availability_text += f" | prove consolidate: {int(proofs)}"
 
     fig, ax = plt.subplots(figsize=figsize)
     draw_grid(
@@ -747,7 +660,7 @@ def draw_step(analysis, step_index, figsize=(5.4, 5.4), show=True):
     caption = (
         f"Step {move['step']}/{len(chain)} - "
         f"{move['technique']} "
-        f"(SE {float(move['difficulty']):g})\n"
+        f"(difficoltà tecnica {float(move['technical_difficulty']):g})\n"
         f"{availability_text}\n"
         f"{move['description']}"
     )
@@ -781,7 +694,10 @@ def _plot_difficulty_chain_single(analysis, figsize=(13, 4.6), show=True):
         return None
 
     steps = [move["step"] for move in chain]
-    difficulties = [float(move["difficulty"]) for move in chain]
+    difficulties = [
+        float(move["technical_difficulty"])
+        for move in chain
+    ]
     families = [
         move.get("family") or technique_family(move["technique"])
         for move in chain
@@ -833,19 +749,21 @@ def _plot_difficulty_chain_single(analysis, figsize=(13, 4.6), show=True):
     ax1.set_ylim(0.75, difficulty_top + 0.25)
 
     grading = analysis.get("grading", {})
-    hodoku_score = grading.get("hodoku_score")
-    hodoku_level = grading.get("hodoku_level")
+    resolution_load = grading.get("resolution_load")
+    resolution_load_level = grading.get("resolution_load_level")
     perceived = grading.get("perceived_difficulty")
     rating_summary = ""
-    if hodoku_score is not None:
+    if resolution_load is not None:
         rating_summary += (
-            f" · HoDoKu {hodoku_score} ({hodoku_level})"
+            f" · carico {resolution_load} ({resolution_load_level})"
         )
     if perceived is not None:
-        rating_summary += f" · perceived {float(perceived):.2f}/10"
+        rating_summary += (
+            f" · difficoltà percepita {float(perceived):.2f}"
+        )
     ax1.set_title(
         f"Catena logica ({analysis.get('name', 'puzzle')}) - "
-        f"{grading.get('label', 'non classificato')}"
+        f"{grading.get('technical_difficulty_label', 'non classificato')}"
         f"{rating_summary}"
     )
     ax1.grid(axis="both", alpha=0.22, linewidth=0.7)
@@ -975,16 +893,16 @@ def _plot_difficulty_chain_aggregate(
 
     steps = steps_frame["step"].to_numpy(dtype=int)
     mean_difficulty = steps_frame[
-        "mean_difficulty"
+        "mean_technical_difficulty"
     ].to_numpy(dtype=float)
     std_difficulty = steps_frame[
-        "std_difficulty"
+        "std_technical_difficulty"
     ].to_numpy(dtype=float)
-    mean_best_outcomes = steps_frame[
-        "mean_best_distinct_outcomes"
+    mean_frontier_moves = steps_frame[
+        "mean_frontier_move_count"
     ].to_numpy(dtype=float)
-    mean_best_conclusions = steps_frame[
-        "mean_best_conclusions"
+    mean_available_moves = steps_frame[
+        "mean_available_move_count"
     ].to_numpy(dtype=float)
 
     fig, (ax1, ax2) = plt.subplots(
@@ -1021,25 +939,25 @@ def _plot_difficulty_chain_aggregate(
     alternative_axis = ax1.twinx()
     alternative_axis.plot(
         steps,
-        mean_best_outcomes,
+        mean_frontier_moves,
         color="#e76f51",
         linewidth=1.35,
-        label="Risultati distinti minimi medi",
+        label="Mosse minime medie",
     )
     alternative_axis.plot(
         steps,
-        mean_best_conclusions,
+        mean_available_moves,
         color="#2a9d8f",
         linewidth=1.1,
         linestyle="--",
-        label="Conclusioni minime medie",
+        label="Mosse disponibili medie",
     )
     alternative_axis.set_ylabel("Numerosità media alla difficoltà minima")
     alternative_axis.set_ylim(
         0,
         max(
-            float(mean_best_outcomes.max()),
-            float(mean_best_conclusions.max()),
+            float(mean_frontier_moves.max()),
+            float(mean_available_moves.max()),
         ) * 1.12 + 0.2,
     )
 
@@ -1058,10 +976,12 @@ def _plot_difficulty_chain_aggregate(
     title = (
         f"Catena media di {summary['analysis_count']} puzzle — "
         f"{summary['mean_steps']:.1f} ± {summary['std_steps']:.1f} step, "
-        f"max SE medio {summary['mean_max_difficulty']:.2f}\n"
-        f"HoDoKu medio {summary['mean_hodoku_score']:.0f}, "
-        f"perceived media "
-        f"{summary['mean_perceived_difficulty']:.2f}/10"
+        f"difficoltà tecnica media "
+        f"{summary['mean_technical_difficulty']:.2f}\n"
+        f"carico di risoluzione medio "
+        f"{summary['mean_resolution_load']:.0f}, "
+        f"difficoltà percepita media "
+        f"{summary['mean_perceived_difficulty']:.2f}"
     )
     ax1.set_title(title)
 
@@ -1145,7 +1065,7 @@ def _single_technique_activity_dataframe(
     analysis,
     depth="deep",
     view="extended",
-    metric="conclusions",
+    metric="moves",
     show_inactive=False,
 ):
     """
@@ -1235,7 +1155,7 @@ def aggregate_technique_activity_dataframe(
     analyses,
     depth="deep",
     view="extended",
-    metric="conclusions",
+    metric="moves",
     show_inactive=False,
 ):
     """
@@ -1344,7 +1264,7 @@ def technique_activity_dataframe(
     analysis,
     depth="deep",
     view="extended",
-    metric="conclusions",
+    metric="moves",
     show_inactive=False,
 ):
     """Costruisce la heatmap numerica per un'analisi o una lista."""
@@ -1372,7 +1292,7 @@ def plot_technique_activity(
     analysis,
     depth="deep",
     view="extended",
-    metric="conclusions",
+    metric="moves",
     scale="log",
     show_inactive=False,
     annotate="auto",
@@ -1619,11 +1539,11 @@ def gallery(
         grading = analysis["grading"]
         subtitle = (
             f"{analysis['name']}\n"
-            f"{grading['label']} "
-            f"(max SE {grading['max_difficulty']}, "
-            f"HoDoKu {grading.get('hodoku_score', 'N/A')}, "
-            f"perc. {grading.get('perceived_difficulty', 0):.2f}/10, "
-            f"{grading.get('n_steps', 0)} step)"
+            f"{grading['technical_difficulty_label']} "
+            f"(tecnica {grading['technical_difficulty']}, "
+            f"carico {grading.get('resolution_load', 'N/A')}, "
+            f"percepita {grading.get('perceived_difficulty', 0):.2f}, "
+            f"{grading.get('step_count', 0)} step)"
         )
         ax.set_title(subtitle, fontsize=9)
 
@@ -1648,37 +1568,18 @@ def summary_dataframe(analysis):
             move["technique"],
             family,
         )
-        hodoku = hodoku_technique_rating(move["technique"])
-
         rows.append({
             "step": move["step"],
             "tecnica": move["technique"],
             "famiglia": family,
             "strategia": strategy,
-            "difficolta": move["difficulty"],
-            "difficolta_se": move["difficulty"],
-            "hodoku_score": move.get("hodoku_score", hodoku["score"]),
-            "hodoku_livello": move.get(
-                "hodoku_level",
-                hodoku["level"],
-            ),
+            "difficolta_tecnica": move["technical_difficulty"],
+            "carico_risoluzione": move["resolution_load"],
             "difficolta_percepita": move.get(
                 "perceived_difficulty"
             ),
-            "conclusioni": move.get(
-                "n_conclusions",
-                move.get("n_alternatives"),
-            ),
-            "conclusioni_minime": move.get(
-                "n_best_conclusions",
-                move.get("n_best_alternatives"),
-            ),
-            "risultati_distinti": move.get("n_distinct_outcomes"),
-            "prove": move.get("n_proofs"),
-            "modalita_analisi": move.get(
-                "analysis_mode",
-                analysis.get("analysis_mode"),
-            ),
+            "mosse_disponibili": move.get("available_move_count"),
+            "mosse_frontiera": move.get("frontier_move_count"),
             "descrizione": move["description"],
         })
 
@@ -1698,43 +1599,24 @@ def analyses_summary_dataframe(analyses):
             "stato": analysis["status"],
             "modalita_analisi": analysis.get("analysis_mode", "legacy"),
             "finestra_profile": analysis.get("profile_difficulty_window"),
-            "difficolta": grading["label"],
-            "difficolta_tecnica": grading.get(
-                "technique_label",
-                grading["label"],
-            ),
-            "punteggio_classificazione": grading.get(
-                "classification_score",
-                grading["max_difficulty"],
-            ),
-            "carico": grading.get(
-                "workload_score",
-                grading.get("score", 0),
-            ),
+            "difficolta_tecnica_label": grading[
+                "technical_difficulty_label"
+            ],
+            "difficolta_tecnica": grading["technical_difficulty"],
+            "carico_risoluzione": grading["resolution_load"],
+            "livello_carico_risoluzione": grading[
+                "resolution_load_level"
+            ],
             "difficolta_percepita": grading.get(
                 "perceived_difficulty",
                 0,
             ),
-            "hodoku_score": grading.get("hodoku_score"),
-            "hodoku_livello": grading.get("hodoku_level"),
-            "hodoku_livello_step_massimo": grading.get(
-                "hodoku_hardest_step_level"
-            ),
-            "difficolta_massima": grading["max_difficulty"],
-            "numero_step": grading.get("n_steps", len(chain)),
-            "conclusioni_totali_osservate": sum(
-                int(step.get("n_conclusions", 0))
+            "numero_step": grading.get("step_count", len(chain)),
+            "mosse_totali_osservate": sum(
+                int(step.get("available_move_count", 0))
                 for step in chain
             ),
-            "prove_totali_osservate": sum(
-                int(step.get("n_proofs", 0))
-                for step in chain
-            ),
-            "step_non_banali": grading.get("nontrivial_steps"),
-            "step_avanzati": grading.get("advanced_steps"),
-            "solvibile_verificato": analysis.get(
-                "backtracking_verified_solvable"
-            ),
+            "soluzione_unica": analysis.get("unique_solution"),
             "id": analysis.get("puzzle_id"),
         })
 

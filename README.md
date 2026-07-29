@@ -26,14 +26,16 @@ tests/          test automatici
 
 Ogni analisi espone tre valori complementari:
 
-- `max_difficulty`: rating Sudoku Explainer della tecnica massima;
-- `hodoku_score` e `hodoku_level`: stima basata sui default HoDoKu 2.2.4;
-- `perceived_difficulty`: carico percepito riscalato monotonamente da 1 a 10.
+- **Difficoltà Tecnica** (`technical_difficulty`): massimo rating Sudoku
+  Explainer richiesto;
+- **Carico di risoluzione** (`resolution_load`): somma dei punteggi HoDoKu;
+- **Difficoltà percepita** (`perceived_difficulty`): valore sulla stessa scala
+  numerica SE, corretto soltanto per scarsità e ripetizione delle mosse.
 
-La label editoriale è determinata dalla tecnica cognitivamente più difficile,
-non dal numero di passi. Coppie e locked candidates restano sotto i basic fish
-e i single-digit pattern: X-Wing e Skyscraper sono quindi distinti come
-tecniche `Hard` secondo la tassonomia HoDoKu.
+La label dipende esclusivamente dalla Difficoltà Tecnica. HoDoKu e difficoltà
+percepita sono valori indipendenti, utili per confrontare e ordinare i puzzle.
+Ogni Sudoku salvato o analizzato deve avere esattamente una soluzione; questa
+garanzia è esposta anche nel JSON come `unique_solution`.
 
 ## Riconoscimento da foto
 
@@ -71,15 +73,15 @@ raggiungibile dal telefono vedere [WEB_LAN.md](WEB_LAN.md).
 1. **Modificare interfaccia per:**
 
    1. Modificare manualmente i campi e le scritte del sito
-      2. valutare la migrazione della chiave dati `perceived_difficulty` a `perceived`, preservando gli archivi esistenti.
+      1. ripulire scritte superflue o fuori contesto
+      3. inserire riferimento a github e creatore
    2. ★ rivedere completamente meccanismo di evidenziazione celle per spiegazione della mossa, chiarire celle principali, secondarie ecc. Mostrare anche i candidates per cella e rivedere metodi di evidenziazione singola di candidati.
-
    3. riordinare il json per posticipare catena e altre liste
    4. cambiare i campi necessari al salvataggio del sudoku, renderli opzionali e nascosti da tendina, e gestire normalizzazione di testo ecc. Magari rivedere anche 
    tecniche di salvataggio e dati salvati
    5. rendere le varie "opzionni" nascoste in tendida di default, in modo da non mostrare tutto ma solo quel che si vuole.
    6. ★ Renderlo carino da telefono.
-   7. aggiungere un riferimento tra step visualizzato e punto della catena nel grafico o heatmap
+   7. aggiungere un riferimento tra step visualizzato e punto della catena nel grafico o heatmap, magari usare plotly che è più adatta per  interazione web?
    10. creare immagini "vuote" da mostrare al caricamento pagina e quando si invai un sudoku irrisolvibiel
    11. importare immagini oltre a scattarle
 
@@ -87,15 +89,19 @@ raggiungibile dal telefono vedere [WEB_LAN.md](WEB_LAN.md).
    1. il collegamento è lentiiiissimo, normale? soprattutto per le foto
    2. favicon.io ??? risolvere
    3. attualmente salva tutte le foto anche quelle senza sudoku... cercare di vfare una scrematura
+   4. gestione privacy
+   5. sicurezza database
+   6. cooldown necessari per  utente?
 
 3. **Modifiche OCR**
    1. ★ creare riconoscimento estremi griglia, e dare la possibilità di modificarli sopra la foto, anche NON quadrato causa deformazioni prospettiche, poi avendo gli estremi continuare con la normale pipeline, circa come googledrive fa la scanerizzazione documenti
+   2. riuscire a riconoscere bene temi scuri, magari usando il negativo?
 
-2. **Migliorare il solver**
-   1. chiarire stato "stuck" e quando un sudoku non ha soluzione unica, magari darne una e aggiungere l'ultimo step di soluzione che è andare a caso.
-   1. gestire casi triviali di sudoku che attualmente causano una lunga analisi (1 solo numero)
+2. **Migliorare il solver** IMPORTANTISSIMO, CREDO CHE NON VENGA SEGUITO L'ORDINAMENTO DELLE TECNICHE PER SEMPLICITA SE!!!!
+   0. Errori tecniche:
+      1.  sckyscraper non funzionante, eb4871d2c662723a2fd3 non lo trova
+      2. Naked Single viene ignorato e si passa a pointing, f0814d64e9a285e72bc0.
    2. migliorare ricerca profile:
-      1. in modo da non cercare tutte le tecniche possibili se richiedono molta computazione, magari limitare massimo a >= 10??
       2. ridurre finestra standard a 2
    3. grafici:
       1. scala logaritmica nella catena per l'asse della numerosità di tecniche, ma con 1 allineato con uno a sinistra
@@ -103,6 +109,7 @@ raggiungibile dal telefono vedere [WEB_LAN.md](WEB_LAN.md).
 
    4. miglirare stampe del server rispetto a analisi
    5. implementare pattern engine per Unique Loop (6+ cells)
+   
 
 3. **Integrare riconoscimento Sudoku via foto:**
    1. migliorare periodicamente con le nuove foto
@@ -113,4 +120,4 @@ raggiungibile dal telefono vedere [WEB_LAN.md](WEB_LAN.md).
    2. trivialize
    3. simmetrize
 
-5. **Implementare generatore offline di Sudoku ed esplorare la generazione e difficoltà.**
+5. **Implementare generatore offline di Sudoku**

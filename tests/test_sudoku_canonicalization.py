@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -112,7 +113,7 @@ class CanonicalizationTests(unittest.TestCase):
         def canonical_step(move, transform):
             return (
                 move["technique"],
-                move["difficulty"],
+                move["technical_difficulty"],
                 tuple(sorted(
                     transform.map_candidate(*placement)
                     for placement in move["placements"]
@@ -180,6 +181,57 @@ class CanonicalArchiveTests(unittest.TestCase):
         self.assertEqual(
             {item["name"] for item in canonical_class["variants"]},
             {"original", "randomised"},
+        )
+
+    def test_archive_rejects_non_unique_puzzles_before_writing(self):
+        ambiguous = "1" + ("0" * 80)
+
+        with self.assertRaisesRegex(ValueError, "soluzione unica"):
+            archive.save_sudoku(ambiguous, name="ambiguo")
+
+        self.assertEqual(
+            list(archive.SUDOKU_PUZZLES_DIR.glob("*.json")),
+            [],
+        )
+        self.assertEqual(
+            list(archive.SUDOKU_CANONICAL_DIR.glob("*.json")),
+            [],
+        )
+
+    def test_analysis_rejects_non_unique_puzzles_before_logic_search(self):
+        ambiguous = "1" + ("0" * 80)
+
+        with mock.patch.object(solver, "solve_and_log") as logical_solver:
+            with self.assertRaisesRegex(ValueError, "soluzione unica"):
+                solver.analyse_puzzle(ambiguous)
+
+        logical_solver.assert_not_called()
+
+    def test_migration_reports_legacy_non_unique_records(self):
+        archive._ensure_sudoku_directories()
+        ambiguous = "1" + ("0" * 80)
+        puzzle_id = archive.sudoku_id(ambiguous)
+        archive._puzzle_path(puzzle_id).write_text(
+            json.dumps({
+                "schema_version": 1,
+                "id": puzzle_id,
+                "name": "legacy_ambiguo",
+                "grid": ambiguous,
+            }),
+            encoding="utf-8",
+        )
+
+        report = archive.migrate_canonical_archive(
+            dry_run=True,
+            workers=1,
+        )
+
+        self.assertEqual(report["puzzle_count"], 1)
+        self.assertEqual(report["valid_puzzle_count"], 0)
+        self.assertEqual(report["invalid_puzzle_count"], 1)
+        self.assertEqual(
+            report["invalid_puzzles"][0]["id"],
+            puzzle_id,
         )
 
     def test_delete_sudoku_removes_record_analyses_cache_and_empty_class(self):
@@ -298,7 +350,8 @@ class CanonicalArchiveTests(unittest.TestCase):
         )
 
         self.assertEqual(applied["updated_puzzle_file_count"], 2)
-        self.assertEqual(migrated["schema_version"], 2)
+        self.assertEqual(migrated["schema_version"], 3)
+        self.assertTrue(migrated["unique_solution"])
         self.assertEqual(migrated["created_at"], timestamp)
         self.assertEqual(migrated["updated_at"], timestamp)
         self.assertIn("canonical_id", migrated)

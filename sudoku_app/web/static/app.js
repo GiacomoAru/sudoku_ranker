@@ -236,22 +236,24 @@ function renderResult(payload) {
   currentName = payload.name || "sudoku-analysis";
 
   document.querySelector("#result-name").textContent = payload.name;
-  document.querySelector("#difficulty-label").textContent =
-    grading.label || "N/A";
-  document.querySelector("#max-difficulty").textContent =
-    grading.max_difficulty ?? "—";
-  document.querySelector("#hodoku-rating").textContent =
-    Number.isFinite(grading.hodoku_score)
-      ? `${grading.hodoku_score} · ${grading.hodoku_level || "N/A"}`
+  document.querySelector("#technical-difficulty-label").textContent =
+    grading.technical_difficulty_label || "N/A";
+  document.querySelector("#technical-difficulty").textContent =
+    grading.technical_difficulty ?? "—";
+  document.querySelector("#resolution-load").textContent =
+    Number.isFinite(grading.resolution_load)
+      ? `${grading.resolution_load} · ${grading.resolution_load_level || "N/A"}`
       : "—";
-  document.querySelector("#perceived").textContent =
+  document.querySelector("#perceived-difficulty").textContent =
     Number.isFinite(grading.perceived_difficulty)
       ? grading.perceived_difficulty.toFixed(2)
       : "—";
   document.querySelector("#step-count").textContent =
-    grading.n_steps ?? payload.analysis.chain?.length ?? "—";
+    grading.step_count ?? payload.analysis.chain?.length ?? "—";
   document.querySelector("#analysis-status").textContent =
     payload.analysis.status || "—";
+  document.querySelector("#unique-solution").textContent =
+    payload.analysis.unique_solution ? "Unica" : "Non verificata";
 
   const duplicateText = payload.is_isomorphic_duplicate
     ? ` · ${payload.isomorphic_variant_count} varianti isomorfe`
@@ -330,10 +332,10 @@ function prepareSolutionPlayer(analysis) {
       grid: move.grid_after,
       title: `Passaggio ${move.step}`,
       technique: (
-        `${move.technique} · SE ${move.difficulty}` +
+        `${move.technique} · tecnica ${move.technical_difficulty}` +
         (
-          Number.isFinite(move.hodoku_score)
-            ? ` · HoDoKu +${move.hodoku_score}`
+          Number.isFinite(move.resolution_load)
+            ? ` · carico +${move.resolution_load}`
             : ""
         )
       ),

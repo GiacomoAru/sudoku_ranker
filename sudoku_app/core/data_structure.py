@@ -225,39 +225,69 @@ def backtracking_solve(grid):
 
 
 def count_solutions(grid, limit=2):
-    """Count solutions up to `limit` (stops early). Used to check that a
-    generated/edited puzzle has a unique solution before using it as a demo."""
+    """Conta le soluzioni fino a ``limit`` scegliendo sempre la cella MRV."""
     g = np.array(grid, dtype=int).copy()
+    for unit in UNITS:
+        values = [
+            int(g[row, column])
+            for row, column in unit
+            if int(g[row, column]) != 0
+        ]
+        if len(values) != len(set(values)):
+            return 0
+
     count = 0
 
-    def find_empty():
+    def possible_values(r, c):
+        used = (
+            set(g[r, :].tolist())
+            | set(g[:, c].tolist())
+        )
+        br, bc = 3 * (r // 3), 3 * (c // 3)
+        used |= set(
+            g[br:br + 3, bc:bc + 3]
+            .flatten()
+            .tolist()
+        )
+        return ALL_DIGITS - used
+
+    def find_best_empty():
+        best_position = None
+        best_candidates = None
+
         for r in range(9):
             for c in range(9):
-                if g[r, c] == 0:
-                    return r, c
-        return None
+                if g[r, c] != 0:
+                    continue
+                candidates = possible_values(r, c)
+                if not candidates:
+                    return (r, c), set()
+                if (
+                    best_candidates is None
+                    or len(candidates) < len(best_candidates)
+                ):
+                    best_position = (r, c)
+                    best_candidates = candidates
+                    if len(best_candidates) == 1:
+                        return best_position, best_candidates
 
-    def valid(r, c, v):
-        if v in g[r, :] or v in g[:, c]:
-            return False
-        br, bc = 3 * (r // 3), 3 * (c // 3)
-        if v in g[br:br + 3, bc:bc + 3]:
-            return False
-        return True
+        return best_position, best_candidates
 
     def solve():
         nonlocal count
-        pos = find_empty()
-        if pos is None:
+        position, candidates = find_best_empty()
+        if position is None:
             count += 1
             return count >= limit
-        r, c = pos
-        for v in range(1, 10):
-            if valid(r, c, v):
-                g[r, c] = v
-                if solve():
-                    return True
-                g[r, c] = 0
+        if not candidates:
+            return False
+
+        r, c = position
+        for value in sorted(candidates):
+            g[r, c] = value
+            if solve():
+                return True
+            g[r, c] = 0
         return False
 
     solve()

@@ -55,8 +55,9 @@ from .data_structure import *
 from . import logic_engine
 from . import difficulty as difficulty_model
 
+
 TECHNIQUE_DIFFICULTY = {
-    # Tecniche elementari (scala SE 1.2.1).
+    # Tecniche elementari (scala Sudoku Explainer 1.2.1).
     "Last Value": 1.0,
     "Hidden Single (Box)": 1.2,
     "Hidden Single (Row/Column)": 1.5,
@@ -75,13 +76,10 @@ TECHNIQUE_DIFFICULTY = {
     "Naked Triple": 3.6,
     "Swordfish": 3.8,
     "Hidden Triple": 4.0,
-
-    # Wings. SE chiama normalmente Y-Wing "XY-Wing".
     "Y-Wing": 4.2,
     "XYZ-Wing": 4.4,
 
-    # Fascia SE 4.5-5.0. I nomi granulari vengono mantenuti e distribuiti
-    # nella fascia indicativa fornita per i sottotipi.
+    # Unique pattern, subset grandi e BUG.
     "Unique Rectangle Type 1": 4.5,
     "Unique Rectangle Type 2": 4.6,
     "Unique Rectangle Type 3": 4.8,
@@ -101,21 +99,19 @@ TECHNIQUE_DIFFICULTY = {
     # Cicli e catene statiche.
     "Bidirectional X-Cycle": 6.5,
     "Bidirectional Y-Cycle": 6.5,
-    "Remote Pair": 6.5,       # Bidirectional Y-Cycle
-    "XY-Chain": 6.5,          # Bidirectional Y-Cycle
-    "XY-Cycle": 6.5,          # Bidirectional Y-Cycle
+    "Remote Pair": 6.5,
+    "XY-Chain": 6.5,
+    "XY-Cycle": 6.5,
     "Forcing X-Chain": 6.6,
-
-    # Nomi moderni mantenuti, rating della famiglia SE equivalente.
-    "Skyscraper": 6.6,        # Forcing X-Chain
-    "Two-String Kite": 6.6,  # Forcing X-Chain
-    "Empty Rectangle": 6.6,  # Forcing X-Chain
-    "Turbot Fish": 6.6,       # Forcing X-Chain breve
+    "Skyscraper": 6.6,
+    "Two-String Kite": 6.6,
+    "Empty Rectangle": 6.6,
+    "Turbot Fish": 6.6,
     "Forcing Chain": 7.0,
-    "Alternating Inference Chain": 7.0,  # Forcing Chain
+    "Alternating Inference Chain": 7.0,
     "Bidirectional Cycle": 7.0,
-    "Continuous Nice Loop": 7.0,         # Bidirectional Cycle
-    "W-Wing": 7.0,           # Forcing Chain
+    "Continuous Nice Loop": 7.0,
+    "W-Wing": 7.0,
 
     # Assunzioni, riduzioni multiple e propagazione dinamica.
     "Nishio": 7.5,
@@ -126,11 +122,13 @@ TECHNIQUE_DIFFICULTY = {
     "Dynamic Double Forcing Chain": 8.5,
     "Dynamic Cell Forcing Chain": 8.5,
     "Dynamic Region Forcing Chain": 8.5,
+
     "Dynamic Forcing Chain Plus": 9.0,
     "Dynamic Contradiction Forcing Chain Plus": 9.0,
     "Dynamic Double Forcing Chain Plus": 9.0,
     "Dynamic Cell Forcing Chain Plus": 9.0,
     "Dynamic Region Forcing Chain Plus": 9.0,
+
     "Nested Forcing Chain": 9.5,
     "Nested Contradiction Forcing Chain": 9.5,
     "Nested Double Forcing Chain": 9.5,
@@ -166,9 +164,8 @@ MODERN_TECHNIQUE_PARENT = {
     "Nested Region Forcing Chain": "Nested Forcing Chain",
 }
 
-# Intervalli SE delle tecniche implementate dal motore logico. Il rating
-# canonico usato dal solver è il minimo dell'intervallo; l'estremo superiore
-# documenta la crescita storica legata alla lunghezza/complessità della prova.
+# Intervalli SE documentati per le famiglie gestite dal motore logico.
+# Il rating pubblico della tecnica resta il valore canonico della tabella.
 LOGIC_ENGINE_TECHNIQUE_RANGES = {
     "Bidirectional X-Cycle": (6.5, 7.5),
     "Bidirectional Y-Cycle": (6.5, 7.5),
@@ -443,12 +440,10 @@ def technique_metadata(technique):
         "technique": technique,
         "family": family,
         "strategy": technique_strategy(technique, family),
-        "difficulty": _canonical_difficulty(technique),
+        "technical_difficulty": _canonical_difficulty(technique),
         "parent": MODERN_TECHNIQUE_PARENT.get(technique, technique),
-        "hodoku_score": hodoku["score"],
-        "hodoku_level": hodoku["level"],
-        "hodoku_mapping_estimated": hodoku["estimated"],
-        "hodoku_basis": hodoku["basis"],
+        "resolution_load": hodoku["score"],
+        "resolution_load_level": hodoku["level"],
     }
 
 
@@ -519,10 +514,7 @@ def _build_move(
         "family": canonical_family,
         "strategy": canonical_strategy,
         "difficulty": _canonical_difficulty(technique, difficulty),
-        "hodoku_score": hodoku["score"],
-        "hodoku_level": hodoku["level"],
-        "hodoku_mapping_estimated": hodoku["estimated"],
-        "hodoku_basis": hodoku["basis"],
+        "resolution_load": hodoku["score"],
         "description": description,
         "placements": placements,
         "eliminations": eliminations,
@@ -2155,12 +2147,6 @@ def aligned_pair_exclusion(state):
 
 
 # -------------------------------------------- logical implication engine
-_LOGIC_TECHNIQUE_FAMILY = {
-    technique: technique_family(technique)
-    for technique in TECHNIQUE_DIFFICULTY
-    if TECHNIQUE_DIFFICULTY[technique] >= 6.5
-}
-
 
 def _conclusion_effects(move):
     return _atomic_conclusions(
@@ -2275,7 +2261,6 @@ def _proof_metrics(deduction):
         "primary_cell_count": len(set(deduction.get("primary", ()))),
     }
 
-
 def _proof_rank(deduction, placements, eliminations):
     metrics = _proof_metrics(deduction)
     return (
@@ -2381,10 +2366,12 @@ def _logic_moves(state, technique, excluded_effects=()):
             if specific not in description:
                 description = f"{specific}: {description}"
 
+        metrics = _proof_metrics(deduction)
+
         proof = dict(deduction.get("logic", {}) or {})
         proof["parent_technique"] = technique
         proof["specific_technique"] = specific
-        proof["metrics"] = _proof_metrics(deduction)
+        proof["metrics"] = metrics
         proof["equivalent_proof_count"] = bucket["proof_count"]
 
         move = _build_move(
@@ -2640,9 +2627,6 @@ def nested_forcing_chain(state):
 
 
 # --------------------------------------------------------------- registry
-# Il registro pubblico resta una sequenza di coppie ``(difficolta_minima,
-# funzione)`` per compatibilita con il solver. ``TECHNIQUE_SPECS`` espone in
-# aggiunta chiavi stabili e il tipo di motore, utili per profiling e report.
 
 def _local_runner(key, function, *args):
     def runner(state):
@@ -2652,50 +2636,220 @@ def _local_runner(key, function, *args):
     return runner
 
 
+def _spec(key, engine, runner, techniques):
+    if isinstance(techniques, str):
+        techniques = (techniques,)
+    else:
+        techniques = tuple(techniques)
+
+    missing = [
+        technique
+        for technique in techniques
+        if technique not in TECHNIQUE_DIFFICULTY
+    ]
+    if missing:
+        raise KeyError(
+            f"Rating mancante per {key}: {', '.join(missing)}"
+        )
+
+    return {
+        "key": key,
+        "engine": engine,
+        "runner": runner,
+        "techniques": techniques,
+        "minimum_difficulty": min(
+            TECHNIQUE_DIFFICULTY[technique]
+            for technique in techniques
+        ),
+    }
+
+
+def _local_spec(key, techniques, function, *args):
+    return _spec(
+        key,
+        "local",
+        _local_runner(key, function, *args),
+        techniques,
+    )
+
+
+def _logic_spec(key, techniques, runner):
+    return _spec(key, "logic", runner, techniques)
+
+
 TECHNIQUE_SPECS = [
-    {"minimum_difficulty": 1.0, "key": "last_value", "engine": "local", "runner": _local_runner("last_value", last_value)},
-    {"minimum_difficulty": 1.2, "key": "hidden_single", "engine": "local", "runner": _local_runner("hidden_single", hidden_single)},
-    {"minimum_difficulty": 1.7, "key": "direct_locked", "engine": "local", "runner": _local_runner("direct_locked", direct_locked_candidates)},
-    {"minimum_difficulty": 2.0, "key": "direct_hidden_pair", "engine": "local", "runner": _local_runner("direct_hidden_subset:2", direct_hidden_subset, 2)},
-    {"minimum_difficulty": 2.3, "key": "naked_single", "engine": "local", "runner": _local_runner("naked_single", naked_single)},
-    {"minimum_difficulty": 2.5, "key": "direct_hidden_triplet", "engine": "local", "runner": _local_runner("direct_hidden_subset:3", direct_hidden_subset, 3)},
-    {"minimum_difficulty": 2.6, "key": "locked_candidates", "engine": "local", "runner": _local_runner("locked_candidates", locked_candidates)},
-    {"minimum_difficulty": 3.0, "key": "naked_pair", "engine": "local", "runner": _local_runner("naked_subset:2", naked_subset, 2)},
-    {"minimum_difficulty": 3.2, "key": "x_wing", "engine": "local", "runner": _local_runner("fish:2", fish, 2)},
-    {"minimum_difficulty": 3.4, "key": "hidden_pair", "engine": "local", "runner": _local_runner("hidden_subset:2", hidden_subset, 2)},
-    {"minimum_difficulty": 3.6, "key": "naked_triple", "engine": "local", "runner": _local_runner("naked_subset:3", naked_subset, 3)},
-    {"minimum_difficulty": 3.8, "key": "swordfish", "engine": "local", "runner": _local_runner("fish:3", fish, 3)},
-    {"minimum_difficulty": 4.0, "key": "hidden_triple", "engine": "local", "runner": _local_runner("hidden_subset:3", hidden_subset, 3)},
-    {"minimum_difficulty": 4.2, "key": "y_wing", "engine": "local", "runner": _local_runner("y_wing", y_wing)},
-    {"minimum_difficulty": 4.4, "key": "xyz_wing", "engine": "local", "runner": _local_runner("xyz_wing", xyz_wing)},
-    {"minimum_difficulty": 4.5, "key": "ur_type_1", "engine": "local", "runner": _local_runner("ur_type_1", unique_rectangle_type1)},
-    {"minimum_difficulty": 4.6, "key": "ur_type_2", "engine": "local", "runner": _local_runner("ur_type_2", unique_rectangle_type2)},
-    {"minimum_difficulty": 4.8, "key": "ur_type_3", "engine": "local", "runner": _local_runner("ur_type_3", unique_rectangle_type3)},
-    {"minimum_difficulty": 4.9, "key": "ur_type_4", "engine": "local", "runner": _local_runner("ur_type_4", unique_rectangle_type4)},
-    {"minimum_difficulty": 5.0, "key": "ur_type_5", "engine": "local", "runner": _local_runner("ur_type_5", unique_rectangle_type5)},
-    {"minimum_difficulty": 5.0, "key": "naked_quad", "engine": "local", "runner": _local_runner("naked_subset:4", naked_subset, 4)},
-    {"minimum_difficulty": 5.2, "key": "jellyfish", "engine": "local", "runner": _local_runner("fish:4", fish, 4)},
-    {"minimum_difficulty": 5.4, "key": "hidden_quad", "engine": "local", "runner": _local_runner("hidden_subset:4", hidden_subset, 4)},
-    {"minimum_difficulty": 5.6, "key": "bug_plus_one", "engine": "local", "runner": _local_runner("bug_plus_one", bug_plus_one)},
-    {"minimum_difficulty": 5.7, "key": "bug_types", "engine": "local", "runner": _local_runner("bug_types", bug_types_2_to_4)},
-    {"minimum_difficulty": 6.2, "key": "aligned_pair_exclusion", "engine": "local", "runner": _local_runner("aligned_pair_exclusion", aligned_pair_exclusion)},
-    {"minimum_difficulty": 6.5, "key": "bidirectional_x_cycle", "engine": "logic", "runner": bidirectional_x_cycle},
-    {"minimum_difficulty": 6.5, "key": "xy_chain", "engine": "logic", "runner": xy_chain},
-    {"minimum_difficulty": 6.5, "key": "bidirectional_y_cycle", "engine": "logic", "runner": bidirectional_y_cycle},
-    {"minimum_difficulty": 6.6, "key": "skyscraper", "engine": "local", "runner": _local_runner("skyscraper", skyscraper)},
-    {"minimum_difficulty": 6.6, "key": "two_string_kite", "engine": "local", "runner": _local_runner("two_string_kite", two_string_kite)},
-    {"minimum_difficulty": 6.6, "key": "empty_rectangle", "engine": "local", "runner": _local_runner("empty_rectangle", empty_rectangle)},
-    {"minimum_difficulty": 6.6, "key": "forcing_x_chain", "engine": "logic", "runner": forcing_x_chain},
-    {"minimum_difficulty": 7.0, "key": "w_wing", "engine": "local", "runner": _local_runner("w_wing", w_wing)},
-    {"minimum_difficulty": 7.0, "key": "forcing_chain", "engine": "logic", "runner": forcing_chain},
-    {"minimum_difficulty": 7.0, "key": "bidirectional_cycle", "engine": "logic", "runner": bidirectional_cycle},
-    {"minimum_difficulty": 7.5, "key": "nishio", "engine": "logic", "runner": nishio},
-    {"minimum_difficulty": 8.0, "key": "cell_forcing_chain", "engine": "logic", "runner": cell_forcing_chain},
-    {"minimum_difficulty": 8.0, "key": "region_forcing_chain", "engine": "logic", "runner": region_forcing_chain},
-    {"minimum_difficulty": 8.5, "key": "dynamic_forcing_chain", "engine": "logic", "runner": dynamic_forcing_chain},
-    {"minimum_difficulty": 9.0, "key": "dynamic_forcing_chain_plus", "engine": "logic", "runner": dynamic_forcing_chain_plus},
-    {"minimum_difficulty": 9.5, "key": "nested_forcing_chain", "engine": "logic", "runner": nested_forcing_chain},
+    _local_spec("last_value", "Last Value", last_value),
+    _local_spec("naked_single", "Naked Single", naked_single),
+    _local_spec(
+        "hidden_single",
+        ("Hidden Single (Box)", "Hidden Single (Row/Column)"),
+        hidden_single,
+    ),
+    _local_spec(
+        "direct_locked",
+        ("Direct Pointing", "Direct Claiming"),
+        direct_locked_candidates,
+    ),
+    _local_spec(
+        "direct_hidden_subset:2",
+        "Direct Hidden Pair",
+        direct_hidden_subset,
+        2,
+    ),
+    _local_spec(
+        "direct_hidden_subset:3",
+        "Direct Hidden Triplet",
+        direct_hidden_subset,
+        3,
+    ),
+    _local_spec(
+        "locked_candidates",
+        ("Pointing", "Claiming"),
+        locked_candidates,
+    ),
+
+    _local_spec("naked_subset:2", "Naked Pair", naked_subset, 2),
+    _local_spec("hidden_subset:2", "Hidden Pair", hidden_subset, 2),
+    _local_spec("naked_subset:3", "Naked Triple", naked_subset, 3),
+    _local_spec("hidden_subset:3", "Hidden Triple", hidden_subset, 3),
+    _local_spec("naked_subset:4", "Naked Quadruple", naked_subset, 4),
+    _local_spec("hidden_subset:4", "Hidden Quadruple", hidden_subset, 4),
+
+    _local_spec("fish:2", "X-Wing", fish, 2),
+    _local_spec("fish:3", "Swordfish", fish, 3),
+    _local_spec("fish:4", "Jellyfish", fish, 4),
+
+    _local_spec("skyscraper", "Skyscraper", skyscraper),
+    _local_spec("two_string_kite", "Two-String Kite", two_string_kite),
+    _local_spec("empty_rectangle", "Empty Rectangle", empty_rectangle),
+    _local_spec("y_wing", "Y-Wing", y_wing),
+    _local_spec("xyz_wing", "XYZ-Wing", xyz_wing),
+    _local_spec("w_wing", "W-Wing", w_wing),
+
+    _local_spec(
+        "ur_type_1",
+        "Unique Rectangle Type 1",
+        unique_rectangle_type1,
+    ),
+    _local_spec(
+        "ur_type_2",
+        "Unique Rectangle Type 2",
+        unique_rectangle_type2,
+    ),
+    _local_spec(
+        "ur_type_3",
+        "Unique Rectangle Type 3",
+        unique_rectangle_type3,
+    ),
+    _local_spec(
+        "ur_type_4",
+        "Unique Rectangle Type 4",
+        unique_rectangle_type4,
+    ),
+    _local_spec(
+        "ur_type_5",
+        "Unique Rectangle Type 5",
+        unique_rectangle_type5,
+    ),
+    _local_spec("bug_plus_one", "BUG+1", bug_plus_one),
+    _local_spec(
+        "bug_types",
+        (
+            "BUG Type 2",
+            "BUG Type 4",
+            "BUG Type 3 (Pair)",
+            "BUG Type 3 (Triplet)",
+            "BUG Type 3 (Quad)",
+        ),
+        bug_types_2_to_4,
+    ),
+    _local_spec(
+        "aligned_pair_exclusion",
+        "Aligned Pair Exclusion",
+        aligned_pair_exclusion,
+    ),
+
+    _logic_spec(
+        "bidirectional_x_cycle",
+        "Bidirectional X-Cycle",
+        bidirectional_x_cycle,
+    ),
+    _logic_spec(
+        "xy_chain",
+        ("Remote Pair", "XY-Chain"),
+        xy_chain,
+    ),
+    _logic_spec(
+        "bidirectional_y_cycle",
+        ("XY-Cycle", "Bidirectional Y-Cycle"),
+        bidirectional_y_cycle,
+    ),
+    _logic_spec(
+        "forcing_x_chain",
+        ("Turbot Fish", "Forcing X-Chain"),
+        forcing_x_chain,
+    ),
+    _logic_spec(
+        "forcing_chain",
+        ("Alternating Inference Chain", "Forcing Chain"),
+        forcing_chain,
+    ),
+    _logic_spec(
+        "bidirectional_cycle",
+        ("Continuous Nice Loop", "Bidirectional Cycle"),
+        bidirectional_cycle,
+    ),
+
+    _logic_spec("nishio", "Nishio", nishio),
+    _logic_spec(
+        "cell_forcing_chain",
+        "Cell Forcing Chain",
+        cell_forcing_chain,
+    ),
+    _logic_spec(
+        "region_forcing_chain",
+        "Region Forcing Chain",
+        region_forcing_chain,
+    ),
+    _logic_spec(
+        "dynamic_forcing_chain",
+        (
+            "Dynamic Forcing Chain",
+            "Dynamic Contradiction Forcing Chain",
+            "Dynamic Double Forcing Chain",
+            "Dynamic Cell Forcing Chain",
+            "Dynamic Region Forcing Chain",
+        ),
+        dynamic_forcing_chain,
+    ),
+    _logic_spec(
+        "dynamic_forcing_chain_plus",
+        (
+            "Dynamic Forcing Chain Plus",
+            "Dynamic Contradiction Forcing Chain Plus",
+            "Dynamic Double Forcing Chain Plus",
+            "Dynamic Cell Forcing Chain Plus",
+            "Dynamic Region Forcing Chain Plus",
+        ),
+        dynamic_forcing_chain_plus,
+    ),
+    _logic_spec(
+        "nested_forcing_chain",
+        (
+            "Nested Forcing Chain",
+            "Nested Contradiction Forcing Chain",
+            "Nested Double Forcing Chain",
+            "Nested Cell Forcing Chain",
+            "Nested Region Forcing Chain",
+        ),
+        nested_forcing_chain,
+    ),
 ]
+
+# Il sort è stabile: a parità di rating mantiene l'ordine dichiarato sopra.
+TECHNIQUE_SPECS.sort(
+    key=lambda spec: spec["minimum_difficulty"]
+)
 
 TECHNIQUE_FUNCS = [
     (spec["minimum_difficulty"], spec["runner"])

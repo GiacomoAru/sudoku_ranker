@@ -1,11 +1,8 @@
-"""Scale di difficoltà complementari al rating Sudoku Explainer.
+"""Mapping HoDoKu complementare alla difficoltà tecnica Sudoku Explainer.
 
 Il rating SE resta invariato e continua a descrivere la tecnica teorica.
-Questo modulo aggiunge:
-
-* una stima HoDoKu basata sui valori predefiniti di HoDoKu 2.2.4;
-* una label editoriale basata sulla tecnica più impegnativa;
-* la trasformazione monotona della difficoltà percepita sulla scala 1-10.
+Questo modulo aggiunge la stima del carico di risoluzione basata sui valori
+predefiniti di HoDoKu 2.2.4.
 
 HoDoKu usa due attributi per tecnica, ``level`` e ``score``. Il punteggio del
 puzzle è la somma dei punteggi degli step e il livello complessivo è il
@@ -19,9 +16,6 @@ https://github.com/1to9only/HoDoKu/blob/master/src/sudoku/Options.java
 """
 
 from __future__ import annotations
-
-import math
-
 
 HODOKU_MODEL_VERSION = "HoDoKu 2.2.4 defaults / mapping v1"
 
@@ -304,26 +298,6 @@ HODOKU_TECHNIQUES = {
 }
 
 
-EDITORIAL_LABEL_ORDER = {
-    "N/A": 0,
-    "Molto facile": 1,
-    "Facile": 2,
-    "Medio": 3,
-    "Difficile": 4,
-    "Molto difficile": 5,
-    "Esperto": 6,
-    "Diabolico": 7,
-    "Estremo": 8,
-    "Incubo": 9,
-    "Oltre il limite": 10,
-}
-
-_MEDIUM_TECHNIQUES = {
-    "Naked Triple",
-    "Hidden Triple",
-}
-
-
 def hodoku_technique_rating(technique):
     """Restituisce una copia del mapping HoDoKu di una tecnica."""
     try:
@@ -350,52 +324,3 @@ def hodoku_puzzle_level(total_score, hardest_step_level):
         (score_level, hardest_step_level),
         key=lambda level: HODOKU_LEVEL_ORDER[level],
     )
-
-
-def editorial_label_for_technique(technique, se_difficulty):
-    """Label cognitiva della tecnica, indipendente dal carico del puzzle."""
-    rating = hodoku_technique_rating(technique)
-    level = rating["level"]
-
-    if level == "Easy":
-        return "Molto facile"
-    if level == "Medium":
-        return "Medio" if technique in _MEDIUM_TECHNIQUES else "Facile"
-    if level == "Hard":
-        return "Difficile"
-    if level == "Unfair":
-        return "Molto difficile"
-
-    se_difficulty = float(se_difficulty)
-    if se_difficulty <= 7.5:
-        return "Esperto"
-    if se_difficulty <= 8.5:
-        return "Diabolico"
-    if se_difficulty <= 9.0:
-        return "Estremo"
-    if se_difficulty <= 9.5:
-        return "Incubo"
-    return "Oltre il limite"
-
-
-PERCEIVED_SCALE_MIN = 1.0
-PERCEIVED_SCALE_MAX = 10.0
-PERCEIVED_LOGISTIC_MIDPOINT = 4.0
-PERCEIVED_LOGISTIC_STEEPNESS = 0.9
-
-
-def scale_perceived_difficulty(raw_log_score):
-    """Trasforma strettamente la vecchia metrica log nell'intervallo 1-10."""
-    raw_log_score = float(raw_log_score)
-    exponent = (
-        PERCEIVED_LOGISTIC_STEEPNESS
-        * (raw_log_score - PERCEIVED_LOGISTIC_MIDPOINT)
-    )
-    if exponent >= 0:
-        logistic = 1.0 / (1.0 + math.exp(-exponent))
-    else:
-        exp_value = math.exp(exponent)
-        logistic = exp_value / (1.0 + exp_value)
-    return PERCEIVED_SCALE_MIN + (
-        PERCEIVED_SCALE_MAX - PERCEIVED_SCALE_MIN
-    ) * logistic

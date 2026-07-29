@@ -8,7 +8,6 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from ..archive import repository as archive
-from ..core import data_structure
 from ..core import solver
 from ..core import visualization
 
@@ -20,22 +19,6 @@ from .photo_recognition import (
     SudokuPhotoRecognizer,
 )
 from .serialization import to_jsonable
-
-
-def _validate_given_digits(grid):
-    """Rifiuta duplicati già presenti in righe, colonne o box."""
-    for unit in data_structure.UNITS:
-        values = [
-            int(grid[row, column])
-            for row, column in unit
-            if int(grid[row, column]) != 0
-        ]
-
-        if len(values) != len(set(values)):
-            raise ValueError(
-                "La griglia iniziale contiene cifre duplicate in una "
-                "riga, colonna o box."
-            )
 
 
 class SudokuWebService:
@@ -58,8 +41,7 @@ class SudokuWebService:
         self.photo_recognizer = SudokuPhotoRecognizer()
 
     def analyse(self, submission: SudokuSubmission):
-        grid = archive.normalise_sudoku_grid(submission.grid)
-        _validate_given_digits(grid)
+        grid = archive.validate_unique_sudoku(submission.grid)
         source_metadata = {"source": "web"}
 
         if submission.photo_id:

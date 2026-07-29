@@ -30,6 +30,7 @@ from .data_structure import UNITS, UNIT_KINDS, peers
 
 Candidate = tuple[int, int, int]
 Literal = tuple[int, int, int, bool]
+MAX_DEDUCTIONS_PER_TECHNIQUE = 8
 
 
 # Le tecniche sono raggruppate in batch con strutture e propagazioni comuni.
@@ -945,6 +946,8 @@ class LogicEngine:
                 continue
             seen.add(signature)
             result.append(deduction)
+            if len(result) >= MAX_DEDUCTIONS_PER_TECHNIQUE:
+                break
         return result
 
     def _cycle_deductions(self, technique, allowed, required):
@@ -983,6 +986,8 @@ class LogicEngine:
                 reasons=reasons,
                 kind="bidirectional-cycle",
             ))
+            if len(result) >= MAX_DEDUCTIONS_PER_TECHNIQUE:
+                break
         return result
 
     def _find_bidirectional_x_cycle(self):
@@ -1037,6 +1042,8 @@ class LogicEngine:
                     reasons=reasons,
                     kind="forcing-chain",
                 ))
+                if len(result) >= MAX_DEDUCTIONS_PER_TECHNIQUE:
+                    return result
         return result
 
     def _find_forcing_x_chain(self):
@@ -1101,6 +1108,8 @@ class LogicEngine:
                     reasons=("peer", "x", "y"),
                     kind=kind,
                 ))
+                if len(result) >= MAX_DEDUCTIONS_PER_TECHNIQUE:
+                    return result
         return result
 
     def _find_cell_forcing_chain(self):
@@ -1142,6 +1151,8 @@ class LogicEngine:
     def _binary_dynamic(self, technique, *, required_feature, advanced_level):
         result = []
         for candidate in self.graph.all_candidates:
+            if len(result) >= MAX_DEDUCTIONS_PER_TECHNIQUE:
+                break
             source_on = _literal(candidate, True)
             source_off = _literal(candidate, False)
             on_result = self._propagate(
@@ -1225,6 +1236,8 @@ class LogicEngine:
                     reasons=combined_features,
                     kind="dynamic-reduction",
                 ))
+                if len(result) >= MAX_DEDUCTIONS_PER_TECHNIQUE:
+                    break
         return result
 
     def _multiple_dynamic(self, technique, *, required_feature, advanced_level):
@@ -1238,6 +1251,8 @@ class LogicEngine:
             for label, candidates in self._region_source_groups()
         ]
         for source_kind, label, candidates in groups:
+            if len(result) >= MAX_DEDUCTIONS_PER_TECHNIQUE:
+                break
             if len(candidates) < 3:
                 continue
             sources = [_literal(candidate, True) for candidate in candidates]
@@ -1285,11 +1300,15 @@ class LogicEngine:
                     reasons=features,
                     kind=f"dynamic-{source_kind}-reduction",
                 ))
+                if len(result) >= MAX_DEDUCTIONS_PER_TECHNIQUE:
+                    break
         return result
 
     def _find_nishio(self):
         result = []
         for candidate in self.graph.all_candidates:
+            if len(result) >= MAX_DEDUCTIONS_PER_TECHNIQUE:
+                break
             source_on = _literal(candidate, True)
             source_off = _literal(candidate, False)
             on_outcome = self._propagate(source_on, mode="nishio")

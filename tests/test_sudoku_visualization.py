@@ -10,36 +10,20 @@ from sudoku_app.core import visualization
 
 
 def synthetic_move(step, difficulty, activity, outcomes, conclusions):
-    values = {
-        "conclusion_count": activity,
-        "distinct_outcome_count": activity,
-        "proof_count": activity,
-    }
-    scope = {
-        "by_technique": {
-            "Last Value": dict(values),
-        },
-        "by_family": {
-            "Inserimenti diretti": dict(values),
-        },
-    }
-
     return {
         "step": step,
         "technique": "Last Value",
         "family": "Inserimenti diretti",
-        "difficulty": difficulty,
+        "technical_difficulty": difficulty,
+        "resolution_load": 4,
+        "perceived_difficulty": difficulty,
         "description": "mossa sintetica",
         "placements": [(0, 0, 1)],
         "eliminations": [],
-        "n_best_distinct_outcomes": outcomes,
-        "n_best_conclusions": conclusions,
-        "n_distinct_outcomes": outcomes,
-        "n_conclusions": conclusions,
-        "availability": {
-            **scope,
-            "frontier": scope,
-        },
+        "frontier_move_count": outcomes,
+        "available_move_count": activity,
+        "frontier_by_technique": {"Last Value": outcomes},
+        "available_by_technique": {"Last Value": activity},
     }
 
 
@@ -62,12 +46,12 @@ def synthetic_analysis(name, difficulties, activities):
         "profile_difficulty_window": 3.0,
         "chain": chain,
         "grading": {
-            "label": "Facile",
-            "max_difficulty": max(difficulties),
-            "hodoku_score": 4 * len(chain),
-            "hodoku_level": "Easy",
+            "technical_difficulty_label": "Facile",
+            "technical_difficulty": max(difficulties),
+            "resolution_load": 4 * len(chain),
+            "resolution_load_level": "Easy",
             "perceived_difficulty": 2.0 + 0.1 * len(chain),
-            "n_steps": len(chain),
+            "step_count": len(chain),
         },
     }
 
@@ -91,11 +75,11 @@ class AggregateDifficultyPlotTests(unittest.TestCase):
         self.assertEqual(list(steps["puzzle_count"]), [2, 2, 1])
         self.assertEqual(list(steps["coverage"]), [1.0, 1.0, 0.5])
         self.assertEqual(
-            list(steps["mean_difficulty"]),
+            list(steps["mean_technical_difficulty"]),
             [2.0, 3.0, 5.0],
         )
         self.assertEqual(
-            list(steps["mean_best_distinct_outcomes"]),
+            list(steps["mean_frontier_move_count"]),
             [1.0, 2.0, 3.0],
         )
         self.assertEqual(
@@ -103,7 +87,7 @@ class AggregateDifficultyPlotTests(unittest.TestCase):
             2.5,
         )
         self.assertEqual(
-            aggregate["summary"]["mean_hodoku_score"],
+            aggregate["summary"]["mean_resolution_load"],
             10.0,
         )
         self.assertAlmostEqual(
@@ -174,7 +158,7 @@ class AggregateHeatmapTests(unittest.TestCase):
             self.analyses,
             depth="deep",
             view="extended",
-            metric="conclusions",
+            metric="moves",
         )
 
         self.assertEqual(
@@ -195,7 +179,7 @@ class AggregateHeatmapTests(unittest.TestCase):
             self.analyses,
             depth="deep",
             view="extended",
-            metric="conclusions",
+            metric="moves",
             scale="linear",
             annotate=True,
             show=False,
