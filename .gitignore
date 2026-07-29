@@ -5,6 +5,10 @@ old_files/
 sudoku.code-workspace
 archives/
 .sudoku-web.pid
+.sudoku-web-tunnel.pid
+.sudoku-web-public-url
+.sudoku-web-tunnel.log
+tools/cloudflared.exe
 __pycache__/
 *.py[cod]
 *.zip

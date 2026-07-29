@@ -63,30 +63,40 @@ Test:
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-Per avviare e gestire l'interfaccia LAN vedere [WEB_LAN.md](WEB_LAN.md).
+Per avviare l'interfaccia in locale, LAN o tramite un link HTTPS pubblico
+raggiungibile dal telefono vedere [WEB_LAN.md](WEB_LAN.md).
 
 
 # Prossime Modifiche:
 1. **Modificare interfaccia per:**
 
    1. Modificare manualmente i campi e le scritte del sito
-      1. a capo dopo puzzle
       2. valutare la migrazione della chiave dati `perceived_difficulty` a `perceived`, preservando gli archivi esistenti.
    2. ★ rivedere completamente meccanismo di evidenziazione celle per spiegazione della mossa, chiarire celle principali, secondarie ecc. Mostrare anche i candidates per cella e rivedere metodi di evidenziazione singola di candidati.
 
    3. riordinare il json per posticipare catena e altre liste
-   4. cambiare campi per il nome del sudoku e magari salvare altri metadati di salvataggio (dispositivo ecc.)
-   5. Tema scuro?!?! (NON FARLO ANCORA)
+   4. cambiare i campi necessari al salvataggio del sudoku, renderli opzionali e nascosti da tendina, e gestire normalizzazione di testo ecc. Magari rivedere anche 
+   tecniche di salvataggio e dati salvati
+   5. rendere le varie "opzionni" nascoste in tendida di default, in modo da non mostrare tutto ma solo quel che si vuole.
    6. ★ Renderlo carino da telefono.
    7. aggiungere un riferimento tra step visualizzato e punto della catena nel grafico o heatmap
-   8. gestire campi di input e salvataggio in archivio, normalizzazione delle parole, spazi ecc e gestire
-   9. gestire ricaricamento interfaccia durante l'analisi
    10. creare immagini "vuote" da mostrare al caricamento pagina e quando si invai un sudoku irrisolvibiel
+   11. importare immagini oltre a scattarle
+
+2. **collegamento internet**
+   1. il collegamento è lentiiiissimo, normale? soprattutto per le foto
+   2. favicon.io ??? risolvere
+   3. attualmente salva tutte le foto anche quelle senza sudoku... cercare di vfare una scrematura
+
+3. **Modifiche OCR**
+   1. ★ creare riconoscimento estremi griglia, e dare la possibilità di modificarli sopra la foto, anche NON quadrato causa deformazioni prospettiche, poi avendo gli estremi continuare con la normale pipeline, circa come googledrive fa la scanerizzazione documenti
 
 2. **Migliorare il solver**
    1. chiarire stato "stuck" e quando un sudoku non ha soluzione unica, magari darne una e aggiungere l'ultimo step di soluzione che è andare a caso.
    1. gestire casi triviali di sudoku che attualmente causano una lunga analisi (1 solo numero)
-   2. migliorare ricerca profile, in modo da non cercare tutte le tecniche possibili se richiedono molta computazione, magari limitare massimo a >= 10??
+   2. migliorare ricerca profile:
+      1. in modo da non cercare tutte le tecniche possibili se richiedono molta computazione, magari limitare massimo a >= 10??
+      2. ridurre finestra standard a 2
    3. grafici:
       1. scala logaritmica nella catena per l'asse della numerosità di tecniche, ma con 1 allineato con uno a sinistra
       2. legenda esterna (sotto) della catena
@@ -95,14 +105,12 @@ Per avviare e gestire l'interfaccia LAN vedere [WEB_LAN.md](WEB_LAN.md).
    5. implementare pattern engine per Unique Loop (6+ cells)
 
 3. **Integrare riconoscimento Sudoku via foto:**
-   1. Allenare e confrontare un modello specializzato usando le foto confermate.
-   2. Aggiungere strumenti per revisionare ed esportare il dataset fotografico.
+   1. migliorare periodicamente con le nuove foto
+   1. Allenare e confrontare modelli specializzati a partire dall'archivio raccolto
 
-4. **Ampliare interfaccia web con magari visualizzazione database ecc.**
+4. **Ampliare interfaccia web**
    1. dare possibilità di cambiare tipo di analisi (deep, profile window etc) e gestire al meglio possibile archivio e caching
    2. trivialize
    3. simmetrize
 
 5. **Implementare generatore offline di Sudoku ed esplorare la generazione e difficoltà.**
-
-6. **Renderlo Accessibile Online**

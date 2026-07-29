@@ -83,6 +83,8 @@ class AnalysisEnvelope(BaseModel):
 class HealthResponse(BaseModel):
     status: Literal["ok"]
     archive_profile: str
+    exposure_mode: Literal["local", "lan", "internet"]
+    authentication_enabled: bool
     default_analysis_mode: str
     default_profile_difficulty_window: float
     analysis_worker_count: int

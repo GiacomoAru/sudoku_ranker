@@ -18,6 +18,7 @@ from .schemas import (
 )
 from .service import SudokuWebService
 from .photo_recognition import MAX_IMAGE_BYTES, PhotoRecognitionError
+from .security import install_security_middleware
 
 
 STATIC_DIRECTORY = Path(__file__).resolve().parent / "static"
@@ -66,7 +67,13 @@ def _analysis_envelope(service, submission):
     }
 
 
-def create_app(data_dir=None, job_queue_capacity=16):
+def create_app(
+    data_dir=None,
+    job_queue_capacity=16,
+    exposure_mode=None,
+    access_username=None,
+    access_password=None,
+):
     """
     Crea l'app LAN e seleziona l'archivio online separato.
 
@@ -78,6 +85,43 @@ def create_app(data_dir=None, job_queue_capacity=16):
         if data_dir is not None
         else os.environ.get("SUDOKU_WEB_DATA_DIR")
     )
+    configured_exposure_mode = (
+        exposure_mode
+        if exposure_mode is not None
+        else os.environ.get("SUDOKU_WEB_EXPOSURE", "lan")
+    ).casefold()
+    configured_username = (
+        access_username
+        if access_username is not None
+        else os.environ.get("SUDOKU_WEB_ACCESS_USERNAME", "sudoku")
+    )
+    configured_password = (
+        access_password
+        if access_password is not None
+        else os.environ.get("SUDOKU_WEB_ACCESS_PASSWORD")
+    )
+
+    if configured_exposure_mode not in {"local", "lan", "internet"}:
+        raise ValueError(
+            "SUDOKU_WEB_EXPOSURE deve essere local, lan o internet."
+        )
+    if not configured_username:
+        raise ValueError("Il nome utente web non può essere vuoto.")
+    if ":" in configured_username:
+        raise ValueError("Il nome utente web non può contenere ':'.")
+    if configured_exposure_mode == "internet" and not configured_password:
+        raise ValueError(
+            "La modalità internet richiede SUDOKU_WEB_ACCESS_PASSWORD."
+        )
+    if (
+        configured_exposure_mode == "internet"
+        and len(configured_password) < 12
+    ):
+        raise ValueError(
+            "In modalità internet la password deve avere almeno "
+            "12 caratteri."
+        )
+
     service = SudokuWebService(data_dir=configured_data_dir)
     job_manager = AnalysisJobManager(
         worker_count=1,
@@ -93,13 +137,18 @@ def create_app(data_dir=None, job_queue_capacity=16):
         title="Sudoku Logic Lab",
         version="0.2.0",
         description=(
-            "API LAN per riconoscere Sudoku da foto, salvarli e ricevere "
-            "analisi logiche."
+            "API web per riconoscere Sudoku da foto, salvarli e ricevere "
+            "analisi logiche in locale, LAN o tramite tunnel HTTPS."
         ),
         lifespan=lifespan,
     )
     app.state.sudoku_service = service
     app.state.analysis_jobs = job_manager
+    authentication_enabled = install_security_middleware(
+        app,
+        username=configured_username,
+        password=configured_password,
+    )
     app.mount(
         "/static",
         StaticFiles(directory=STATIC_DIRECTORY),
@@ -118,6 +167,8 @@ def create_app(data_dir=None, job_queue_capacity=16):
         return service.health(
             worker_count=job_manager.worker_count,
             queue_capacity=job_manager.queue_capacity,
+            exposure_mode=configured_exposure_mode,
+            authentication_enabled=authentication_enabled,
         )
 
     @app.post(

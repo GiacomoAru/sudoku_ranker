@@ -1,4 +1,4 @@
-# Interfaccia web LAN
+# Interfaccia web: locale, LAN e Internet
 
 La web app consente di inviare un Sudoku, salvarlo con nomenclatura standard e
 ricevere il JSON dell'analisi, il grafico della catena, la heatmap e il player
@@ -11,7 +11,94 @@ contributo HoDoKu.
 Il server usa `archives/online/`; notebook e script usano per default
 `archives/offline/`. I due archivi restano quindi separati.
 
-## 1. Preparazione
+## Accesso rapido da Internet e telefono
+
+La modalità `internet` mantiene FastAPI e l'archivio sul computer, ma apre un
+Cloudflare Quick Tunnel HTTPS in uscita. Non richiede port forwarding, IP
+pubblico, modifiche al router o una regola firewall in ingresso.
+
+### 1. Installa `cloudflared` senza privilegi amministrativi
+
+Dalla radice del progetto, in PowerShell:
+
+```powershell
+New-Item -ItemType Directory -Path .\tools -Force
+Invoke-WebRequest `
+  -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" `
+  -OutFile .\tools\cloudflared.exe
+.\tools\cloudflared.exe --version
+```
+
+Il file locale è escluso da Git. In alternativa si può installare
+`cloudflared` nel sistema oppure indicarne il percorso con
+`SUDOKU_CLOUDFLARED_PATH`.
+
+### 2. Scegli una password e avvia
+
+```powershell
+$env:SUDOKU_WEB_ACCESS_USERNAME = "sudoku"
+$env:SUDOKU_WEB_ACCESS_PASSWORD = "scegli-almeno-12-caratteri"
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\start_web.ps1 -Exposure internet
+```
+
+Lo script stampa un valore simile a:
+
+```text
+URL PUBBLICO: https://parole-casuali.trycloudflare.com
+Utente: sudoku
+```
+
+Apri quel link sul telefono. Il browser chiede utente e password una sola
+volta e poi mostra l'interfaccia completa, incluso lo scatto dalla fotocamera.
+Il telefono può essere sotto rete mobile o qualunque altra Wi-Fi.
+Al primissimo tentativo il nuovo indirizzo può richiedere 5-10 secondi per
+diventare risolvibile: se non si apre subito, attendi e ricarica la pagina.
+
+Il link casuale cambia a ogni riavvio. È una scelta adatta alla fase attuale:
+non serve un account Cloudflare e il sito esiste soltanto mentre server e
+tunnel sono attivi. Per un dominio stabile si potrà passare in seguito a un
+tunnel nominato senza modificare FastAPI.
+
+Per avviare in background usa:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\start_web.ps1 -Background -Exposure internet
+```
+
+Per recuperare nuovamente il link:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\status_web.ps1
+```
+
+Per fermare sia FastAPI sia il tunnel:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\stop_web.ps1
+```
+
+Esegui `status_web.ps1` e `stop_web.ps1` nello stesso terminale, oppure
+reimposta prima le due variabili di autenticazione. La password non viene
+scritta su disco.
+
+La modalità si controlla con la variabile chiaramente visibile
+`EXPOSURE_MODE` in `run_web.py`, oppure senza modificare file tramite:
+
+```powershell
+$env:SUDOKU_WEB_EXPOSURE = "internet"  # local | lan | internet
+.\.venv\Scripts\python.exe run_web.py
+```
+
+Documentazione ufficiale:
+
+- [Cloudflare Quick Tunnels](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/)
+- [Download di cloudflared](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/)
+
+## 1. Preparazione locale
 
 Apri PowerShell nella radice del progetto:
 
@@ -120,18 +207,25 @@ privilegi amministrativi.
 - controlla che la rete Windows sia classificata come privata;
 - prova `Test-NetConnection IP-DEL-SERVER -Port 8000` da un altro PC Windows.
 
-## 6. Porta e indirizzo personalizzati
+## 6. Modalità, porta e indirizzo personalizzati
 
 `run_web.py` legge queste variabili:
 
 ```powershell
+$env:SUDOKU_WEB_EXPOSURE = "lan"
 $env:SUDOKU_WEB_HOST = "0.0.0.0"
 $env:SUDOKU_WEB_PORT = "8000"
 .\.venv\Scripts\python.exe run_web.py
 ```
 
-Gli script in `scripts/` gestiscono intenzionalmente la porta predefinita
-8000. Se la cambi, gestisci il processo in primo piano con `Ctrl+C`.
+I valori di `SUDOKU_WEB_EXPOSURE` sono:
+
+- `local`: soltanto il computer server, su `127.0.0.1`;
+- `lan`: rete domestica, su `0.0.0.0`;
+- `internet`: HTTPS pubblico tramite tunnel, con origine vincolata a
+  `127.0.0.1`.
+
+Gli script in `scripts/` rispettano anche `SUDOKU_WEB_PORT`.
 
 ## 7. API disponibili
 
@@ -216,12 +310,19 @@ API aggiuntive:
 L'endpoint di analisi accetta il campo opzionale `photo_id`, usato per
 registrare la griglia corretta e collegarla al puzzle salvato.
 
-## 9. Privacy e limite di sicurezza attuale
+## 9. Privacy e sicurezza
 
-Questa configurazione è pensata per la rete domestica fidata. Non configurare
-port forwarding verso Internet: al momento non ci sono autenticazione, TLS,
-rate limiting né protezione da upload ostili. La pubblicazione online andrà
-fatta dietro un reverse proxy HTTPS e dopo aver aggiunto autenticazione.
+Non configurare port forwarding verso Internet. La modalità `internet`
+mantiene l'origine in ascolto soltanto su `127.0.0.1`, usa HTTPS sul tratto
+pubblico e richiede una password di almeno 12 caratteri. Tutte le route,
+incluse API, immagini e documentazione, sono protette.
+
+Usa una password unica, non condividere pubblicamente il link e arresta il
+tunnel quando non serve. Quick Tunnel è indicato da Cloudflare per test e
+sviluppo, senza garanzie di disponibilità: per un servizio permanente servirà
+un tunnel nominato, idealmente con Cloudflare Access, dominio stabile e
+monitoraggio. L'attuale coda limita comunque a un worker le analisi e
+Cloudflare applica i propri limiti alle richieste concorrenti.
 
 Le foto possono contenere sfondo e dettagli dell'ambiente. Rimangono sul
 computer server e `archives/` è esclusa da Git, ma vanno comunque considerate

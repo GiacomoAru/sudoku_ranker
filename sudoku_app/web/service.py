@@ -184,10 +184,18 @@ class SudokuWebService:
             finally:
                 plt.close(figure)
 
-    def health(self, worker_count=1, queue_capacity=16):
+    def health(
+        self,
+        worker_count=1,
+        queue_capacity=16,
+        exposure_mode="lan",
+        authentication_enabled=False,
+    ):
         return {
             "status": "ok",
             "archive_profile": self.archive_configuration["profile"],
+            "exposure_mode": exposure_mode,
+            "authentication_enabled": authentication_enabled,
             "default_analysis_mode": solver.DEFAULT_ANALYSIS_MODE,
             "default_profile_difficulty_window": (
                 solver.DEFAULT_PROFILE_DIFFICULTY_WINDOW

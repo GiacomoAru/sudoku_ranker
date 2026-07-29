@@ -97,6 +97,58 @@ class SudokuWebTests(unittest.TestCase):
             javascript.text,
         )
 
+    def test_internet_mode_requires_authentication(self):
+        protected_app = create_app(
+            data_dir=self.online_root,
+            exposure_mode="internet",
+            access_username="telefono",
+            access_password="password-test-sicura",
+        )
+
+        with TestClient(protected_app) as protected_client:
+            denied = protected_client.get("/api/v1/health")
+            self.assertEqual(denied.status_code, 401)
+            self.assertIn(
+                "Basic",
+                denied.headers["www-authenticate"],
+            )
+            self.assertEqual(
+                denied.headers["x-sudoku-logic-lab"],
+                "1",
+            )
+
+            accepted = protected_client.get(
+                "/api/v1/health",
+                auth=("telefono", "password-test-sicura"),
+                headers={"X-Forwarded-Proto": "https"},
+            )
+            self.assertEqual(accepted.status_code, 200)
+            self.assertEqual(
+                accepted.json()["exposure_mode"],
+                "internet",
+            )
+            self.assertTrue(
+                accepted.json()["authentication_enabled"],
+            )
+            self.assertIn(
+                "max-age",
+                accepted.headers["strict-transport-security"],
+            )
+
+    def test_internet_mode_rejects_missing_or_short_password(self):
+        with self.assertRaisesRegex(ValueError, "richiede"):
+            create_app(
+                data_dir=self.online_root,
+                exposure_mode="internet",
+            )
+
+        with self.assertRaisesRegex(ValueError, "12 caratteri"):
+            create_app(
+                data_dir=self.online_root,
+                exposure_mode="internet",
+                access_password="corta",
+            )
+
     def test_submit_returns_json_and_both_plot_urls(self):
         response = self.client.post(
             "/api/v1/analyses",
