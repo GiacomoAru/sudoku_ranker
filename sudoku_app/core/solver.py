@@ -68,15 +68,16 @@ MAX_MOVES_PER_TECHNIQUE = 16
 
 def _difficulty_score(move):
     """Rating canonico usato per scegliere e ordinare le mosse."""
-    return float(
-        move.get(
-            "difficulty",
-            difficulty_model.TECHNIQUE_DIFFICULTY.get(
-                move["technique"],
-                99.0,
-            ),
-        )
+    technique = str(move.get("technique", ""))
+
+    canonical_difficulty = (
+        difficulty_model.TECHNIQUE_DIFFICULTY.get(technique)
     )
+
+    if canonical_difficulty is not None:
+        return float(canonical_difficulty)
+
+    return float(move.get("difficulty", 99.0))
 
 
 def _technical_difficulty_score(move):
@@ -120,29 +121,31 @@ def _technical_difficulty_score(move):
 
     # Fino a sei nodi la Nested conserva il rating minimo della famiglia.
     length_extra = (
-        0.20
+        0.12
         * math.log2(
-            1 + max(0, max_chain_length - 6)
+            1
+            + max(0, max_chain_length - 6) / 6
         )
     )
 
-    # I nodi fuori dalla catena principale rappresentano rami o sotto-prove.
+    # I nodi esterni alla catena principale rappresentano rami e sotto-prove.
     branching_extra = (
-        0.10
-        * math.log2(1 + secondary_nodes)
+        0.06
+        * math.log2(
+            1 + secondary_nodes / 8
+        )
     )
 
-    # Piu catene aumentano la complessita, ma con rendimento decrescente.
+    # Più catene indipendenti aumentano ulteriormente la complessità.
     multiple_chain_extra = (
-        0.10
+        0.08
         * math.log2(chain_count)
     )
 
-    total_extra = min(
-        1.0,
+    total_extra = (
         length_extra
         + branching_extra
-        + multiple_chain_extra,
+        + multiple_chain_extra
     )
 
     return round(
