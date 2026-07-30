@@ -48,6 +48,8 @@ A move must change something: it either places a digit or eliminates >=1
 candidate; moves that would do nothing are not returned.
 """
 
+import math
+
 from collections import defaultdict
 from itertools import combinations
 
@@ -320,7 +322,17 @@ def _build_move(
         "technique": technique,
         "family": canonical_family,
         "strategy": canonical_strategy,
-        "difficulty": _canonical_difficulty(technique, difficulty),
+        "base_difficulty": _canonical_difficulty(
+            technique,
+            difficulty,
+        ),
+        "difficulty": max(
+            _canonical_difficulty(
+                technique,
+                difficulty,
+            ),
+            float(difficulty),
+        ),
         "description": description,
         "placements": placements,
         "eliminations": eliminations,
@@ -2080,6 +2092,64 @@ def _proof_rank(deduction, placements, eliminations):
     )
 
 
+def _effective_logic_difficulty(technique, metrics):
+    """
+    Calcola la difficoltà effettiva di una tecnica logica.
+
+    Il valore nella tabella TECHNIQUE_DIFFICULTY resta il minimo
+    canonico della tecnica. Le Nested Forcing Chain possono superarlo
+    in base alla complessità concreta della prova.
+    """
+    base_difficulty = _canonical_difficulty(technique)
+
+    if not technique.startswith("Nested "):
+        return base_difficulty
+
+    chain_count = max(
+        int(metrics.get("chain_count", 0)),
+        1,
+    )
+    node_count = max(
+        int(metrics.get("node_count", 0)),
+        0,
+    )
+    max_chain_length = max(
+        int(metrics.get("max_chain_length", 0)),
+        0,
+    )
+
+    # Una catena fino a 6 nodi non supera il rating base.
+    length_extra = (
+        0.10
+        * max(0, max_chain_length - 6)
+    )
+
+    # Conta i nodi appartenenti a rami o sotto-prove ulteriori.
+    secondary_nodes = max(
+        0,
+        node_count - max_chain_length,
+    )
+
+    branching_extra = (
+        0.10
+        * math.log2(1 + secondary_nodes)
+    )
+
+    # Penalità aggiuntiva quando la prova contiene più catene.
+    multiple_chain_extra = (
+        0.15
+        * max(0, chain_count - 1)
+    )
+
+    difficulty = (
+        base_difficulty
+        + length_extra
+        + branching_extra
+        + multiple_chain_extra
+    )
+
+    return round(difficulty, 1)
+
 def _logic_moves(state, technique, excluded_effects=()):
     """
     Adatta e consolida le deduzioni del motore logico.
@@ -2175,6 +2245,11 @@ def _logic_moves(state, technique, excluded_effects=()):
 
         metrics = _proof_metrics(deduction)
 
+        effective_difficulty = _effective_logic_difficulty(
+            specific,
+            metrics,
+        )
+
         proof = dict(deduction.get("logic", {}) or {})
         proof["parent_technique"] = technique
         proof["specific_technique"] = specific
@@ -2184,7 +2259,7 @@ def _logic_moves(state, technique, excluded_effects=()):
         move = _build_move(
             technique=specific,
             family=technique_family(specific),
-            difficulty=_canonical_difficulty(specific),
+            difficulty=effective_difficulty,
             description=description,
             placements=bucket["placements"],
             eliminations=bucket["eliminations"],

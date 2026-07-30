@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 
 
-DIFFICULTY_MODEL_VERSION = 5
+DIFFICULTY_MODEL_VERSION = 6
 
 TECHNIQUE_DIFFICULTY = {
     # INSERIMENTI DIRETTI
@@ -27,7 +27,7 @@ TECHNIQUE_DIFFICULTY = {
     "Claiming": 2.5,
 
     # SOTTOINSIEMI
-    "Naked Pair": 2.8,
+    "Naked Pair": 2.6,
     "Direct Hidden Pair": 3.0,
     "Hidden Pair": 3.0,
     "Naked Triple": 3.2,
@@ -117,15 +117,15 @@ TECHNIQUE_DIFFICULTY = {
 
 
 TECHNICAL_DIFFICULTY_THRESHOLDS = (
-    (1.5, "Molto facile"),
-    (2.5, "Facile"),
-    (3.7, "Medio"),
-    (4.7, "Difficile"),
-    (5.8, "Molto difficile"),
-    (6.8, "Esperto"),
-    (8.5, "Diabolico"),
+    (1.4, "Molto facile"),
+    (2.0, "Facile"),
+    (2.9, "Medio"),
+    (3.7, "Difficile"),
+    (4.2, "Molto difficile"),
+    (4.9, "Esperto"),
+    (7.0, "Diabolico"),
     (9.0, "Estremo"),
-    (9.5, "Incubo"),
+    (10, "Incubo"),
     (float("inf"), "Oltre il limite"),
 )
 
