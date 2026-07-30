@@ -67,7 +67,7 @@ DEFAULT_ANALYSIS_MODE = "profile"
 MAX_MOVES_PER_TECHNIQUE = 16
 
 def _difficulty_score(move):
-    """Usa il rating effettivo della mossa, con fallback sul valore base."""
+    """Rating canonico usato per scegliere e ordinare le mosse."""
     return float(
         move.get(
             "difficulty",
@@ -77,6 +77,79 @@ def _difficulty_score(move):
             ),
         )
     )
+
+
+def _technical_difficulty_score(move):
+    """
+    Restituisce il rating tecnico effettivo mostrato nell'analisi.
+
+    Il rating canonico della mossa resta invariato e continua a governare
+    ordinamento, frontiera, pruning e scelta della tecnica. Soltanto le
+    Nested Forcing Chain ricevono un incremento moderato basato sulla prova
+    concreta conservata in ``logic.metrics``.
+
+    L'incremento cresce in modo logaritmico ed e limitato a un massimo di
+    1.0 punti SE, quindi una Nested parte da 9.5 e non supera 10.5.
+    """
+    base_difficulty = _difficulty_score(move)
+    technique = str(move.get("technique", ""))
+
+    if not technique.startswith("Nested "):
+        return base_difficulty
+
+    logic = move.get("logic", {}) or {}
+    metrics = logic.get("metrics", {}) or {}
+
+    chain_count = max(
+        int(metrics.get("chain_count", 0)),
+        1,
+    )
+    node_count = max(
+        int(metrics.get("node_count", 0)),
+        0,
+    )
+    max_chain_length = max(
+        int(metrics.get("max_chain_length", 0)),
+        0,
+    )
+
+    secondary_nodes = max(
+        0,
+        node_count - max_chain_length,
+    )
+
+    # Fino a sei nodi la Nested conserva il rating minimo della famiglia.
+    length_extra = (
+        0.20
+        * math.log2(
+            1 + max(0, max_chain_length - 6)
+        )
+    )
+
+    # I nodi fuori dalla catena principale rappresentano rami o sotto-prove.
+    branching_extra = (
+        0.10
+        * math.log2(1 + secondary_nodes)
+    )
+
+    # Piu catene aumentano la complessita, ma con rendimento decrescente.
+    multiple_chain_extra = (
+        0.10
+        * math.log2(chain_count)
+    )
+
+    total_extra = min(
+        1.0,
+        length_extra
+        + branching_extra
+        + multiple_chain_extra,
+    )
+
+    return round(
+        base_difficulty + total_extra,
+        1,
+    )
+
 
 def _tie_rank(move):
     return _TECHNIQUE_RANK.get(
@@ -499,7 +572,13 @@ def solve_and_log(
         )
 
         chosen = moves[0]
+
+        # Il rating canonico governa esclusivamente il comportamento del
+        # solver. Il rating tecnico effettivo serve soltanto a grading,
+        # visualizzazione e carico risolutivo.
         chosen_score = _difficulty_score(chosen)
+        technical_score = _technical_difficulty_score(chosen)
+
         inventory = _build_move_inventory(
             moves,
             best_difficulty=chosen_score,
@@ -529,7 +608,7 @@ def solve_and_log(
         
         resolution_load = (
             difficulty_model.step_resolution_load(
-                chosen_score
+                technical_score
             )
         )
 
@@ -551,7 +630,8 @@ def solve_and_log(
         }
         record["step"] = step_no
         record["grid_after"] = state.grid.copy()
-        record["technical_difficulty"] = chosen_score
+        record["base_difficulty"] = chosen_score
+        record["technical_difficulty"] = technical_score
         record["resolution_load"] = resolution_load
         record["move_discovery_difficulty"] = move_discovery_difficulty
         record["available_move_count"] = available_move_count
@@ -574,7 +654,18 @@ def solve_and_log(
             print(
                 f"[{step_no:03d}] "
                 f"{chosen['technique']:<30} "
-                f"(SE {chosen_score:.1f}, "
+                f"(SE {technical_score:.1f}"
+                + (
+                    f", base {chosen_score:.1f}"
+                    if not math.isclose(
+                        technical_score,
+                        chosen_score,
+                        rel_tol=0.0,
+                        abs_tol=1e-9,
+                    )
+                    else ""
+                )
+                + ", "
                 f"individuazione "
                 f"{move_discovery_difficulty:.2f}, "
                 f"mosse effettive {effective_move_count:.2f}, "
