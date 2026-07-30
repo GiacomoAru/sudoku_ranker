@@ -319,8 +319,8 @@ def aggregate_move_discovery_difficulty(
     )
 
     difficulty = (
-        0.60 * mean
-        + 0.40 * hardest_mean
+        0.75 * mean
+        + 0.25 * hardest_mean
     )
 
     return round(
