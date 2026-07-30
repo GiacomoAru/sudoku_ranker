@@ -37,11 +37,11 @@ TECHNIQUE_DIFFICULTY = {
     "Hidden Quadruple": 3.7,
 
     # FISH
-    "X-Wing": 3.8,
     "Swordfish": 4.1,
     "Jellyfish": 4.8,
 
     # WINGS
+    "X-Wing": 3.8,
     "Y-Wing": 4.2,
     "XYZ-Wing": 4.4,
     "W-Wing": 4.5,
@@ -269,18 +269,20 @@ def aggregate_move_discovery_difficulty(
     step_difficulties,
 ):
     """
-    Riassume la difficoltà di individuazione dell'intero puzzle.
-
-    Il valore complessivo è la media dei valori registrati
-    nei singoli stati della soluzione.
+    Combina la difficoltà media con la media del 20% degli
+    stati più difficili, così da valorizzare i colli di bottiglia
+    senza dipendere da un singolo massimo.
     """
     if not step_difficulties:
         return 0.0
 
-    values = [
-        float(value)
-        for value in step_difficulties
-    ]
+    values = sorted(
+        (
+            float(value)
+            for value in step_difficulties
+        ),
+        reverse=True,
+    )
 
     if any(
         not math.isfinite(value)
@@ -304,7 +306,22 @@ def aggregate_move_discovery_difficulty(
             "essere comprese tra 1 e 10."
         )
 
-    difficulty = math.fsum(values) / len(values)
+    mean = math.fsum(values) / len(values)
+
+    hardest_count = max(
+        1,
+        math.ceil(len(values) * 0.20),
+    )
+
+    hardest_mean = (
+        math.fsum(values[:hardest_count])
+        / hardest_count
+    )
+
+    difficulty = (
+        0.60 * mean
+        + 0.40 * hardest_mean
+    )
 
     return round(
         difficulty,
@@ -327,8 +344,8 @@ RESOLUTION_LOAD_THRESHOLDS = (
     (200.0, "Medio"),
     (400.0, "Alto"),
     (1500.0, "Molto alto"),
-    (6000.0, "Estremo"),
-    (25000.0, "Incubo"),
+    (12000.0, "Estremo"),
+    (30000.0, "Incubo"),
     (float("inf"), "Oltre il limite"),
 )
 

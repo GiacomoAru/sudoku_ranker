@@ -64,7 +64,7 @@ ANALYSIS_MODE_ALIASES = {
 
 DEFAULT_PROFILE_DIFFICULTY_WINDOW = 1.5
 DEFAULT_ANALYSIS_MODE = "profile"
-MAX_MOVES_PER_TECHNIQUE = 15
+MAX_MOVES_PER_TECHNIQUE = 16
 
 def _difficulty_score(move):
     """Usa il rating effettivo della mossa, con fallback sul valore base."""
