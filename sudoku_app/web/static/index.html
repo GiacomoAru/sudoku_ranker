@@ -3,23 +3,52 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sudoku Logic Lab</title>
+  <title>Sudoku Ranker · Analisi logica e difficoltà</title>
+  <meta
+    name="description"
+    content="Sudoku Ranker riconosce, analizza e archivia Sudoku, mostrando la soluzione logica, la difficoltà e le tecniche utilizzate."
+  >
+  <meta name="author" content="Giacomo Aru">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
   <main class="shell">
     <header class="hero">
-      <div>
-        <p class="eyebrow">LAN ANALYSIS CONSOLE</p>
-        <h1>Sudoku Logic Lab</h1>
+      <div class="hero-copy">
+        <p class="eyebrow">ANALISI LOGICA · OCR · ARCHIVIO</p>
+        <h1>Sudoku Ranker</h1>
         <p class="lede">
-          Fotografa o inserisci una griglia, poi inviala al motore logico per
-          ricevere analisi, catena di difficoltà e mappa delle tecniche.
+          Inserisci o fotografa un Sudoku per analizzarne la soluzione,
+          confrontarne la difficoltà e conservarlo nell’archivio.
         </p>
       </div>
-      <div class="connection" id="connection-status">
-        <span class="status-dot"></span>
-        <span>Verifica server…</span>
+
+      <div class="hero-actions">
+        <div class="connection" id="connection-status">
+          <span class="status-dot"></span>
+          <span>Connessione al motore…</span>
+        </div>
+
+        <a
+          class="project-credit"
+          href="https://github.com/GiacomoAru/sudoku_ranker"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Sudoku Ranker di Giacomo Aru su GitHub"
+        >
+          <svg
+            class="project-credit-icon"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <path d="M12 .9a11.1 11.1 0 0 0-3.51 21.63c.56.1.76-.24.76-.54v-2.12c-3.11.68-3.77-1.32-3.77-1.32-.51-1.3-1.25-1.65-1.25-1.65-1.02-.7.08-.69.08-.69 1.13.08 1.73 1.16 1.73 1.16 1 1.72 2.63 1.22 3.27.93.1-.73.39-1.22.71-1.5-2.48-.28-5.09-1.24-5.09-5.49 0-1.21.43-2.2 1.15-2.98-.12-.28-.5-1.42.11-2.95 0 0 .94-.3 3.05 1.14a10.55 10.55 0 0 1 5.56 0c2.12-1.44 3.05-1.14 3.05-1.14.61 1.53.23 2.67.11 2.95.72.78 1.15 1.77 1.15 2.98 0 4.26-2.61 5.2-5.1 5.48.4.35.76 1.03.76 2.08v3.08c0 .3.2.65.77.54A11.1 11.1 0 0 0 12 .9Z"/>
+          </svg>
+          <span class="project-credit-copy">
+            <small>Progetto di</small>
+            <strong>Giacomo Aru</strong>
+          </span>
+          <span class="project-credit-arrow" aria-hidden="true">↗</span>
+        </a>
       </div>
     </header>
 
@@ -27,7 +56,7 @@
       <form class="input-panel card" id="analysis-form">
         <div class="section-heading">
           <div>
-            <p class="section-kicker">INPUT</p>
+            <p class="section-kicker">INSERIMENTO</p>
             <h2>Nuovo Sudoku</h2>
           </div>
           <button class="button button-quiet" type="button" id="clear-grid">
@@ -38,8 +67,8 @@
         <section class="photo-capture" aria-labelledby="photo-capture-title">
           <div class="photo-capture-heading">
             <div>
-              <p class="section-kicker">FOTO OCR</p>
-              <h3 id="photo-capture-title">Riconosci da una foto</h3>
+              <p class="section-kicker">RICONOSCIMENTO OCR</p>
+              <h3 id="photo-capture-title">Importa il Sudoku da una foto</h3>
             </div>
             <button
               class="button button-quiet"
@@ -47,7 +76,7 @@
               id="clear-photo"
               hidden
             >
-              Scollega
+              Rimuovi foto
             </button>
           </div>
           <label class="photo-dropzone" for="photo-input">
@@ -67,7 +96,7 @@
           <div class="photo-review" id="photo-review" hidden>
             <figure>
               <img id="photo-original-preview" alt="Foto originale del Sudoku">
-              <figcaption>Originale archiviato</figcaption>
+              <figcaption>Foto originale</figcaption>
             </figure>
             <figure>
               <img
@@ -78,8 +107,8 @@
             </figure>
           </div>
           <p class="photo-review-note" id="photo-review-note" hidden>
-            Controlla la griglia sotto. Le celle arancioni hanno confidenza
-            bassa o sono state corrette per coerenza.
+            Controlla il riconoscimento prima dell’analisi. Le celle arancioni
+            sono incerte o sono state corrette automaticamente.
           </p>
         </section>
 
@@ -90,14 +119,14 @@
         ></div>
 
         <label class="field">
-          <span>Oppure incolla 81 caratteri</span>
+          <span>Oppure incolla la griglia</span>
           <textarea
             id="grid-string"
             rows="3"
             inputmode="numeric"
             autocomplete="off"
             spellcheck="false"
-            placeholder="Usa 0 o . per le celle vuote"
+            placeholder="81 caratteri: usa 0 o . per le celle vuote"
           ></textarea>
         </label>
 
@@ -199,12 +228,12 @@
         </details>
 
         <p class="hint">
-          Analisi predefinita: <strong>profile</strong>, finestra
-          <strong>3.0</strong>. Il risultato viene salvato nell’archivio web.
+          Analisi standard: <strong>profilo logico</strong> con finestra SE
+          <strong>1,5</strong>. Il risultato viene salvato nell’archivio.
         </p>
 
         <button class="button button-primary" type="submit" id="submit-button">
-          <span>Analizza e salva</span>
+          <span>Analizza e archivia</span>
           <span class="button-arrow">→</span>
         </button>
 
@@ -263,7 +292,7 @@
               tabindex="0"
               title="Numero di mosse logiche nella catena di risoluzione."
             >
-              <dt>Step</dt>
+              <dt>Passaggi</dt>
               <dd id="step-count">—</dd>
             </div>
 
@@ -345,10 +374,10 @@
         <article class="plot-card card">
           <div class="plot-heading">
             <p class="section-kicker">GRAFICO 02</p>
-            <h2>Heatmap delle tecniche</h2>
+            <h2>Disponibilità delle tecniche</h2>
           </div>
           <div class="plot-frame">
-            <img id="heatmap-plot" alt="Heatmap delle tecniche disponibili">
+            <img id="heatmap-plot" alt="Mappa delle tecniche disponibili durante la soluzione">
           </div>
         </article>
 
@@ -369,6 +398,28 @@
         </details>
       </section>
     </section>
+
+    <footer class="site-footer">
+      <p>
+        <strong>Sudoku Ranker</strong>
+        <span aria-hidden="true">·</span>
+        sviluppato da
+        <a
+          href="https://github.com/GiacomoAru"
+          target="_blank"
+          rel="noopener noreferrer"
+        >Giacomo Aru</a>
+      </p>
+      <a
+        class="site-footer-repo"
+        href="https://github.com/GiacomoAru/sudoku_ranker"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        Codice sorgente su GitHub
+        <span aria-hidden="true">↗</span>
+      </a>
+    </footer>
   </main>
 
   <script src="/static/app.js" defer></script>

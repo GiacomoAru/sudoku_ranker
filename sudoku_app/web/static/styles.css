@@ -1172,3 +1172,156 @@ h3 {
     min-width: 620px;
   }
 }
+
+/* Identità del progetto: integrazione discreta con lo stile esistente. */
+.hero-copy {
+  min-width: 0;
+}
+
+.hero-actions {
+  display: grid;
+  flex: 0 0 auto;
+  justify-items: end;
+  gap: 10px;
+}
+
+.project-credit {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 218px;
+  padding: 10px 12px;
+  border: 1px solid rgba(35, 54, 47, 0.13);
+  border-radius: 14px;
+  background: rgba(255, 253, 248, 0.72);
+  color: var(--ink);
+  text-decoration: none;
+  box-shadow: 0 8px 24px rgba(31, 43, 38, 0.055);
+  transition:
+    transform 150ms ease,
+    border-color 150ms ease,
+    background 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.project-credit:hover {
+  transform: translateY(-1px);
+  border-color: rgba(44, 106, 82, 0.34);
+  background: rgba(255, 253, 248, 0.96);
+  box-shadow: 0 12px 30px rgba(31, 43, 38, 0.085);
+}
+
+.project-credit:focus-visible {
+  outline: 3px solid rgba(44, 106, 82, 0.18);
+  outline-offset: 2px;
+}
+
+.project-credit-icon {
+  width: 34px;
+  height: 34px;
+  padding: 7px;
+  border-radius: 10px;
+  background: #e5efe9;
+  fill: var(--green);
+}
+
+.project-credit-copy {
+  min-width: 0;
+}
+
+.project-credit-copy small,
+.project-credit-copy strong {
+  display: block;
+}
+
+.project-credit-copy small {
+  margin-bottom: 2px;
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.project-credit-copy strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 0.82rem;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-credit-arrow {
+  color: var(--accent-dark);
+  font-size: 1rem;
+  font-weight: 800;
+  transition: transform 150ms ease;
+}
+
+.project-credit:hover .project-credit-arrow {
+  transform: translate(2px, -2px);
+}
+
+.site-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 22px;
+  margin-top: 26px;
+  padding: 18px 5px 0;
+  border-top: 1px solid rgba(35, 54, 47, 0.12);
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.site-footer p {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.site-footer strong {
+  color: var(--ink);
+}
+
+.site-footer a {
+  color: var(--green);
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.site-footer a:hover {
+  color: var(--accent-dark);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.site-footer-repo {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+@media (max-width: 640px) {
+  .hero-actions {
+    width: 100%;
+    justify-items: stretch;
+  }
+
+  .project-credit {
+    min-width: 0;
+  }
+
+  .site-footer {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+    padding-inline: 3px;
+  }
+}
+
