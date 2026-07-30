@@ -158,57 +158,63 @@
               <p class="section-kicker">RISULTATO</p>
               <h2 id="result-name">Analisi</h2>
             </div>
-            <span class="result-label" id="technical-difficulty-label">—</span>
+            <span
+              class="result-label status-badge"
+              id="analysis-status-badge"
+            >
+              —
+            </span>
           </div>
 
           <dl class="metrics">
             <div
-              class="metric-help"
+              class="metric-help metric-third"
+              id="metric-technical"
               tabindex="0"
-              title="Massimo rating Sudoku Explainer richiesto dalla catena."
+              title="Massimo rating Sudoku Explainer richiesto durante la soluzione."
             >
               <dt>Difficoltà tecnica</dt>
               <dd id="technical-difficulty">—</dd>
             </div>
+
             <div
-              class="metric-help"
+              class="metric-help metric-third"
+              id="metric-resolution-load"
               tabindex="0"
-              title="Somma dei punteggi HoDoKu degli step e relativo livello."
+              title="Lavoro logico cumulativo della soluzione. Ogni punto SE aggiuntivo moltiplica il costo dello step per 3,2."
             >
-              <dt>Carico di risoluzione</dt>
+              <dt>Carico risolutivo</dt>
               <dd id="resolution-load">—</dd>
             </div>
+
             <div
-              class="metric-help"
+              class="metric-help metric-third"
+              id="metric-move-discovery-difficulty"
               tabindex="0"
-              title="Difficoltà percepita espressa sulla stessa scala del rating SE."
+              title="Difficoltà nel trovare la prossima mossa, considerando il numero effettivo di mosse accessibili e la loro distanza SE."
             >
-              <dt>Difficoltà percepita</dt>
-              <dd id="perceived-difficulty">—</dd>
+              <dt>Individuazione mossa</dt>
+              <dd id="move-discovery-difficulty">—</dd>
             </div>
+
             <div
-              class="metric-help"
+              class="metric-help metric-half tone-neutral"
+              id="metric-steps"
               tabindex="0"
               title="Numero di mosse logiche nella catena di risoluzione."
             >
               <dt>Step</dt>
               <dd id="step-count">—</dd>
             </div>
+
             <div
-              class="metric-help"
+              class="metric-help metric-half"
+              id="metric-hardest-technique"
               tabindex="0"
-              title="Esito del motore logico: risolto, bloccato o interrotto."
+              title="Tecnica con il rating Sudoku Explainer più alto."
             >
-              <dt>Stato</dt>
-              <dd id="analysis-status">—</dd>
-            </div>
-            <div
-              class="metric-help"
-              tabindex="0"
-              title="L'archivio accetta soltanto Sudoku con una soluzione."
-            >
-              <dt>Soluzione</dt>
-              <dd id="unique-solution">—</dd>
+              <dt>Tecnica più difficile</dt>
+              <dd id="hardest-technique">—</dd>
             </div>
           </dl>
 

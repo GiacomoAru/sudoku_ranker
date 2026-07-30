@@ -13,7 +13,6 @@ from ..core import canonicalization as sc
 from ..core import data_structure as sds
 from ..core import difficulty as difficulty_model
 from ..core import solver as ss
-from ..core import techniques as st
 
 # ---------------------------------------------------------------------------
 # Configurazione archivio
@@ -38,8 +37,8 @@ CANONICAL_CLASS_SCHEMA_VERSION = 1
 
 # Incrementare questo numero quando cambia il funzionamento del solver
 # o il formato dell'analisi. Le vecchie analisi verranno ricalcolate.
-ANALYSIS_VERSION = 15
-ANALYSIS_SCHEMA_VERSION = 4
+ANALYSIS_VERSION = 17
+ANALYSIS_SCHEMA_VERSION = 6
 
 # Evita anche letture ripetute dal disco durante la stessa esecuzione.
 # La chiave è (puzzle_id, analysis_variant), non soltanto puzzle_id.
@@ -734,7 +733,7 @@ _STORED_MOVE_FIELDS = {
     "family",
     "technical_difficulty",
     "resolution_load",
-    "perceived_difficulty",
+    "move_discovery_difficulty",
     "description",
     "placements",
     "eliminations",
@@ -744,11 +743,11 @@ _STORED_MOVE_FIELDS = {
     "grid_after",
     "available_move_count",
     "frontier_move_count",
+    "effective_move_count",
     "available_by_technique",
     "frontier_by_technique",
     "capped_techniques",
 }
-
 
 def _compact_analysis_for_storage(analysis):
     """
@@ -779,28 +778,27 @@ def _compact_analysis_for_storage(analysis):
     migrated_chain = []
     for source_move in compact.get("chain", []):
         move = dict(source_move)
-        technical_difficulty = float(
-            move.get(
-                "technical_difficulty",
-                move.get(
-                    "difficulty",
-                    st.TECHNIQUE_DIFFICULTY[
-                        move["technique"]
-                    ],
-                ),
+        if "technical_difficulty" in move:
+            technical_difficulty = float(
+                move["technical_difficulty"]
+            )
+        elif "difficulty" in move:
+            technical_difficulty = float(
+                move["difficulty"]
+            )
+        else:
+            technical_difficulty = (
+                difficulty_model.technique_difficulty(
+                    move["technique"]
+                )
+            )
+
+        resolution_load = (
+            difficulty_model.step_resolution_load(
+                technical_difficulty
             )
         )
-        resolution_load = int(
-            move.get(
-                "resolution_load",
-                move.get(
-                    "hodoku_score",
-                    difficulty_model.hodoku_technique_rating(
-                        move["technique"]
-                    )["score"],
-                ),
-            )
-        )
+
 
         availability = move.get("availability", {})
         available_entries = availability.get("by_technique", {})
@@ -836,35 +834,51 @@ def _compact_analysis_for_storage(analysis):
         )
         available_move_count = max(
             1,
-            min(
-                int(
+            int(
+                move.get(
+                    "available_move_count",
                     move.get(
-                        "available_move_count",
-                        move.get(
-                            "n_distinct_outcomes",
-                            move.get("n_alternatives", 1),
-                        ),
-                    )
-                ),
-                sum(available_by_technique.values()) or 1,
+                        "n_distinct_outcomes",
+                        move.get("n_alternatives", 1),
+                    ),
+                )
             ),
         )
         frontier_move_count = max(
             1,
-            min(
-                int(
+            int(
+                move.get(
+                    "frontier_move_count",
                     move.get(
-                        "frontier_move_count",
-                        move.get(
-                            "n_best_distinct_outcomes",
-                            move.get("n_best_alternatives", 1),
-                        ),
-                    )
-                ),
-                sum(frontier_by_technique.values()) or 1,
+                        "n_best_distinct_outcomes",
+                        move.get("n_best_alternatives", 1),
+                    ),
+                )
             ),
         )
+        effective_move_count = float(
+            move.get(
+                "effective_move_count",
+                frontier_move_count,
+            )
+        )
 
+        effective_move_count = max(
+            1.0,
+            effective_move_count,
+        )
+
+        move_discovery_difficulty = float(
+            move.get(
+                "move_discovery_difficulty",
+                difficulty_model.step_move_discovery_difficulty(
+                    effective_move_count=effective_move_count,
+                    max_moves=ss.MAX_MOVES_PER_TECHNIQUE,
+                ),
+            )
+        )
+        
+        
         migrated = {
             key: move[key]
             for key in (
@@ -883,18 +897,14 @@ def _compact_analysis_for_storage(analysis):
         migrated.update({
             "technical_difficulty": technical_difficulty,
             "resolution_load": resolution_load,
-            "perceived_difficulty": round(
-                ss._perceived_step_difficulty(
-                    technical_difficulty,
-                    frontier_move_count,
-                ),
-                2,
-            ),
+            "effective_move_count": effective_move_count,
+            "move_discovery_difficulty": move_discovery_difficulty,
             "available_move_count": available_move_count,
             "frontier_move_count": frontier_move_count,
             "available_by_technique": available_by_technique,
             "frontier_by_technique": frontier_by_technique,
         })
+        
         capped = set(move.get("capped_techniques", ()))
         capped.update(
             technique
@@ -1420,10 +1430,18 @@ def list_sudokus(
     method = method.casefold()
 
     if method == "hardest":
-        return list_sudokus(number, "perceived_difficulty", 99)
+        return list_sudokus(
+            number,
+            "resolution_load",
+            99,
+        )
 
     if method == "easiest":
-        return list_sudokus(number, "perceived_difficulty", 0)
+        return list_sudokus(
+            number,
+            "resolution_load",
+            0,
+        )
 
     results = []
 
@@ -1478,8 +1496,8 @@ def list_sudokus(
                 "technical_difficulty_label"
             ),
             "hardest_technique": grading.get("hardest_technique"),
-            "resolution_load_level": grading.get(
-                "resolution_load_level"
+            "move_discovery_difficulty_label": grading.get(
+                "move_discovery_difficulty_label"
             ),
             "unique_solution": payload.get("unique_solution"),
             "is_canonical": payload.get("is_canonical"),

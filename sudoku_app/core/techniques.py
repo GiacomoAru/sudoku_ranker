@@ -56,85 +56,12 @@ from . import logic_engine
 from . import difficulty as difficulty_model
 
 
-TECHNIQUE_DIFFICULTY = {
-    # Tecniche elementari (scala Sudoku Explainer 1.2.1).
-    "Last Value": 1.0,
-    "Hidden Single (Box)": 1.2,
-    "Hidden Single (Row/Column)": 1.5,
-    "Direct Pointing": 1.7,
-    "Direct Claiming": 1.9,
-    "Direct Hidden Pair": 2.0,
-    "Naked Single": 2.3,
-    "Direct Hidden Triplet": 2.5,
-    "Pointing": 2.6,
-    "Claiming": 2.8,
-
-    # Subset e fish.
-    "Naked Pair": 3.0,
-    "X-Wing": 3.2,
-    "Hidden Pair": 3.4,
-    "Naked Triple": 3.6,
-    "Swordfish": 3.8,
-    "Hidden Triple": 4.0,
-    "Y-Wing": 4.2,
-    "XYZ-Wing": 4.4,
-
-    # Unique pattern, subset grandi e BUG.
-    "Unique Rectangle Type 1": 4.5,
-    "Unique Rectangle Type 2": 4.6,
-    "Unique Rectangle Type 3": 4.8,
-    "Unique Rectangle Type 4": 4.9,
-    "Unique Rectangle Type 5": 5.0,
-    "Naked Quadruple": 5.0,
-    "Jellyfish": 5.2,
-    "Hidden Quadruple": 5.4,
-    "BUG+1": 5.6,
-    "BUG Type 2": 5.7,
-    "BUG Type 4": 5.7,
-    "BUG Type 3 (Pair)": 5.8,
-    "BUG Type 3 (Triplet)": 5.9,
-    "BUG Type 3 (Quad)": 6.0,
-    "Aligned Pair Exclusion": 6.2,
-
-    # Cicli e catene statiche.
-    "Bidirectional X-Cycle": 6.5,
-    "Bidirectional Y-Cycle": 6.5,
-    "Remote Pair": 6.5,
-    "XY-Chain": 6.5,
-    "XY-Cycle": 6.5,
-    "Forcing X-Chain": 6.6,
-    "Skyscraper": 6.6,
-    "Two-String Kite": 6.6,
-    "Empty Rectangle": 6.6,
-    "Turbot Fish": 6.6,
-    "Forcing Chain": 7.0,
-    "Alternating Inference Chain": 7.0,
-    "Bidirectional Cycle": 7.0,
-    "Continuous Nice Loop": 7.0,
-    "W-Wing": 7.0,
-
-    # Assunzioni, riduzioni multiple e propagazione dinamica.
-    "Nishio": 7.5,
-    "Cell Forcing Chain": 8.0,
-    "Region Forcing Chain": 8.0,
-    "Dynamic Forcing Chain": 8.5,
-    "Dynamic Contradiction Forcing Chain": 8.5,
-    "Dynamic Double Forcing Chain": 8.5,
-    "Dynamic Cell Forcing Chain": 8.5,
-    "Dynamic Region Forcing Chain": 8.5,
-
-    "Dynamic Forcing Chain Plus": 9.0,
-    "Dynamic Contradiction Forcing Chain Plus": 9.0,
-    "Dynamic Double Forcing Chain Plus": 9.0,
-    "Dynamic Cell Forcing Chain Plus": 9.0,
-    "Dynamic Region Forcing Chain Plus": 9.0,
-
-    "Nested Forcing Chain": 9.5,
-    "Nested Contradiction Forcing Chain": 9.5,
-    "Nested Double Forcing Chain": 9.5,
-    "Nested Cell Forcing Chain": 9.5,
-    "Nested Region Forcing Chain": 9.5,
-}
+# Ordine per difficoltà crescente.
+# A parità, sorted() mantiene l'ordine originale del dizionario.
+_TECHNIQUE_ORDER = sorted(
+    difficulty_model.TECHNIQUE_DIFFICULTY,
+    key=difficulty_model.TECHNIQUE_DIFFICULTY.get,
+)
 
 # Il nome specifico resta distinto dalla famiglia logica che ne determina il
 # rating SE e l'algoritmo. È utile anche ai report che vogliono aggregare o
@@ -164,25 +91,6 @@ MODERN_TECHNIQUE_PARENT = {
     "Nested Region Forcing Chain": "Nested Forcing Chain",
 }
 
-# Intervalli SE documentati per le famiglie gestite dal motore logico.
-# Il rating pubblico della tecnica resta il valore canonico della tabella.
-LOGIC_ENGINE_TECHNIQUE_RANGES = {
-    "Bidirectional X-Cycle": (6.5, 7.5),
-    "Bidirectional Y-Cycle": (6.5, 7.5),
-    "Forcing X-Chain": (6.6, 7.6),
-    "Forcing Chain": (7.0, 8.0),
-    "Bidirectional Cycle": (7.0, 8.0),
-    "Nishio": (7.5, 8.5),
-    "Cell Forcing Chain": (8.0, 9.0),
-    "Region Forcing Chain": (8.0, 9.0),
-    "Dynamic Forcing Chain": (8.5, 9.5),
-    "Dynamic Forcing Chain Plus": (9.0, 10.0),
-    "Nested Forcing Chain": (9.5, float("inf")),
-}
-
-# Nome storico mantenuto per compatibilità: tutte le voci che richiedevano il
-# motore sono ora coperte.
-TECHNIQUES_REQUIRING_LOGIC_ENGINE = {}
 
 # La generalizzazione dei rettangoli a Unique Loop di 6+ celle richiede un
 # enumeratore di cicli alternati con validazione delle case. È un componente
@@ -192,134 +100,12 @@ TECHNIQUES_REQUIRING_PATTERN_ENGINE = {
     "Unique Loop (6+ cells)": (4.6, 5.0),
 }
 
-_TECHNIQUE_ORDER = [
-    # 1.0
-    "Last Value",
-
-    # 1.2
-    "Hidden Single (Box)",
-
-    # 1.5
-    "Hidden Single (Row/Column)",
-
-    # 1.7-2.0
-    "Direct Pointing",
-    "Direct Claiming",
-    "Direct Hidden Pair",
-
-    # 2.3-2.8
-    "Naked Single",
-    "Direct Hidden Triplet",
-    "Pointing",
-    "Claiming",
-
-    # 3.0-4.0
-    "Naked Pair",
-    "X-Wing",
-    "Hidden Pair",
-    "Naked Triple",
-    "Swordfish",
-    "Hidden Triple",
-
-    # 4.2-4.4
-    "Y-Wing",
-    "XYZ-Wing",
-
-    # 4.5-5.6
-    "Unique Rectangle Type 1",
-    "Unique Rectangle Type 2",
-    "Unique Rectangle Type 3",
-    "Unique Rectangle Type 4",
-    "Unique Rectangle Type 5",
-    "Naked Quadruple",
-    "Jellyfish",
-    "Hidden Quadruple",
-    "BUG+1",
-    "BUG Type 2",
-    "BUG Type 4",
-    "BUG Type 3 (Pair)",
-    "BUG Type 3 (Triplet)",
-    "BUG Type 3 (Quad)",
-
-    # Tecniche locali oltre la fascia BUG.
-    "Aligned Pair Exclusion",
-
-    # Cicli e catene generali gestiti dal motore logico.
-    "Bidirectional X-Cycle",
-    "Remote Pair",
-    "XY-Chain",
-    "XY-Cycle",
-    "Bidirectional Y-Cycle",
-
-    # Le specializzazioni precedono la famiglia generale a parità di rating,
-    # così il log conserva il nome più informativo quando entrambe descrivono
-    # la stessa eliminazione.
-    "Skyscraper",
-    "Two-String Kite",
-    "Empty Rectangle",
-    "Turbot Fish",
-    "Forcing X-Chain",
-    "W-Wing",
-    "Alternating Inference Chain",
-    "Forcing Chain",
-    "Continuous Nice Loop",
-    "Bidirectional Cycle",
-
-    # Forcing multipli e dinamici.
-    "Nishio",
-    "Cell Forcing Chain",
-    "Region Forcing Chain",
-    "Dynamic Contradiction Forcing Chain",
-    "Dynamic Double Forcing Chain",
-    "Dynamic Cell Forcing Chain",
-    "Dynamic Region Forcing Chain",
-    "Dynamic Forcing Chain",
-    "Dynamic Contradiction Forcing Chain Plus",
-    "Dynamic Double Forcing Chain Plus",
-    "Dynamic Cell Forcing Chain Plus",
-    "Dynamic Region Forcing Chain Plus",
-    "Dynamic Forcing Chain Plus",
-    "Nested Contradiction Forcing Chain",
-    "Nested Double Forcing Chain",
-    "Nested Cell Forcing Chain",
-    "Nested Region Forcing Chain",
-    "Nested Forcing Chain",
-]
 
 
 # ---------------------------------------------------------------- taxonomy
 # ``family`` mantiene una tassonomia abbastanza granulare per le heatmap
 # dettagliate. ``strategy`` raggruppa invece famiglie affini in poche righe
 # leggibili. La tecnica specifica resta sempre disponibile in ``technique``.
-TECHNIQUE_FAMILY_ORDER = [
-    "Inserimenti diretti",
-    "Intersezioni box/linee",
-    "Sottoinsiemi bloccati",
-    "Fish",
-    "Wings",
-    "Unicita",
-    "Exclusion",
-    "Pattern a cifra singola",
-    "Cicli bidirezionali",
-    "Catene forzanti",
-    "Assunzioni logiche",
-    "Forcing multipli",
-    "Forcing dinamici",
-    "Forcing annidati",
-]
-
-TECHNIQUE_STRATEGY_ORDER = [
-    "Tecniche elementari",
-    "Sottoinsiemi e intersezioni",
-    "Fish e wings",
-    "Unicita ed esclusione",
-    "Pattern a cifra singola",
-    "Catene statiche",
-    "Forcing multipli",
-    "Forcing dinamici",
-    "Forcing annidati",
-]
-
 TECHNIQUE_FAMILY = {
     "Last Value": "Inserimenti diretti",
     "Hidden Single (Box)": "Inserimenti diretti",
@@ -361,8 +147,8 @@ TECHNIQUE_FAMILY = {
     "Turbot Fish": "Pattern a cifra singola",
     "Bidirectional X-Cycle": "Cicli bidirezionali",
     "Bidirectional Y-Cycle": "Cicli bidirezionali",
-    "Remote Pair": "Cicli bidirezionali",
-    "XY-Chain": "Cicli bidirezionali",
+    "Remote Pair": "Catene bivalue",
+    "XY-Chain": "Catene bivalue",
     "XY-Cycle": "Cicli bidirezionali",
     "Bidirectional Cycle": "Cicli bidirezionali",
     "Continuous Nice Loop": "Cicli bidirezionali",
@@ -389,6 +175,13 @@ TECHNIQUE_FAMILY = {
     "Nested Region Forcing Chain": "Forcing annidati",
 }
 
+TECHNIQUE_FAMILY_ORDER = list(dict.fromkeys(
+    TECHNIQUE_FAMILY[technique]
+    for technique in _TECHNIQUE_ORDER
+))
+
+
+
 _FAMILY_TO_STRATEGY = {
     "Inserimenti diretti": "Tecniche elementari",
     "Intersezioni box/linee": "Sottoinsiemi e intersezioni",
@@ -398,9 +191,10 @@ _FAMILY_TO_STRATEGY = {
     "Unicita": "Unicita ed esclusione",
     "Exclusion": "Unicita ed esclusione",
     "Pattern a cifra singola": "Pattern a cifra singola",
+    "Catene bivalue": "Catene statiche",
     "Cicli bidirezionali": "Catene statiche",
     "Catene forzanti": "Catene statiche",
-    "Assunzioni logiche": "Forcing multipli",
+    "Assunzioni logiche": "Assunzioni logiche",
     "Forcing multipli": "Forcing multipli",
     "Forcing dinamici": "Forcing dinamici",
     "Forcing annidati": "Forcing annidati",
@@ -410,6 +204,13 @@ TECHNIQUE_STRATEGY = {
     technique: _FAMILY_TO_STRATEGY[family]
     for technique, family in TECHNIQUE_FAMILY.items()
 }
+
+# Ordina le strategie in base alla prima tecnica che compare
+# nell'ordine canonico delle difficoltà.
+TECHNIQUE_STRATEGY_ORDER = list(dict.fromkeys(
+    TECHNIQUE_STRATEGY[technique]
+    for technique in _TECHNIQUE_ORDER
+))
 
 
 def technique_family(technique, fallback=None):
@@ -435,19 +236,26 @@ def technique_strategy(technique, family=None):
 def technique_metadata(technique):
     """Metadata stabile consumabile da solver, report e visualizzazioni."""
     family = technique_family(technique)
-    hodoku = difficulty_model.hodoku_technique_rating(technique)
+    technical_difficulty = _canonical_difficulty(technique)
+
     return {
         "technique": technique,
         "family": family,
         "strategy": technique_strategy(technique, family),
-        "technical_difficulty": _canonical_difficulty(technique),
-        "parent": MODERN_TECHNIQUE_PARENT.get(technique, technique),
-        "resolution_load": hodoku["score"],
-        "resolution_load_level": hodoku["level"],
+        "technical_difficulty": technical_difficulty,
+        "technical_difficulty_label": (
+            difficulty_model.technical_difficulty_label(
+                technical_difficulty
+            )
+        ),
+        "parent": MODERN_TECHNIQUE_PARENT.get(
+            technique,
+            technique,
+        ),
     }
 
 
-_missing_family_metadata = set(TECHNIQUE_DIFFICULTY) - set(TECHNIQUE_FAMILY)
+_missing_family_metadata = set(difficulty_model.TECHNIQUE_DIFFICULTY) - set(TECHNIQUE_FAMILY)
 if _missing_family_metadata:
     missing = ", ".join(sorted(_missing_family_metadata))
     raise RuntimeError(f"Metadata di famiglia mancante per: {missing}")
@@ -500,7 +308,6 @@ def _build_move(
 
     canonical_family = technique_family(technique, family)
     canonical_strategy = technique_strategy(technique, canonical_family)
-    hodoku = difficulty_model.hodoku_technique_rating(technique)
     primary = _normalise_cells(primary)
 
     if secondary is None:
@@ -514,7 +321,6 @@ def _build_move(
         "family": canonical_family,
         "strategy": canonical_strategy,
         "difficulty": _canonical_difficulty(technique, difficulty),
-        "resolution_load": hodoku["score"],
         "description": description,
         "placements": placements,
         "eliminations": eliminations,
@@ -606,11 +412,12 @@ def _cached_local(state, key, function, *args):
 
 def _canonical_difficulty(technique, fallback=None):
     """Restituisce il rating SE canonico della tecnica."""
-    if technique in TECHNIQUE_DIFFICULTY:
-        return float(TECHNIQUE_DIFFICULTY[technique])
-    if fallback is None:
-        raise KeyError(f"Rating SE mancante per {technique!r}")
-    return float(fallback)
+    try:
+        return difficulty_model.technique_difficulty(technique)
+    except KeyError:
+        if fallback is None:
+            raise
+        return float(fallback)
 
 
 def _elim_move(technique, family, difficulty, description, eliminations, primary, state):
@@ -2046,7 +1853,7 @@ def bug_types_2_to_4(state):
                     ]
                     mv = _elim_move(
                         technique, 'Unicita',
-                        TECHNIQUE_DIFFICULTY[technique],
+                        difficulty_model.TECHNIQUE_DIFFICULTY[technique],
                         f'Gli extra BUG {sorted(all_extra_values)} agiscono '
                         f'come una pseudo-cella e, insieme a '
                         f'{", ".join(f"R{r+1}C{c+1}" for r, c in support)}, '
@@ -2645,7 +2452,7 @@ def _spec(key, engine, runner, techniques):
     missing = [
         technique
         for technique in techniques
-        if technique not in TECHNIQUE_DIFFICULTY
+        if technique not in difficulty_model.TECHNIQUE_DIFFICULTY
     ]
     if missing:
         raise KeyError(
@@ -2658,7 +2465,7 @@ def _spec(key, engine, runner, techniques):
         "runner": runner,
         "techniques": techniques,
         "minimum_difficulty": min(
-            TECHNIQUE_DIFFICULTY[technique]
+            difficulty_model.TECHNIQUE_DIFFICULTY[technique]
             for technique in techniques
         ),
     }

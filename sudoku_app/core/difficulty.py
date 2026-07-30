@@ -1,326 +1,388 @@
-"""Mapping HoDoKu complementare alla difficoltà tecnica Sudoku Explainer.
+"""Modello centralizzato della difficoltà Sudoku.
 
-Il rating SE resta invariato e continua a descrivere la tecnica teorica.
-Questo modulo aggiunge la stima del carico di risoluzione basata sui valori
-predefiniti di HoDoKu 2.2.4.
-
-HoDoKu usa due attributi per tecnica, ``level`` e ``score``. Il punteggio del
-puzzle è la somma dei punteggi degli step e il livello complessivo è il
-maggiore fra il livello dello step più difficile e quello determinato dalla
-somma. Le tecniche non presenti direttamente in HoDoKu sono marcate come
-stime e ricondotte alla tecnica HoDoKu più vicina.
-
-Fonti:
-https://hodoku.sourceforge.net/en/docs_cre.php
-https://github.com/1to9only/HoDoKu/blob/master/src/sudoku/Options.java
+La difficoltà tecnica usa la scala derivata da Sudoku Explainer 1.2.1.
+Il carico risolutivo misura il lavoro logico cumulativo della soluzione.
+La difficoltà di individuazione misura quanto sia difficile trovare una
+prossima mossa accessibile, considerando anche le mosse con rating SE vicino.
 """
 
 from __future__ import annotations
 
-HODOKU_MODEL_VERSION = "HoDoKu 2.2.4 defaults / mapping v1"
+import math
 
-HODOKU_LEVEL_ORDER = {
-    "Easy": 1,
-    "Medium": 2,
-    "Hard": 3,
-    "Unfair": 4,
-    "Extreme": 5,
+
+DIFFICULTY_MODEL_VERSION = 5
+
+TECHNIQUE_DIFFICULTY = {
+    # INSERIMENTI DIRETTI
+    "Last Value": 1.0,
+    "Hidden Single (Box)": 1.2,
+    "Hidden Single (Row/Column)": 1.5,
+    "Naked Single": 1.8,
+
+    # INTERSEZIONI BOX / LINEE
+    "Direct Pointing": 2.4,
+    "Pointing": 2.4,
+    "Direct Claiming": 2.5,
+    "Claiming": 2.5,
+
+    # SOTTOINSIEMI
+    "Naked Pair": 2.8,
+    "Direct Hidden Pair": 3.0,
+    "Hidden Pair": 3.0,
+    "Naked Triple": 3.2,
+    "Direct Hidden Triplet": 3.4,
+    "Hidden Triple": 3.4,
+    "Naked Quadruple": 3.6,
+    "Hidden Quadruple": 3.7,
+
+    # FISH
+    "X-Wing": 3.8,
+    "Swordfish": 4.1,
+    "Jellyfish": 4.8,
+
+    # WINGS
+    "Y-Wing": 4.2,
+    "XYZ-Wing": 4.4,
+    "W-Wing": 4.5,
+
+    # PATTERN A CIFRA SINGOLA
+    "Skyscraper": 3.9,
+    "Two-String Kite": 4.0,
+    "Turbot Fish": 4.2,
+    "Empty Rectangle": 4.3,
+
+    # UNICITÀ
+    "Unique Rectangle Type 1": 4.3,
+    "Unique Rectangle Type 2": 4.5,
+    "Unique Rectangle Type 4": 4.6,
+    "BUG+1": 4.6,
+    "Unique Rectangle Type 5": 4.7,
+    "Unique Rectangle Type 3": 4.9,
+    "BUG Type 2": 5.0,
+    "BUG Type 4": 5.1,
+    "BUG Type 3 (Pair)": 5.2,
+    "BUG Type 3 (Triplet)": 5.4,
+    "BUG Type 3 (Quad)": 5.6,
+
+    # CATENE BIVALUE
+    "Remote Pair": 4.7,
+    "XY-Chain": 5.5,
+
+    # CICLI BIDIREZIONALI
+    "Bidirectional X-Cycle": 5.4,
+    "Bidirectional Y-Cycle": 5.6,
+    "XY-Cycle": 5.8,
+    "Continuous Nice Loop": 6.1,
+    "Bidirectional Cycle": 6.1,
+
+    # CATENE FORZANTI STATICHE
+    "Forcing X-Chain": 5.7,
+    "Alternating Inference Chain": 6.0,
+    "Forcing Chain": 6.7,
+
+    # ESCLUSIONE
+    "Aligned Pair Exclusion": 6.2,
+
+    # ASSUNZIONI LOGICHE
+    "Nishio": 7.1,
+
+    # FORCING MULTIPLI
+    "Cell Forcing Chain": 7.6,
+    "Region Forcing Chain": 7.8,
+
+    # FORCING DINAMICI
+    "Dynamic Contradiction Forcing Chain": 8.5,
+    "Dynamic Double Forcing Chain": 8.5,
+    "Dynamic Cell Forcing Chain": 8.5,
+    "Dynamic Region Forcing Chain": 8.5,
+    "Dynamic Forcing Chain": 8.5,
+
+    # FORCING DINAMICI PLUS
+    "Dynamic Contradiction Forcing Chain Plus": 9.0,
+    "Dynamic Double Forcing Chain Plus": 9.0,
+    "Dynamic Cell Forcing Chain Plus": 9.0,
+    "Dynamic Region Forcing Chain Plus": 9.0,
+    "Dynamic Forcing Chain Plus": 9.0,
+
+
+    # FORCING ANNIDATI
+    "Nested Contradiction Forcing Chain": 9.5,
+    "Nested Double Forcing Chain": 9.5,
+    "Nested Cell Forcing Chain": 9.5,
+    "Nested Region Forcing Chain": 9.5,
+    "Nested Forcing Chain": 9.5,
 }
 
-HODOKU_LEVEL_LABELS_IT = {
-    "Easy": "Facile",
-    "Medium": "Medio",
-    "Hard": "Difficile",
-    "Unfair": "Ingiusto",
-    "Extreme": "Estremo",
-}
 
-HODOKU_SCORE_THRESHOLDS = (
-    (800, "Easy"),
-    (1000, "Medium"),
-    (1600, "Hard"),
-    (1800, "Unfair"),
-    (float("inf"), "Extreme"),
+
+TECHNICAL_DIFFICULTY_THRESHOLDS = (
+    (1.5, "Molto facile"),
+    (2.5, "Facile"),
+    (3.7, "Medio"),
+    (4.7, "Difficile"),
+    (5.8, "Molto difficile"),
+    (6.8, "Esperto"),
+    (8.5, "Diabolico"),
+    (9.0, "Estremo"),
+    (9.5, "Incubo"),
+    (float("inf"), "Oltre il limite"),
 )
 
 
-def _spec(score, level, *, estimated=False, basis=None):
-    return {
-        "score": int(score),
-        "level": level,
-        "estimated": bool(estimated),
-        "basis": basis,
-    }
-
-
-# Valori esatti della configurazione predefinita HoDoKu.
-HODOKU_EXACT_TECHNIQUES = {
-    "Last Value": _spec(4, "Easy", basis="Full House"),
-    "Hidden Single (Box)": _spec(14, "Easy", basis="Hidden Single"),
-    "Hidden Single (Row/Column)": _spec(
-        14,
-        "Easy",
-        basis="Hidden Single",
-    ),
-    "Naked Single": _spec(4, "Easy"),
-    "Pointing": _spec(50, "Medium", basis="Locked Candidates Type 1"),
-    "Claiming": _spec(50, "Medium", basis="Locked Candidates Type 2"),
-    "Naked Pair": _spec(60, "Medium"),
-    "Hidden Pair": _spec(70, "Medium"),
-    "Naked Triple": _spec(80, "Medium"),
-    "Hidden Triple": _spec(100, "Medium"),
-    "Naked Quadruple": _spec(120, "Hard"),
-    "Hidden Quadruple": _spec(150, "Hard"),
-    "X-Wing": _spec(140, "Hard"),
-    "Swordfish": _spec(150, "Hard"),
-    "Jellyfish": _spec(160, "Hard"),
-    "Remote Pair": _spec(110, "Hard"),
-    "BUG+1": _spec(100, "Hard"),
-    "Skyscraper": _spec(130, "Hard"),
-    "Two-String Kite": _spec(150, "Hard"),
-    "Turbot Fish": _spec(120, "Hard"),
-    "Empty Rectangle": _spec(120, "Hard"),
-    "Y-Wing": _spec(160, "Hard", basis="XY-Wing"),
-    "XYZ-Wing": _spec(180, "Hard"),
-    "W-Wing": _spec(150, "Hard"),
-    "Unique Rectangle Type 1": _spec(100, "Hard", basis="Uniqueness 1"),
-    "Unique Rectangle Type 2": _spec(100, "Hard", basis="Uniqueness 2"),
-    "Unique Rectangle Type 3": _spec(100, "Hard", basis="Uniqueness 3"),
-    "Unique Rectangle Type 4": _spec(100, "Hard", basis="Uniqueness 4"),
-    "Unique Rectangle Type 5": _spec(100, "Hard", basis="Uniqueness 5"),
-    "XY-Chain": _spec(260, "Unfair"),
-    "Alternating Inference Chain": _spec(
-        280,
-        "Unfair",
-        basis="Nice Loop/AIC",
-    ),
-    "Continuous Nice Loop": _spec(280, "Unfair", basis="Nice Loop/AIC"),
-    "Forcing Chain": _spec(500, "Extreme"),
-}
-
-
-# Mapping dichiaratamente stimati. I punteggi delle tecniche "Direct"
-# equivalgono ai due step che HoDoKu userebbe separatamente.
-HODOKU_ESTIMATED_TECHNIQUES = {
-    "Direct Pointing": _spec(
-        64,
-        "Medium",
-        estimated=True,
-        basis="Locked Candidates Type 1 + Hidden Single",
-    ),
-    "Direct Claiming": _spec(
-        64,
-        "Medium",
-        estimated=True,
-        basis="Locked Candidates Type 2 + Hidden Single",
-    ),
-    "Direct Hidden Pair": _spec(
-        84,
-        "Medium",
-        estimated=True,
-        basis="Hidden Pair + Hidden Single",
-    ),
-    "Direct Hidden Triplet": _spec(
-        114,
-        "Medium",
-        estimated=True,
-        basis="Hidden Triple + Hidden Single",
-    ),
-    "BUG Type 2": _spec(120, "Hard", estimated=True, basis="BUG+1"),
-    "BUG Type 4": _spec(120, "Hard", estimated=True, basis="BUG+1"),
-    "BUG Type 3 (Pair)": _spec(
-        130,
-        "Hard",
-        estimated=True,
-        basis="BUG+1",
-    ),
-    "BUG Type 3 (Triplet)": _spec(
-        150,
-        "Hard",
-        estimated=True,
-        basis="BUG+1",
-    ),
-    "BUG Type 3 (Quad)": _spec(
-        170,
-        "Hard",
-        estimated=True,
-        basis="BUG+1",
-    ),
-    "Aligned Pair Exclusion": _spec(
-        300,
-        "Unfair",
-        estimated=True,
-        basis="advanced exclusion",
-    ),
-    "Bidirectional X-Cycle": _spec(
-        260,
-        "Unfair",
-        estimated=True,
-        basis="X-Chain",
-    ),
-    "Bidirectional Y-Cycle": _spec(
-        280,
-        "Unfair",
-        estimated=True,
-        basis="Nice Loop/AIC",
-    ),
-    "XY-Cycle": _spec(
-        280,
-        "Unfair",
-        estimated=True,
-        basis="Nice Loop/AIC",
-    ),
-    "Forcing X-Chain": _spec(
-        260,
-        "Unfair",
-        estimated=True,
-        basis="X-Chain",
-    ),
-    "Bidirectional Cycle": _spec(
-        280,
-        "Unfair",
-        estimated=True,
-        basis="Nice Loop/AIC",
-    ),
-    "Nishio": _spec(
-        500,
-        "Extreme",
-        estimated=True,
-        basis="Forcing Chain",
-    ),
-    "Cell Forcing Chain": _spec(
-        500,
-        "Extreme",
-        estimated=True,
-        basis="Forcing Chain",
-    ),
-    "Region Forcing Chain": _spec(
-        500,
-        "Extreme",
-        estimated=True,
-        basis="Forcing Chain",
-    ),
-    "Dynamic Forcing Chain": _spec(
-        700,
-        "Extreme",
-        estimated=True,
-        basis="Forcing Net",
-    ),
-    "Dynamic Contradiction Forcing Chain": _spec(
-        700,
-        "Extreme",
-        estimated=True,
-        basis="Forcing Net",
-    ),
-    "Dynamic Double Forcing Chain": _spec(
-        700,
-        "Extreme",
-        estimated=True,
-        basis="Forcing Net",
-    ),
-    "Dynamic Cell Forcing Chain": _spec(
-        700,
-        "Extreme",
-        estimated=True,
-        basis="Forcing Net",
-    ),
-    "Dynamic Region Forcing Chain": _spec(
-        700,
-        "Extreme",
-        estimated=True,
-        basis="Forcing Net",
-    ),
-    "Dynamic Forcing Chain Plus": _spec(
-        850,
-        "Extreme",
-        estimated=True,
-        basis="extended Forcing Net",
-    ),
-    "Dynamic Contradiction Forcing Chain Plus": _spec(
-        850,
-        "Extreme",
-        estimated=True,
-        basis="extended Forcing Net",
-    ),
-    "Dynamic Double Forcing Chain Plus": _spec(
-        850,
-        "Extreme",
-        estimated=True,
-        basis="extended Forcing Net",
-    ),
-    "Dynamic Cell Forcing Chain Plus": _spec(
-        850,
-        "Extreme",
-        estimated=True,
-        basis="extended Forcing Net",
-    ),
-    "Dynamic Region Forcing Chain Plus": _spec(
-        850,
-        "Extreme",
-        estimated=True,
-        basis="extended Forcing Net",
-    ),
-    "Nested Forcing Chain": _spec(
-        1000,
-        "Extreme",
-        estimated=True,
-        basis="nested Forcing Net",
-    ),
-    "Nested Contradiction Forcing Chain": _spec(
-        1000,
-        "Extreme",
-        estimated=True,
-        basis="nested Forcing Net",
-    ),
-    "Nested Double Forcing Chain": _spec(
-        1000,
-        "Extreme",
-        estimated=True,
-        basis="nested Forcing Net",
-    ),
-    "Nested Cell Forcing Chain": _spec(
-        1000,
-        "Extreme",
-        estimated=True,
-        basis="nested Forcing Net",
-    ),
-    "Nested Region Forcing Chain": _spec(
-        1000,
-        "Extreme",
-        estimated=True,
-        basis="nested Forcing Net",
-    ),
-}
-
-HODOKU_TECHNIQUES = {
-    **HODOKU_EXACT_TECHNIQUES,
-    **HODOKU_ESTIMATED_TECHNIQUES,
-}
-
-
-def hodoku_technique_rating(technique):
-    """Restituisce una copia del mapping HoDoKu di una tecnica."""
+def technique_difficulty(technique):
+    """Restituisce il rating SE canonico di una tecnica."""
     try:
-        return dict(HODOKU_TECHNIQUES[technique])
+        return float(TECHNIQUE_DIFFICULTY[technique])
     except KeyError as error:
         raise KeyError(
-            f"Mapping HoDoKu mancante per la tecnica {technique!r}."
+            f"Rating SE mancante per la tecnica {technique!r}."
         ) from error
 
 
-def hodoku_level_from_score(score):
-    """Livello HoDoKu determinato dal solo punteggio cumulativo."""
-    score = float(score)
-    for maximum, level in HODOKU_SCORE_THRESHOLDS:
-        if score <= maximum:
-            return level
-    return "Extreme"
+def technical_difficulty_label(difficulty):
+    """Converte un rating SE nella label editoriale del progetto."""
+    difficulty = float(difficulty)
+
+    for maximum, label in TECHNICAL_DIFFICULTY_THRESHOLDS:
+        if difficulty <= maximum:
+            return label
+
+    return "Sconosciuto"
 
 
-def hodoku_puzzle_level(total_score, hardest_step_level):
-    """Applica la regola HoDoKu: massimo fra score e step più difficile."""
-    score_level = hodoku_level_from_score(total_score)
-    return max(
-        (score_level, hardest_step_level),
-        key=lambda level: HODOKU_LEVEL_ORDER[level],
+
+# ---------------------------------------------------------------------------
+# Difficoltà di individuazione della mossa
+# ---------------------------------------------------------------------------
+
+MOVE_DISCOVERY_SE_HALF_LIFE = 0.5
+MOVE_DISCOVERY_EXTRA_MOVE_DECAY = 0.1
+
+MOVE_DISCOVERY_MIN = 1.0
+MOVE_DISCOVERY_MAX = 10.0
+MOVE_DISCOVERY_DECIMALS = 2
+
+
+MOVE_DISCOVERY_THRESHOLDS = (
+    (2.0, "Immediata"),
+    (3.5, "Facile"),
+    (5.5, "Moderata"),
+    (7.0, "Difficile"),
+    (8.0, "Molto difficile"),
+    (9.5, "Estrema"),
+    (10.0, "Quasi obbligata"),
+)
+
+
+def step_move_discovery_difficulty(
+    effective_move_count,
+    max_moves,
+):
+    """
+    Calcola la difficoltà di individuazione di un singolo stato.
+
+    Il punteggio varia da 1 a 10:
+    - 1 quando sono disponibili almeno max_moves mosse effettive;
+    - 10 quando è disponibile una sola mossa effettiva.
+
+    La trasformazione logaritmica rende molto importante
+    la differenza tra poche mosse, mentre riduce progressivamente
+    l'effetto delle mosse aggiuntive.
+    """
+    if (
+        isinstance(max_moves, bool)
+        or int(max_moves) < 2
+    ):
+        raise ValueError(
+            "Il numero massimo di mosse deve essere almeno 2."
+        )
+
+    max_moves = int(max_moves)
+    effective_move_count = float(effective_move_count)
+
+    if not math.isfinite(effective_move_count):
+        raise ValueError(
+            "Il numero effettivo di mosse deve essere finito."
+        )
+
+    if effective_move_count <= 0:
+        raise ValueError(
+            "Il numero effettivo di mosse deve essere positivo."
+        )
+
+    effective_move_count = min(
+        float(max_moves),
+        max(1.0, effective_move_count),
     )
+
+    difficulty = (
+        MOVE_DISCOVERY_MIN
+        + (
+            MOVE_DISCOVERY_MAX
+            - MOVE_DISCOVERY_MIN
+        )
+        * (
+            math.log(
+                max_moves / effective_move_count
+            )
+            / math.log(max_moves)
+        )
+    )
+
+    return round(
+        difficulty,
+        MOVE_DISCOVERY_DECIMALS,
+    )
+
+
+def move_discovery_label(difficulty):
+    """
+    Converte la difficoltà di individuazione
+    nella relativa label.
+    """
+    difficulty = float(difficulty)
+
+    if not math.isfinite(difficulty):
+        raise ValueError(
+            "La difficoltà di individuazione deve essere finita."
+        )
+
+    if not (
+        MOVE_DISCOVERY_MIN
+        <= difficulty
+        <= MOVE_DISCOVERY_MAX
+    ):
+        raise ValueError(
+            "La difficoltà di individuazione deve essere "
+            "compresa tra 1 e 10."
+        )
+
+    for maximum, label in MOVE_DISCOVERY_THRESHOLDS:
+        if difficulty <= maximum:
+            return label
+
+    return "Sconosciuta"
+
+
+def aggregate_move_discovery_difficulty(
+    step_difficulties,
+):
+    """
+    Riassume la difficoltà di individuazione dell'intero puzzle.
+
+    Il valore complessivo è la media dei valori registrati
+    nei singoli stati della soluzione.
+    """
+    if not step_difficulties:
+        return 0.0
+
+    values = [
+        float(value)
+        for value in step_difficulties
+    ]
+
+    if any(
+        not math.isfinite(value)
+        for value in values
+    ):
+        raise ValueError(
+            "Le difficoltà di individuazione devono "
+            "essere numeri finiti."
+        )
+
+    if any(
+        not (
+            MOVE_DISCOVERY_MIN
+            <= value
+            <= MOVE_DISCOVERY_MAX
+        )
+        for value in values
+    ):
+        raise ValueError(
+            "Le difficoltà di individuazione devono "
+            "essere comprese tra 1 e 10."
+        )
+
+    difficulty = math.fsum(values) / len(values)
+
+    return round(
+        difficulty,
+        MOVE_DISCOVERY_DECIMALS,
+    )
+    
+
+# ---------------------------------------------------------------------------
+# Carico risolutivo
+# ---------------------------------------------------------------------------
+
+RESOLUTION_LOAD_MULTIPLIER_PER_SE = 3.2
+RESOLUTION_LOAD_REFERENCE_SE = TECHNIQUE_DIFFICULTY["Last Value"]
+RESOLUTION_LOAD_DECIMALS = 2
+
+
+RESOLUTION_LOAD_THRESHOLDS = (
+    (80.0, "Molto basso"),
+    (120.0, "Basso"),
+    (200.0, "Medio"),
+    (400.0, "Alto"),
+    (1500.0, "Molto alto"),
+    (6000.0, "Estremo"),
+    (25000.0, "Incubo"),
+    (float("inf"), "Oltre il limite"),
+)
+
+def resolution_load_label(resolution_load):
+    """Converte il carico risolutivo totale in una label."""
+    resolution_load = float(resolution_load)
+
+    if not math.isfinite(resolution_load):
+        raise ValueError(
+            "Il carico risolutivo deve essere un numero finito."
+        )
+
+    if resolution_load < 0:
+        raise ValueError(
+            "Il carico risolutivo non può essere negativo."
+        )
+
+    for maximum, label in RESOLUTION_LOAD_THRESHOLDS:
+        if resolution_load <= maximum:
+            return label
+
+    return "Sconosciuto"
+
+
+def step_resolution_load(technical_difficulty):
+    """
+    Calcola il carico prodotto da uno step.
+
+    Il Last Value vale 1. Ogni incremento di un punto SE
+    moltiplica il carico per 3.2.
+    """
+    technical_difficulty = float(technical_difficulty)
+
+    if not math.isfinite(technical_difficulty):
+        raise ValueError(
+            "La difficoltà tecnica deve essere un numero finito."
+        )
+
+    if technical_difficulty < 0:
+        raise ValueError(
+            "La difficoltà tecnica non può essere negativa."
+        )
+
+    return RESOLUTION_LOAD_MULTIPLIER_PER_SE ** (
+        technical_difficulty
+        - RESOLUTION_LOAD_REFERENCE_SE
+    )
+
+
+def aggregate_resolution_load(difficulty_scores):
+    """Somma il carico risolutivo di tutti gli step."""
+    load = math.fsum(
+        step_resolution_load(score)
+        for score in difficulty_scores
+    )
+
+    return round(load, RESOLUTION_LOAD_DECIMALS)

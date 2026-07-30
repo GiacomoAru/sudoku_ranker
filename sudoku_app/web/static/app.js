@@ -13,6 +13,86 @@ let solutionStates = [];
 let currentSolutionState = 0;
 let currentPhotoId = null;
 
+const STATUS_PRESENTATION = {
+  solved: {
+    label: "Risolto",
+    className: "status-solved",
+  },
+  stuck: {
+    label: "Bloccato",
+    className: "status-stuck",
+  },
+  contradiction: {
+    label: "Contraddizione",
+    className: "status-contradiction",
+  },
+  interrupted: {
+    label: "Interrotto",
+    className: "status-interrupted",
+  },
+};
+
+
+function renderStatusBadge(status) {
+  const badge = document.querySelector(
+    "#analysis-status-badge"
+  );
+
+  if (!badge) return;
+
+  const key = String(status || "").toLowerCase();
+
+  const presentation = (
+    STATUS_PRESENTATION[key]
+    || {
+      label: status || "Sconosciuto",
+      className: "status-unknown",
+    }
+  );
+
+  badge.className = (
+    `result-label status-badge ` +
+    presentation.className
+  );
+
+  badge.textContent = presentation.label;
+}
+
+function finiteNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function formatNumber(value, decimals = 1) {
+  const number = finiteNumber(value);
+  return number === null ? "—" : number.toFixed(decimals);
+}
+
+function formatMetricWithLabel(value, label, decimals = 1) {
+  const number = finiteNumber(value);
+
+  if (number === null) {
+    return "—";
+  }
+
+  const formatted = number.toFixed(decimals);
+
+  return label
+    ? `${formatted} · ${label}`
+    : formatted;
+}
+
+function setText(selector, value) {
+  const element = document.querySelector(selector);
+
+  if (!element) {
+    console.warn(`Elemento HTML non trovato: ${selector}`);
+    return;
+  }
+
+  element.textContent = value ?? "—";
+}
+
 const cells = Array.from({ length: 81 }, (_, index) => {
   const input = document.createElement("input");
   const row = Math.floor(index / 9);
@@ -230,30 +310,127 @@ function updateJsonSummaryAction() {
 jsonDetailsElement.addEventListener("toggle", updateJsonSummaryAction);
 updateJsonSummaryAction();
 
+const METRIC_TONE_CLASSES = [
+  "tone-very-low",
+  "tone-low",
+  "tone-medium",
+  "tone-high",
+  "tone-very-high",
+  "tone-extreme",
+  "tone-over-limit",
+  "tone-neutral",
+];
+
+
+function metricToneFromLabel(label) {
+  const normalised = String(label || "")
+    .trim()
+    .toLowerCase();
+
+  const tones = {
+    "immediata": "tone-very-low",
+    "molto facile": "tone-very-low",
+    "molto basso": "tone-very-low",
+    "molto bassa": "tone-very-low",
+
+    "facile": "tone-low",
+    "basso": "tone-low",
+    "bassa": "tone-low",
+
+    "moderata": "tone-medium",
+    "moderato": "tone-medium",
+    "medio": "tone-medium",
+    "media": "tone-medium",
+
+    "difficile": "tone-high",
+    "alto": "tone-high",
+    "alta": "tone-high",
+
+    "molto difficile": "tone-very-high",
+    "molto alto": "tone-very-high",
+    "molto alta": "tone-very-high",
+    "esperto": "tone-very-high",
+
+    "diabolico": "tone-extreme",
+    "estremo": "tone-extreme",
+    "estrema": "tone-extreme",
+    "incubo": "tone-extreme",
+
+    "quasi obbligata": "tone-extreme",
+    "oltre il limite": "tone-over-limit",
+  };
+
+  return tones[normalised] || "tone-neutral";
+}
+
+function setMetricTone(selector, label) {
+  const metric = document.querySelector(selector);
+
+  if (!metric) return;
+
+  metric.classList.remove(...METRIC_TONE_CLASSES);
+  metric.classList.add(metricToneFromLabel(label));
+}
+
 function renderResult(payload) {
   const grading = payload.analysis.grading || {};
   currentAnalysis = payload.analysis;
   currentName = payload.name || "sudoku-analysis";
 
-  document.querySelector("#result-name").textContent = payload.name;
-  document.querySelector("#technical-difficulty-label").textContent =
-    grading.technical_difficulty_label || "N/A";
-  document.querySelector("#technical-difficulty").textContent =
-    grading.technical_difficulty ?? "—";
-  document.querySelector("#resolution-load").textContent =
-    Number.isFinite(grading.resolution_load)
-      ? `${grading.resolution_load} · ${grading.resolution_load_level || "N/A"}`
-      : "—";
-  document.querySelector("#perceived-difficulty").textContent =
-    Number.isFinite(grading.perceived_difficulty)
-      ? grading.perceived_difficulty.toFixed(2)
-      : "—";
-  document.querySelector("#step-count").textContent =
-    grading.step_count ?? payload.analysis.chain?.length ?? "—";
-  document.querySelector("#analysis-status").textContent =
-    payload.analysis.status || "—";
-  document.querySelector("#unique-solution").textContent =
-    payload.analysis.unique_solution ? "Unica" : "Non verificata";
+  renderStatusBadge(payload.analysis.status);
+  setText("#result-name", payload.name || "Analisi");
+  setText(
+    "#technical-difficulty",
+    formatMetricWithLabel(
+      grading.technical_difficulty,
+      grading.technical_difficulty_label,
+      1
+    )
+  );
+  setText(
+    "#resolution-load",
+    formatMetricWithLabel(
+      grading.resolution_load,
+      grading.resolution_load_label,
+      2
+    )
+  );
+  setText(
+    "#move-discovery-difficulty",
+    formatMetricWithLabel(
+      grading.move_discovery_difficulty,
+      grading.move_discovery_difficulty_label,
+      2
+    )
+  );
+  setText(
+    "#step-count",
+    grading.step_count ?? payload.analysis.chain?.length ?? "—"
+  );
+  setText(
+    "#hardest-technique",
+    grading.hardest_technique || "—"
+  );
+  
+  setMetricTone(
+    "#metric-technical",
+    grading.technical_difficulty_label
+  );
+
+  setMetricTone(
+    "#metric-resolution-load",
+    grading.resolution_load_label
+  );
+
+  setMetricTone(
+    "#metric-move-discovery-difficulty",
+    grading.move_discovery_difficulty_label
+  );
+
+  setMetricTone(
+    "#metric-hardest-technique",
+    grading.technical_difficulty_label
+  );
 
   const duplicateText = payload.is_isomorphic_duplicate
     ? ` · ${payload.isomorphic_variant_count} varianti isomorfe`
@@ -332,10 +509,19 @@ function prepareSolutionPlayer(analysis) {
       grid: move.grid_after,
       title: `Passaggio ${move.step}`,
       technique: (
-        `${move.technique} · tecnica ${move.technical_difficulty}` +
+        `${move.technique} · SE ` +
+        `${formatNumber(move.technical_difficulty, 1)}` +
         (
-          Number.isFinite(move.resolution_load)
-            ? ` · carico +${move.resolution_load}`
+          finiteNumber(move.resolution_load) !== null
+            ? ` · carico +${formatNumber(move.resolution_load, 2)}`
+            : ""
+        ) +
+        (
+          finiteNumber(move.move_discovery_difficulty) !== null
+            ? (
+                ` · individuazione ` +
+                `${formatNumber(move.move_discovery_difficulty, 2)}`
+              )
             : ""
         )
       ),

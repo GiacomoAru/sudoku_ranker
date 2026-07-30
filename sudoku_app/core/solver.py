@@ -17,7 +17,7 @@ trova più nulla) o contraddizione (un candidato azzerato, non dovrebbe mai
 succedere su un puzzle valido con solo eliminazioni logicamente corrette).
 
 `grade_difficulty` mantiene separate tre letture: Difficoltà Tecnica (rating
-SE invariato), Carico di risoluzione (HoDoKu cumulativo) e Difficoltà
+SE invariato), Difficoltà
 percepita sulla stessa scala numerica SE. La label usa soltanto il massimo
 rating SE; carico cumulativo e scarsità delle mosse restano metriche
 indipendenti per il confronto e l'ordinamento.
@@ -39,36 +39,6 @@ from . import data_structure as sds
 from . import difficulty as difficulty_model
 from . import techniques as st
 
-
-DIFFICULTY_THRESHOLDS = [
-    (1.5, "Molto facile"),       # Singles
-    (2.5, "Facile"),             # Pointing e Claiming
-    (3.7, "Medio"),              # Pair, Triple, X-Wing
-    (4.7, "Difficile"),          # Wings, Turbot, UR semplici
-    (5.8, "Molto difficile"),    # Quad, Jellyfish, BUG, catene brevi
-    (6.8, "Esperto"),            # AIC, cicli e Forcing Chain
-    (8.5, "Diabolico"),          # Nishio e forcing multipli/dinamici
-    (9.0, "Estremo"),            # Dynamic Forcing Chain Plus
-    (9.5, "Incubo"),             # Nested Forcing Chain
-    (float("inf"), "Oltre il limite"),
-]
-
-
-def difficulty_label(difficulty):
-    """Converte uno score continuo nella label editoriale del progetto."""
-    difficulty = float(difficulty)
-
-    for maximum, label in DIFFICULTY_THRESHOLDS:
-        if difficulty <= maximum:
-            return label
-
-    return "Sconosciuto"
-
-# Quattro risultati distinti alla difficoltà minima sono il caso neutro.
-# Con meno esiti il peso aumenta, con più esiti diminuisce.
-PERCEIVED_REFERENCE_ALTERNATIVES = 4
-PERCEIVED_MIN_SCARCITY_FACTOR = 0.5
-PERCEIVED_MAX_SCARCITY_FACTOR = 2.0
 
 _TECHNIQUE_RANK = {
     technique: index
@@ -93,16 +63,16 @@ ANALYSIS_MODE_ALIASES = {
 
 DEFAULT_PROFILE_DIFFICULTY_WINDOW = 3.0
 DEFAULT_ANALYSIS_MODE = "profile"
-MAX_MOVES_PER_TECHNIQUE = 8
+MAX_MOVES_PER_TECHNIQUE = 15
 
 def _difficulty_score(move):
     """Usa il rating effettivo della mossa, con fallback sul valore base."""
     return float(
         move.get(
             "difficulty",
-            st.TECHNIQUE_DIFFICULTY.get(
+            difficulty_model.TECHNIQUE_DIFFICULTY.get(
                 move["technique"],
-                99,
+                99.0,
             ),
         )
     )
@@ -135,34 +105,6 @@ def _move_sort_key(move, canonical_transform=None):
     return key + (placements, eliminations)
 
 
-def _scarcity_factor(n_outcomes):
-    """
-    Restituisce il moltiplicatore dovuto alla scarsità di esiti distinti.
-
-    Il riferimento neutro è quattro risultati complessivi disponibili alla
-    difficoltà minima. Il fattore è limitato
-    tra 0.5 e 2.0 per evitare che la disponibilità di mosse annulli o
-    domini completamente la difficoltà teorica.
-    """
-    n_outcomes = max(int(n_outcomes), 1)
-
-    factor = math.sqrt(
-        PERCEIVED_REFERENCE_ALTERNATIVES / n_outcomes
-    )
-
-    return min(
-        PERCEIVED_MAX_SCARCITY_FACTOR,
-        max(PERCEIVED_MIN_SCARCITY_FACTOR, factor),
-    )
-
-
-def _perceived_step_difficulty(difficulty, n_outcomes):
-    """Rating percepito dello step, espresso direttamente sulla scala SE."""
-    return max(
-        1.0,
-        float(difficulty) + math.log10(_scarcity_factor(n_outcomes)),
-    )
-
 
 def _normalise_analysis_mode(mode):
     """Valida e normalizza il livello di profondita dell inventario."""
@@ -180,25 +122,6 @@ def _normalise_analysis_mode(mode):
         )
 
     return normalised
-
-
-def _move_atomic_conclusions(move):
-    """
-    Restituisce le conclusioni atomiche prodotte da una mossa.
-
-    Una conclusione e un inserimento oppure l eliminazione di un singolo
-    candidato. Prove diverse che raggiungono lo stesso effetto vengono quindi
-    contate una sola volta nell inventario analitico.
-    """
-    conclusions = {
-        ("place", int(r), int(c), int(value))
-        for r, c, value in move.get("placements", ())
-    }
-    conclusions.update(
-        ("eliminate", int(r), int(c), int(value))
-        for r, c, value in move.get("eliminations", ())
-    )
-    return frozenset(conclusions)
 
 
 def _move_outcome_signature(move):
@@ -365,6 +288,80 @@ def collect_all_moves_full(state):
     return moves
 
 
+
+def _effective_nearby_move_count(
+    moves,
+    best_difficulty,
+    max_moves=MAX_MOVES_PER_TECHNIQUE,
+):
+    """
+    Calcola il numero effettivo di mosse accessibili.
+
+    Ogni tecnica ha già prodotto al massimo max_moves esiti.
+
+    Gli esiti distinti vengono ordinati per difficoltà SE.
+    Le prime max_moves mosse hanno peso di posizione pieno.
+    Le successive continuano a contribuire, ma con peso
+    rapidamente decrescente.
+
+    Il contributo dipende anche dalla distanza SE rispetto
+    alla mossa più semplice disponibile.
+    """
+    best_difficulty = float(best_difficulty)
+    max_moves = max(int(max_moves), 1)
+
+    outcome_difficulties = {}
+
+    for move in moves:
+        outcome = _move_outcome_signature(move)
+        difficulty = _difficulty_score(move)
+
+        previous = outcome_difficulties.get(outcome)
+
+        if previous is None or difficulty < previous:
+            outcome_difficulties[outcome] = difficulty
+
+    ordered_difficulties = sorted(
+        outcome_difficulties.values()
+    )
+
+    contributions = []
+
+    for position, difficulty in enumerate(
+        ordered_difficulties,
+        start=1,
+    ):
+        se_distance = max(
+            0.0,
+            difficulty - best_difficulty,
+        )
+
+        se_weight = 2.0 ** (
+            -se_distance
+            / difficulty_model.MOVE_DISCOVERY_SE_HALF_LIFE
+        )
+
+        if position <= max_moves:
+            position_weight = 1.0
+        else:
+            extra_position = position - max_moves
+
+            position_weight = (
+                difficulty_model
+                .MOVE_DISCOVERY_EXTRA_MOVE_DECAY
+                ** extra_position
+            )
+
+        contributions.append(
+            se_weight * position_weight
+        )
+
+    return max(
+        1.0,
+        math.fsum(contributions),
+    )
+       
+       
 def _build_move_inventory(moves, best_difficulty):
     """Riassume soltanto gli esiti distinti utili a rating e heatmap."""
     all_outcomes = set()
@@ -449,7 +446,6 @@ def solve_and_log(
     ).transform
     chain = []
     step_no = 0
-
     while not state.is_solved() and step_no < max_steps:
         if state.is_stuck():
             return state, chain, "contradiction"
@@ -477,6 +473,7 @@ def solve_and_log(
             moves,
             best_difficulty=chosen_score,
         )
+        
         available_move_count = max(
             int(inventory["available_move_count"]),
             1,
@@ -485,12 +482,24 @@ def solve_and_log(
             int(inventory["frontier_move_count"]),
             1,
         )
-        perceived_difficulty = round(
-            _perceived_step_difficulty(
-                chosen_score,
-                frontier_move_count,
-            ),
-            2,
+        effective_move_count = _effective_nearby_move_count(
+            moves=moves,
+            best_difficulty=chosen_score,
+            max_moves=MAX_MOVES_PER_TECHNIQUE,
+        )
+        
+        move_discovery_difficulty = (
+            difficulty_model.step_move_discovery_difficulty(
+                effective_move_count=effective_move_count,
+                max_moves=MAX_MOVES_PER_TECHNIQUE,
+            )
+        )
+        effective_move_count = round(effective_move_count, 2)
+        
+        resolution_load = (
+            difficulty_model.step_resolution_load(
+                chosen_score
+            )
         )
 
         apply_move(state, chosen)
@@ -512,14 +521,11 @@ def solve_and_log(
         record["step"] = step_no
         record["grid_after"] = state.grid.copy()
         record["technical_difficulty"] = chosen_score
-        record["resolution_load"] = (
-            difficulty_model.hodoku_technique_rating(
-                chosen["technique"]
-            )["score"]
-        )
-        record["perceived_difficulty"] = perceived_difficulty
+        record["resolution_load"] = resolution_load
+        record["move_discovery_difficulty"] = move_discovery_difficulty
         record["available_move_count"] = available_move_count
         record["frontier_move_count"] = frontier_move_count
+        record["effective_move_count"] = effective_move_count
         record["available_by_technique"] = inventory[
             "available_by_technique"
         ]
@@ -537,8 +543,11 @@ def solve_and_log(
             print(
                 f"[{step_no:03d}] "
                 f"{chosen['technique']:<30} "
-                f"(diff {chosen_score:.1f}, "
-                f"percepita {perceived_difficulty:.3f}, "
+                f"(SE {chosen_score:.1f}, "
+                f"individuazione "
+                f"{move_discovery_difficulty:.1f}/100, "
+                f"mosse effettive {effective_move_count:.2f}, "
+                f"mosse minime {frontier_move_count}, "
                 f"mosse minime {frontier_move_count}, "
                 f"modo {analysis_mode}) "
                 f"{chosen['description']}"
@@ -1053,20 +1062,19 @@ def trivialize_greedy(
     }
 
 def grade_difficulty(chain, status):
-    """
-    Restituisce le tre sole metriche pubbliche dell'analisi.
-
-    La difficoltà tecnica è il massimo rating SE; il carico di risoluzione è
-    la somma HoDoKu; la difficoltà percepita resta sulla scala numerica SE.
-    """
+    """Restituisce le metriche pubbliche dell'analisi."""
     if not chain:
         return {
+            "difficulty_model_version": (
+                difficulty_model.DIFFICULTY_MODEL_VERSION
+            ),
             "technical_difficulty": 0.0,
             "technical_difficulty_label": "N/A",
             "hardest_technique": None,
-            "resolution_load": 0,
-            "resolution_load_level": "N/A",
-            "perceived_difficulty": 0.0,
+            "resolution_load": 0.0,
+            "resolution_load_label": "N/A",
+            "move_discovery_difficulty": 0.0,
+            "move_discovery_difficulty_label": "N/A",
             "step_count": 0,
         }
 
@@ -1074,84 +1082,89 @@ def grade_difficulty(chain, status):
         float(
             move.get(
                 "technical_difficulty",
-                st.TECHNIQUE_DIFFICULTY.get(
+                difficulty_model.TECHNIQUE_DIFFICULTY.get(
                     move["technique"],
-                    99,
+                    99.0,
                 ),
             )
         )
         for move in chain
     ]
-
     technical_difficulty = max(difficulty_scores)
-
-    hodoku_ratings = []
-    perceived_steps = []
-
-    for move, score in zip(chain, difficulty_scores):
-        hodoku = difficulty_model.hodoku_technique_rating(
-            move["technique"]
+    technical_label = (
+        difficulty_model.technical_difficulty_label(
+            technical_difficulty
         )
-        hodoku_ratings.append(hodoku)
-
-        perceived_steps.append(
-            move.get("perceived_difficulty")
-            or _perceived_step_difficulty(
-                score,
-                move.get(
-                    "frontier_move_count",
-                    1,
-                ),
-            )
+    )
+    
+    resolution_load = (
+        difficulty_model.aggregate_resolution_load(
+            difficulty_scores
         )
-
-    hardest_perceived_step = max(perceived_steps)
-    relative_load = sum(
-        10.0 ** (value - hardest_perceived_step)
-        for value in perceived_steps
     )
-    perceived_difficulty = round(
-        hardest_perceived_step + 0.4 * math.log10(relative_load),
-        2,
+    resolution_load_label = (
+        difficulty_model.resolution_load_label(
+            resolution_load
+        )
     )
-
     hardest_index = max(
         range(len(chain)),
         key=lambda index: difficulty_scores[index],
     )
-
     hardest_technique = chain[hardest_index]["technique"]
-    technical_difficulty_label = difficulty_label(
-        technical_difficulty
-    )
 
-    resolution_load = sum(
-        rating["score"]
-        for rating in hodoku_ratings
+    move_discovery_steps = [
+        float(
+            move.get(
+                "move_discovery_difficulty",
+                difficulty_model.step_move_discovery_difficulty(
+                    effective_move_count=move.get(
+                        "effective_move_count",
+                        move.get(
+                            "frontier_move_count",
+                            1,
+                        ),
+                    ),
+                    max_moves=MAX_MOVES_PER_TECHNIQUE,
+                ),
+            )
+        )
+        for move in chain
+    ]
+    move_discovery_difficulty = (
+        difficulty_model
+        .aggregate_move_discovery_difficulty(
+            move_discovery_steps
+        )
     )
-    hardest_load_level = max(
-        (rating["level"] for rating in hodoku_ratings),
-        key=lambda level: difficulty_model.HODOKU_LEVEL_ORDER[level],
-    )
-    resolution_load_level = difficulty_model.hodoku_puzzle_level(
-        resolution_load,
-        hardest_load_level,
+    move_discovery_difficulty_label = (
+        difficulty_model.move_discovery_label(
+            move_discovery_difficulty
+        )
     )
 
     return {
+        "difficulty_model_version": (
+            difficulty_model.DIFFICULTY_MODEL_VERSION
+        ),
         "technical_difficulty": technical_difficulty,
         "technical_difficulty_label": (
-            technical_difficulty_label
+            technical_label
             if status == "solved"
             else "Non risolto"
         ),
         "hardest_technique": hardest_technique,
         "resolution_load": resolution_load,
-        "resolution_load_level": resolution_load_level,
-        "perceived_difficulty": perceived_difficulty,
+        "resolution_load_label": resolution_load_label,
+        "move_discovery_difficulty": (
+            move_discovery_difficulty
+        ),
+        "move_discovery_difficulty_label": (
+            move_discovery_difficulty_label
+        ),
         "step_count": len(chain),
     }
-
+    
 
 def analyse_puzzle(
     grid,
