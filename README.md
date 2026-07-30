@@ -76,10 +76,6 @@ raggiungibile dal telefono vedere [WEB_LAN.md](WEB_LAN.md).
       1. ripulire scritte superflue o fuori contesto
       3. inserire riferimento a github e creatore
    2. ★ rivedere completamente meccanismo di evidenziazione celle per spiegazione della mossa, chiarire celle principali, secondarie ecc. Mostrare anche i candidates per cella e rivedere metodi di evidenziazione singola di candidati.
-   3. riordinare il json per posticipare catena e altre liste
-   4. cambiare i campi necessari al salvataggio del sudoku, renderli opzionali e nascosti da tendina, e gestire normalizzazione di testo ecc. Magari rivedere anche 
-   tecniche di salvataggio e dati salvati
-   5. rendere le varie "opzionni" nascoste in tendida di default, in modo da non mostrare tutto ma solo quel che si vuole.
    6. ★ Renderlo carino da telefono.
    7. aggiungere un riferimento tra step visualizzato e punto della catena nel grafico o heatmap, magari usare plotly che è più adatta per  interazione web?
    10. creare immagini "vuote" da mostrare al caricamento pagina e quando si invai un sudoku irrisolvibiel
@@ -98,17 +94,13 @@ raggiungibile dal telefono vedere [WEB_LAN.md](WEB_LAN.md).
    2. riuscire a riconoscere bene temi scuri, magari usando il negativo?
 
 2. **Migliorare il solver** IMPORTANTISSIMO, CREDO CHE NON VENGA SEGUITO L'ORDINAMENTO DELLE TECNICHE PER SEMPLICITA SE!!!!
-   0. Errori tecniche:
-      1.  sckyscraper non funzionante, eb4871d2c662723a2fd3 non lo trova
-      2. Naked Single viene ignorato e si passa a pointing, f0814d64e9a285e72bc0.
-   2. migliorare ricerca profile:
-      2. ridurre finestra standard a 2
    3. grafici:
       1. scala logaritmica nella catena per l'asse della numerosità di tecniche, ma con 1 allineato con uno a sinistra
       2. legenda esterna (sotto) della catena
 
    4. miglirare stampe del server rispetto a analisi
    5. implementare pattern engine per Unique Loop (6+ cells)
+   6. fare che ricerche profile usino deep in memoria, e profile bassi usino alti, anche totalmente vsto che sono solo meglio.
    
 
 3. **Integrare riconoscimento Sudoku via foto:**

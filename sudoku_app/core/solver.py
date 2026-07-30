@@ -2,7 +2,7 @@
 ## 3. Motore risolutivo
 
 Ad ogni step il motore interroga le tecniche in ordine di difficoltà.
-L'analisi `profile`, predefinita con finestra 3.0, si limita a una fascia
+L'analisi `profile`, predefinita con finestra 1.5, si limita a una fascia
 configurabile sopra la difficoltà minima; `deep` costruisce invece
 l'inventario completo;
 `superficial` conserva soltanto la frontiera minima. In ogni modalità la
@@ -26,12 +26,13 @@ indipendenti per il confronto e l'ordinamento.
 
 """
 Solver engine with configurable analysis depth. The default profile mode
-scans three SE points above the minimum difficulty; deep collects the complete
+scans 1.5 SE points above the minimum difficulty; deep collects the complete
 logical inventory and superficial keeps only the minimum frontier. Proofs are
 retained as diagnostics, while availability is measured through unique
 logical conclusions.
 """
 
+import inspect
 import math
 
 from . import canonicalization as sc
@@ -61,7 +62,7 @@ ANALYSIS_MODE_ALIASES = {
     "superficiale": "superficial",
 }
 
-DEFAULT_PROFILE_DIFFICULTY_WINDOW = 3.0
+DEFAULT_PROFILE_DIFFICULTY_WINDOW = 1.5
 DEFAULT_ANALYSIS_MODE = "profile"
 MAX_MOVES_PER_TECHNIQUE = 15
 
@@ -138,6 +139,32 @@ def _move_outcome_signature(move):
     )
 
 
+
+def _call_technique_with_limit(
+    function,
+    state,
+    max_results,
+):
+    """Passa il limite dentro la tecnica quando il runner lo supporta."""
+    try:
+        parameters = inspect.signature(function).parameters.values()
+    except (TypeError, ValueError):
+        return function(state)
+
+    supports_keyword = any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        or parameter.name == "max_results"
+        for parameter in parameters
+    )
+
+    if supports_keyword:
+        return function(
+            state,
+            max_results=max_results,
+        )
+
+    return function(state)
+
 def collect_moves_for_analysis(
     state,
     mode=DEFAULT_ANALYSIS_MODE,
@@ -207,7 +234,11 @@ def collect_moves_for_analysis(
                 break
 
         scanned_function_count += 1
-        found = fn(state)
+        found = _call_technique_with_limit(
+            fn,
+            state,
+            max_results=max_moves_per_technique,
+        )
 
         if not found:
             continue
@@ -545,9 +576,8 @@ def solve_and_log(
                 f"{chosen['technique']:<30} "
                 f"(SE {chosen_score:.1f}, "
                 f"individuazione "
-                f"{move_discovery_difficulty:.1f}/100, "
+                f"{move_discovery_difficulty:.2f}, "
                 f"mosse effettive {effective_move_count:.2f}, "
-                f"mosse minime {frontier_move_count}, "
                 f"mosse minime {frontier_move_count}, "
                 f"modo {analysis_mode}) "
                 f"{chosen['description']}"
@@ -1177,7 +1207,7 @@ def analyse_puzzle(
     """
     Risolve, valuta e confeziona l analisi completa del puzzle.
 
-    La modalita predefinita e ``profile`` con finestra 3.0. ``deep`` produce
+    La modalita predefinita e ``profile`` con finestra 1.5. ``deep`` produce
     l'inventario totale e ``superficial`` conserva soltanto la frontiera,
     senza cambiare la strategia di scelta delle mosse.
     """

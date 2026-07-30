@@ -22,7 +22,7 @@ from __future__ import annotations
 from collections import OrderedDict, defaultdict, deque
 from copy import deepcopy
 from dataclasses import dataclass
-from itertools import combinations
+from itertools import chain, combinations
 from threading import RLock
 
 from .data_structure import UNITS, UNIT_KINDS, peers
@@ -30,12 +30,14 @@ from .data_structure import UNITS, UNIT_KINDS, peers
 
 Candidate = tuple[int, int, int]
 Literal = tuple[int, int, int, bool]
-MAX_DEDUCTIONS_PER_TECHNIQUE = 8
+DEFAULT_MAX_DEDUCTIONS_PER_TECHNIQUE = 15
+# Alias storico mantenuto per compatibilità con eventuali import esterni.
+MAX_DEDUCTIONS_PER_TECHNIQUE = DEFAULT_MAX_DEDUCTIONS_PER_TECHNIQUE
 
 
-# Le tecniche sono raggruppate in batch con strutture e propagazioni comuni.
-# La prima richiesta di una tecnica prepara l'intero batch; le richieste
-# successive dello stesso stato leggono esclusivamente i risultati in cache.
+# Le tecniche restano raggruppate per le preparazioni esplicite di batch.
+# Una richiesta ordinaria calcola però soltanto la tecnica necessaria; grafi,
+# closure e propagazioni già richieste vengono riutilizzati nello stesso stato.
 LOGIC_TECHNIQUE_BATCHES = {
     "static": (
         "Bidirectional X-Cycle",
@@ -828,6 +830,51 @@ class DynamicPropagator:
         return result
 
 
+class _DeductionCollector:
+    """Accumula soltanto esiti distinti e si ferma al limite richiesto."""
+
+    def __init__(self, max_results):
+        self.max_results = _normalise_max_results(max_results)
+        self.results = []
+        self._seen = set()
+
+    @property
+    def full(self):
+        return (
+            self.max_results is not None
+            and len(self.results) >= self.max_results
+        )
+
+    def add(self, deduction):
+        signature = (
+            tuple(deduction["placements"]),
+            tuple(deduction["eliminations"]),
+        )
+
+        if signature == ((), ()) or signature in self._seen:
+            return self.full
+
+        self._seen.add(signature)
+        self.results.append(deduction)
+        return self.full
+
+
+def _normalise_max_results(max_results):
+    """Valida il limite; ``None`` richiede l'inventario completo."""
+    if max_results is None:
+        return None
+
+    if isinstance(max_results, bool):
+        raise TypeError("max_results deve essere un intero positivo o None.")
+
+    max_results = int(max_results)
+
+    if max_results < 1:
+        raise ValueError("max_results deve essere maggiore di zero.")
+
+    return max_results
+
+
 class LogicEngine:
     """Facade che calcola e memorizza le deduzioni per uno stato immutato."""
 
@@ -836,46 +883,58 @@ class LogicEngine:
         self.candidates = _candidate_map(state)
         self.graph = StaticImplicationGraph(self.candidates)
         self.propagator = DynamicPropagator(self.grid, self.candidates)
+
+        # Per ogni tecnica conserva il risultato più ampio già calcolato.
+        # ``None`` in _result_limits significa inventario completo.
         self._results = {}
+        self._result_limits = {}
         self._prepared_batches = set()
+
+        # Queste cache contengono strutture riutilizzabili nello stesso stato.
+        # Non ampliano mai il livello richiesto: ogni livello dinamico ha una
+        # chiave distinta e viene calcolato solo quando serve davvero.
         self._propagation_cache = {}
         self._closure_cache = {}
         self._lock = RLock()
 
     def _propagate(self, source, *, mode="dynamic", advanced_level=0):
-        # I tre livelli dinamici condividono la stessa propagazione massima.
-        # Le deduzioni vengono poi attribuite a Dynamic, Plus o Nested in
-        # base alle feature minime della prova. Questo evita tre esplorazioni
-        # quasi identiche per ogni assunzione. Nishio resta separato.
-        effective_level = 2 if mode == "dynamic" else advanced_level
-        key = source, mode, effective_level
+        """Propaga esattamente al livello richiesto e ne riusa il risultato."""
+        key = source, mode, int(advanced_level)
+
         if key not in self._propagation_cache:
             self._propagation_cache[key] = self.propagator.propagate(
                 source,
                 mode=mode,
-                advanced_level=effective_level,
+                advanced_level=int(advanced_level),
             )
+
         return self._propagation_cache[key]
 
     def _closure(self, source, allowed):
         key = source, frozenset(allowed)
+
         if key not in self._closure_cache:
             self._closure_cache[key] = self.graph.closure(source, key[1])
+
         return self._closure_cache[key]
 
     @staticmethod
     def _matches_feature_tier(features, required_feature):
         features = set(features)
+
         if required_feature == "dynamic":
             return (
                 "dynamic" in features
                 and "advanced" not in features
                 and "nested" not in features
             )
+
         if required_feature == "advanced":
             return "advanced" in features and "nested" not in features
+
         if required_feature == "nested":
             return "nested" in features
+
         return required_feature in features
 
     @staticmethod
@@ -890,69 +949,152 @@ class LogicEngine:
             .replace(")", "")
         )
 
-    def _compute(self, technique):
+    def _cache_covers(self, technique, max_results):
+        if technique not in self._results:
+            return False
+
+        stored_limit = self._result_limits[technique]
+
+        if stored_limit is None:
+            return True
+
+        if max_results is None:
+            return False
+
+        return stored_limit >= max_results
+
+    def _store_result(self, technique, deductions, requested_limit):
+        # Se la ricerca restituisce meno del limite, l'enumerazione è
+        # terminata naturalmente e il risultato è completo.
+        stored_limit = (
+            None
+            if requested_limit is None
+            or len(deductions) < requested_limit
+            else requested_limit
+        )
+
+        previous_limit = self._result_limits.get(technique, -1)
+
+        if previous_limit is None:
+            return
+
+        if (
+            technique not in self._results
+            or stored_limit is None
+            or previous_limit < stored_limit
+        ):
+            self._results[technique] = deductions
+            self._result_limits[technique] = stored_limit
+
+    def _compute(self, technique, max_results):
+        max_results = _normalise_max_results(max_results)
+
+        if self._cache_covers(technique, max_results):
+            return
+
         method = getattr(self, self._method_name(technique), None)
+
         if method is None:
             raise KeyError(f"Tecnica logica sconosciuta: {technique}")
-        self._results[technique] = self._deduplicate(method())
 
-    def prepare(self, batch="all"):
-        """Precalcola un batch logico una sola volta per questo stato.
+        deductions = self._deduplicate(
+            method(max_results=max_results),
+            max_results=max_results,
+        )
+        self._store_result(technique, deductions, max_results)
 
-        ``batch`` può essere ``static``, ``multiple``, ``dynamic``, ``all``
-        oppure il nome di una tecnica. Le chiamate successive non eseguono
-        ricerca: leggono soltanto ``self._results``.
+    def prepare(
+        self,
+        target="all",
+        max_results=DEFAULT_MAX_DEDUCTIONS_PER_TECHNIQUE,
+    ):
         """
-        if batch in _LOGIC_TECHNIQUE_TO_BATCH:
-            batch = _LOGIC_TECHNIQUE_TO_BATCH[batch]
+        Prepara una tecnica oppure un batch esplicito.
 
-        if batch == "all":
-            batch_names = ("static", "multiple", "dynamic")
-        elif batch in LOGIC_TECHNIQUE_BATCHES:
-            batch_names = (batch,)
-        else:
-            raise KeyError(f"Batch logico sconosciuto: {batch}")
+        Il limite viene passato dentro la ricerca, quindi le enumerazioni si
+        interrompono appena hanno prodotto il numero richiesto di esiti
+        distinti. Una cache calcolata con un limite maggiore soddisfa anche
+        richieste successive con un limite minore.
+        """
+        max_results = _normalise_max_results(max_results)
 
         with self._lock:
+            if target in _LOGIC_TECHNIQUE_TO_BATCH:
+                self._compute(target, max_results)
+                return
+
+            if target == "all":
+                batch_names = (
+                    "static",
+                    "multiple",
+                    "dynamic",
+                )
+            elif target in LOGIC_TECHNIQUE_BATCHES:
+                batch_names = (target,)
+            else:
+                raise KeyError(
+                    f"Tecnica o batch logico sconosciuto: {target}"
+                )
+
             for batch_name in batch_names:
-                if batch_name in self._prepared_batches:
+                batch_key = batch_name, max_results
+
+                if batch_key in self._prepared_batches:
                     continue
+
                 for technique in LOGIC_TECHNIQUE_BATCHES[batch_name]:
-                    if technique not in self._results:
-                        self._compute(technique)
-                self._prepared_batches.add(batch_name)
+                    self._compute(technique, max_results)
 
-    def get_cached(self, technique):
-        if technique not in self._results:
+                self._prepared_batches.add(batch_key)
+
+    def get_cached(
+        self,
+        technique,
+        max_results=DEFAULT_MAX_DEDUCTIONS_PER_TECHNIQUE,
+    ):
+        max_results = _normalise_max_results(max_results)
+
+        if not self._cache_covers(technique, max_results):
             raise KeyError(
-                f"La tecnica {technique!r} non è ancora nella cache logica."
+                f"La tecnica {technique!r} non è nella cache con "
+                "un limite sufficiente."
             )
-        return deepcopy(self._results[technique])
 
-    def find(self, technique: str):
-        self.prepare(technique)
-        return self.get_cached(technique)
+        result = self._results[technique]
+
+        if max_results is None:
+            return deepcopy(result)
+
+        return deepcopy(result[:max_results])
+
+    def find(
+        self,
+        technique: str,
+        max_results=DEFAULT_MAX_DEDUCTIONS_PER_TECHNIQUE,
+    ):
+        self.prepare(technique, max_results=max_results)
+        return self.get_cached(technique, max_results=max_results)
 
     @staticmethod
-    def _deduplicate(deductions):
-        result = []
-        seen = set()
-        for deduction in deductions:
-            signature = (
-                tuple(deduction["placements"]),
-                tuple(deduction["eliminations"]),
-            )
-            if signature == ((), ()) or signature in seen:
-                continue
-            seen.add(signature)
-            result.append(deduction)
-            if len(result) >= MAX_DEDUCTIONS_PER_TECHNIQUE:
-                break
-        return result
+    def _deduplicate(deductions, max_results=None):
+        collector = _DeductionCollector(max_results)
 
-    def _cycle_deductions(self, technique, allowed, required):
-        result = []
-        seen_eliminations = set()
+        for deduction in deductions:
+            if collector.add(deduction):
+                break
+
+        return collector.results
+
+    def _cycle_deductions(
+        self,
+        technique,
+        allowed,
+        required,
+        *,
+        max_results,
+    ):
+        collector = _DeductionCollector(max_results)
+
         for literals, reasons in self.graph.cycles(
             allowed=frozenset(allowed),
             required=frozenset(required),
@@ -962,19 +1104,21 @@ class LogicEngine:
             on_candidates = [_candidate(item) for item in body if item[3]]
             off_candidates = [_candidate(item) for item in body if not item[3]]
             eliminations = []
+
             for candidate in self.graph.all_candidates:
                 if candidate[:2] in chain_cells:
                     continue
+
                 if (
                     any(_sees(candidate, item) for item in on_candidates)
                     and any(_sees(candidate, item) for item in off_candidates)
                 ):
                     eliminations.append(candidate)
-            signature = tuple(eliminations)
-            if not eliminations or signature in seen_eliminations:
+
+            if not eliminations:
                 continue
-            seen_eliminations.add(signature)
-            result.append(_deduction(
+
+            if collector.add(_deduction(
                 description=(
                     f"Il {technique} alterna {len(body)} implicazioni: "
                     "i candidati che vedono entrambi i colori del ciclo "
@@ -985,28 +1129,46 @@ class LogicEngine:
                 chains=(literals,),
                 reasons=reasons,
                 kind="bidirectional-cycle",
-            ))
-            if len(result) >= MAX_DEDUCTIONS_PER_TECHNIQUE:
+            )):
                 break
-        return result
 
-    def _find_bidirectional_x_cycle(self):
+        return collector.results
+
+    def _find_bidirectional_x_cycle(self, *, max_results):
         return self._cycle_deductions(
-            "Bidirectional X-Cycle", {"peer", "x"}, {"peer", "x"}
+            "Bidirectional X-Cycle",
+            {"peer", "x"},
+            {"peer", "x"},
+            max_results=max_results,
         )
 
-    def _find_bidirectional_y_cycle(self):
+    def _find_bidirectional_y_cycle(self, *, max_results):
         return self._cycle_deductions(
-            "Bidirectional Y-Cycle", {"peer", "y"}, {"peer", "y"}
+            "Bidirectional Y-Cycle",
+            {"peer", "y"},
+            {"peer", "y"},
+            max_results=max_results,
         )
 
-    def _find_bidirectional_cycle(self):
+    def _find_bidirectional_cycle(self, *, max_results):
         return self._cycle_deductions(
-            "Bidirectional Cycle", {"peer", "x", "y"}, {"x", "y"}
+            "Bidirectional Cycle",
+            {"peer", "x", "y"},
+            {"x", "y"},
+            max_results=max_results,
         )
 
-    def _forcing_deductions(self, technique, allowed, required):
-        result = []
+    def _forcing_deductions(
+        self,
+        technique,
+        allowed,
+        required,
+        *,
+        max_results,
+        eliminations_only=False,
+    ):
+        collector = _DeductionCollector(max_results)
+
         for candidate in self.graph.all_candidates:
             for source_state in (True, False):
                 source = _literal(candidate, source_state)
@@ -1018,21 +1180,28 @@ class LogicEngine:
                     required=frozenset(required),
                     minimum_edges=3,
                 )
+
                 if not path_data:
                     continue
+
                 path, reasons = path_data
+
                 if source_state:
                     placements = ()
                     eliminations = (candidate,)
                     conclusion = "deve essere falso"
                 else:
+                    if eliminations_only:
+                        continue
                     placements = (candidate,)
                     eliminations = ()
                     conclusion = "deve essere vero"
-                result.append(_deduction(
+
+                if collector.add(_deduction(
                     description=(
                         f"Assumere R{candidate[0]+1}C{candidate[1]+1}="
-                        f"{candidate[2]} {('vero' if source_state else 'falso')} "
+                        f"{candidate[2]} "
+                        f"{('vero' if source_state else 'falso')} "
                         f"implica il contrario: il candidato {conclusion}."
                     ),
                     placements=placements,
@@ -1041,54 +1210,75 @@ class LogicEngine:
                     chains=(path,),
                     reasons=reasons,
                     kind="forcing-chain",
-                ))
-                if len(result) >= MAX_DEDUCTIONS_PER_TECHNIQUE:
-                    return result
-        return result
+                )):
+                    return collector.results
 
-    def _find_forcing_x_chain(self):
+        return collector.results
+
+    def _find_forcing_x_chain(self, *, max_results):
         return self._forcing_deductions(
-            "Forcing X-Chain", {"peer", "x"}, {"peer", "x"}
+            "Forcing X-Chain",
+            {"peer", "x"},
+            {"peer", "x"},
+            max_results=max_results,
         )
 
-    def _find_xy_chain(self):
-        # Una XY-Chain è la forcing chain puramente bivalue: i link deboli
-        # passano fra celle peer e i link forti Y cambiano candidato dentro
-        # la cella. Le conclusioni ON restano cicli discontinui generali;
-        # il nome moderno XY-Chain è riservato alle eliminazioni canoniche.
-        return [
-            deduction
-            for deduction in self._forcing_deductions(
-                "XY-Chain", {"peer", "y"}, {"peer", "y"}
-            )
-            if deduction["eliminations"]
-        ]
-
-    def _find_forcing_chain(self):
+    def _find_xy_chain(self, *, max_results):
+        # Le conclusioni ON restano cicli discontinui generali. Il limite
+        # viene applicato dopo questo filtro, non prima.
         return self._forcing_deductions(
-            "Forcing Chain", {"peer", "x", "y"}, {"x", "y"}
+            "XY-Chain",
+            {"peer", "y"},
+            {"peer", "y"},
+            max_results=max_results,
+            eliminations_only=True,
         )
 
-    def _multiple_deductions(self, technique, source_groups, kind):
-        result = []
+    def _find_forcing_chain(self, *, max_results):
+        return self._forcing_deductions(
+            "Forcing Chain",
+            {"peer", "x", "y"},
+            {"x", "y"},
+            max_results=max_results,
+        )
+
+    def _multiple_deductions(
+        self,
+        technique,
+        source_groups,
+        kind,
+        *,
+        max_results,
+    ):
+        collector = _DeductionCollector(max_results)
         allowed = frozenset({"peer", "x", "y"})
+
         for label, candidates in source_groups:
             if len(candidates) < 3:
                 continue
+
             sources = [_literal(candidate, True) for candidate in candidates]
             closures = [self._closure(source, allowed) for source in sources]
-            common = set.intersection(*(closure.literals for closure in closures))
+            common = set.intersection(*(
+                closure.literals for closure in closures
+            ))
+
             for literal in sorted(common, key=_literal_key):
                 candidate = _candidate(literal)
+
                 if candidate not in self.graph.all_candidates:
                     continue
+
                 if _opposite(literal) in common:
                     continue
+
                 chains = [closure.path(literal) for closure in closures]
+
                 if literal[3]:
                     placements, eliminations = (candidate,), ()
                     conclusion = (
-                        f"R{candidate[0]+1}C{candidate[1]+1}={candidate[2]}"
+                        f"R{candidate[0]+1}C{candidate[1]+1}="
+                        f"{candidate[2]}"
                     )
                 else:
                     placements, eliminations = (), (candidate,)
@@ -1096,10 +1286,12 @@ class LogicEngine:
                         f"il candidato {candidate[2]} in "
                         f"R{candidate[0]+1}C{candidate[1]+1}"
                     )
-                result.append(_deduction(
+
+                if collector.add(_deduction(
                     description=(
-                        f"Ogni alternativa di {label} implica {conclusion}; "
-                        "la conclusione e' quindi indipendente dall'alternativa."
+                        f"Ogni alternativa di {label} implica "
+                        f"{conclusion}; la conclusione e' quindi "
+                        "indipendente dall'alternativa."
                     ),
                     placements=placements,
                     eliminations=eliminations,
@@ -1107,72 +1299,101 @@ class LogicEngine:
                     chains=chains,
                     reasons=("peer", "x", "y"),
                     kind=kind,
-                ))
-                if len(result) >= MAX_DEDUCTIONS_PER_TECHNIQUE:
-                    return result
-        return result
+                )):
+                    return collector.results
 
-    def _find_cell_forcing_chain(self):
+        return collector.results
+
+    def _find_cell_forcing_chain(self, *, max_results):
         return self._multiple_deductions(
             "Cell Forcing Chain",
             self._cell_source_groups(),
             "cell-forcing-chain",
+            max_results=max_results,
         )
 
-    def _find_region_forcing_chain(self):
+    def _find_region_forcing_chain(self, *, max_results):
         return self._multiple_deductions(
             "Region Forcing Chain",
             self._region_source_groups(),
             "region-forcing-chain",
+            max_results=max_results,
         )
 
     def _cell_source_groups(self):
-        groups = []
         for (row, column), values in sorted(self.candidates.items()):
-            candidates = [(row, column, value) for value in sorted(values)]
-            groups.append((f"R{row+1}C{column+1}", candidates))
-        return groups
+            candidates = [
+                (row, column, value)
+                for value in sorted(values)
+            ]
+            yield f"R{row+1}C{column+1}", candidates
 
     def _region_source_groups(self):
-        groups = []
-        for unit_index, (unit, kind) in enumerate(zip(UNITS, UNIT_KINDS)):
+        for unit_index, (unit, kind) in enumerate(
+            zip(UNITS, UNIT_KINDS)
+        ):
             for value in range(1, 10):
                 candidates = [
                     (row, column, value)
                     for row, column in unit
-                    if value in self.candidates.get((row, column), ())
+                    if value in self.candidates.get(
+                        (row, column),
+                        (),
+                    )
                 ]
-                groups.append((
-                    f"{kind} {unit_index + 1 if kind == 'row' else unit_index - 8 if kind == 'col' else unit_index - 17} per il valore {value}",
+                visible_index = (
+                    unit_index + 1
+                    if kind == "row"
+                    else unit_index - 8
+                    if kind == "col"
+                    else unit_index - 17
+                )
+                yield (
+                    f"{kind} {visible_index} per il valore {value}",
                     candidates,
-                ))
-        return groups
+                )
 
-    def _binary_dynamic(self, technique, *, required_feature, advanced_level):
-        result = []
+    def _binary_dynamic(
+        self,
+        technique,
+        *,
+        required_feature,
+        advanced_level,
+        max_results,
+        collector=None,
+    ):
+        collector = collector or _DeductionCollector(max_results)
+
         for candidate in self.graph.all_candidates:
-            if len(result) >= MAX_DEDUCTIONS_PER_TECHNIQUE:
+            if collector.full:
                 break
+
             source_on = _literal(candidate, True)
             source_off = _literal(candidate, False)
             on_result = self._propagate(
-                source_on, mode="dynamic", advanced_level=advanced_level
+                source_on,
+                mode="dynamic",
+                advanced_level=advanced_level,
             )
             off_result = self._propagate(
-                source_off, mode="dynamic", advanced_level=advanced_level
+                source_off,
+                mode="dynamic",
+                advanced_level=advanced_level,
             )
 
             if (
                 on_result.contradiction
                 and not off_result.contradiction
                 and self._matches_feature_tier(
-                    on_result.contradiction_features, required_feature
+                    on_result.contradiction_features,
+                    required_feature,
                 )
             ):
-                result.append(_deduction(
+                collector.add(_deduction(
                     description=(
                         f"L'ipotesi R{candidate[0]+1}C{candidate[1]+1}="
-                        f"{candidate[2]} conduce a una contraddizione dinamica."
+                        f"{candidate[2]} conduce a una contraddizione "
+                        "dinamica."
                     ),
                     eliminations=(candidate,),
                     assumptions=(source_on,),
@@ -1181,17 +1402,20 @@ class LogicEngine:
                     kind="dynamic-contradiction",
                 ))
                 continue
+
             if (
                 off_result.contradiction
                 and not on_result.contradiction
                 and self._matches_feature_tier(
-                    off_result.contradiction_features, required_feature
+                    off_result.contradiction_features,
+                    required_feature,
                 )
             ):
-                result.append(_deduction(
+                collector.add(_deduction(
                     description=(
-                        f"Escludere {candidate[2]} da R{candidate[0]+1}"
-                        f"C{candidate[1]+1} conduce a una contraddizione dinamica."
+                        f"Escludere {candidate[2]} da "
+                        f"R{candidate[0]+1}C{candidate[1]+1} conduce "
+                        "a una contraddizione dinamica."
                     ),
                     placements=(candidate,),
                     assumptions=(source_off,),
@@ -1203,26 +1427,34 @@ class LogicEngine:
 
             if on_result.contradiction or off_result.contradiction:
                 continue
+
             common = on_result.literals & off_result.literals
+
             for literal in sorted(common, key=_literal_key):
                 combined_features = (
                     set(on_result.features.get(literal, ()))
                     | set(off_result.features.get(literal, ()))
                 )
+
                 if not self._matches_feature_tier(
-                    combined_features, required_feature
+                    combined_features,
+                    required_feature,
                 ):
                     continue
+
                 target = _candidate(literal)
+
                 if target not in self.graph.all_candidates:
                     continue
+
                 if literal[3]:
                     placements, eliminations = (target,), ()
                     conclusion = "deve essere vero"
                 else:
                     placements, eliminations = (), (target,)
                     conclusion = "deve essere falso"
-                result.append(_deduction(
+
+                if collector.add(_deduction(
                     description=(
                         f"Sia assumendo sia escludendo {candidate[2]} in "
                         f"R{candidate[0]+1}C{candidate[1]+1}, il candidato "
@@ -1232,29 +1464,46 @@ class LogicEngine:
                     placements=placements,
                     eliminations=eliminations,
                     assumptions=(source_on, source_off),
-                    chains=(on_result.path(literal), off_result.path(literal)),
+                    chains=(
+                        on_result.path(literal),
+                        off_result.path(literal),
+                    ),
                     reasons=combined_features,
                     kind="dynamic-reduction",
-                ))
-                if len(result) >= MAX_DEDUCTIONS_PER_TECHNIQUE:
+                )):
                     break
-        return result
 
-    def _multiple_dynamic(self, technique, *, required_feature, advanced_level):
+        return collector.results
+
+    def _multiple_dynamic(
+        self,
+        technique,
+        *,
+        required_feature,
+        advanced_level,
+        max_results,
+        collector=None,
+    ):
         """Riduzioni dinamiche comuni a tutte le scelte di cella o casa."""
-        result = []
-        groups = [
-            ("cell", label, candidates)
-            for label, candidates in self._cell_source_groups()
-        ] + [
-            ("region", label, candidates)
-            for label, candidates in self._region_source_groups()
-        ]
+        collector = collector or _DeductionCollector(max_results)
+        groups = chain(
+            (
+                ("cell", label, candidates)
+                for label, candidates in self._cell_source_groups()
+            ),
+            (
+                ("region", label, candidates)
+                for label, candidates in self._region_source_groups()
+            ),
+        )
+
         for source_kind, label, candidates in groups:
-            if len(result) >= MAX_DEDUCTIONS_PER_TECHNIQUE:
+            if collector.full:
                 break
+
             if len(candidates) < 3:
                 continue
+
             sources = [_literal(candidate, True) for candidate in candidates]
             outcomes = [
                 self._propagate(
@@ -1264,60 +1513,79 @@ class LogicEngine:
                 )
                 for source in sources
             ]
+
             # Un ramo contraddittorio produce prima una riduzione binaria più
             # semplice; non si usa il principio di esplosione nell'incrocio.
             if any(outcome.contradiction for outcome in outcomes):
                 continue
-            common = set.intersection(*(outcome.literals for outcome in outcomes))
+
+            common = set.intersection(*(
+                outcome.literals for outcome in outcomes
+            ))
+
             for literal in sorted(common, key=_literal_key):
                 target = _candidate(literal)
+
                 if target not in self.graph.all_candidates:
                     continue
+
                 features = set().union(*(
                     outcome.features.get(literal, frozenset())
                     for outcome in outcomes
                 ))
-                if not self._matches_feature_tier(features, required_feature):
+
+                if not self._matches_feature_tier(
+                    features,
+                    required_feature,
+                ):
                     continue
+
                 if literal[3]:
                     placements, eliminations = (target,), ()
                     conclusion = "deve essere vero"
                 else:
                     placements, eliminations = (), (target,)
                     conclusion = "deve essere falso"
-                result.append(_deduction(
+
+                if collector.add(_deduction(
                     description=(
-                        f"Ogni alternativa dinamica di {label} implica che "
-                        f"{target[2]} in R{target[0]+1}C{target[1]+1} "
-                        f"{conclusion}."
+                        f"Ogni alternativa dinamica di {label} implica "
+                        f"che {target[2]} in "
+                        f"R{target[0]+1}C{target[1]+1} {conclusion}."
                     ),
                     placements=placements,
                     eliminations=eliminations,
                     assumptions=sources,
                     chains=tuple(
-                        outcome.path(literal) for outcome in outcomes
+                        outcome.path(literal)
+                        for outcome in outcomes
                     ),
                     reasons=features,
                     kind=f"dynamic-{source_kind}-reduction",
-                ))
-                if len(result) >= MAX_DEDUCTIONS_PER_TECHNIQUE:
+                )):
                     break
-        return result
 
-    def _find_nishio(self):
-        result = []
+        return collector.results
+
+    def _find_nishio(self, *, max_results):
+        collector = _DeductionCollector(max_results)
+
         for candidate in self.graph.all_candidates:
-            if len(result) >= MAX_DEDUCTIONS_PER_TECHNIQUE:
+            if collector.full:
                 break
+
             source_on = _literal(candidate, True)
             source_off = _literal(candidate, False)
             on_outcome = self._propagate(source_on, mode="nishio")
             off_outcome = self._propagate(source_off, mode="nishio")
+
             if on_outcome.contradiction and not off_outcome.contradiction:
-                result.append(_deduction(
+                collector.add(_deduction(
                     description=(
-                        f"L'ipotesi Nishio R{candidate[0]+1}C{candidate[1]+1}="
-                        f"{candidate[2]} esaurisce una casa per quel valore."
+                        f"L'ipotesi Nishio "
+                        f"R{candidate[0]+1}C{candidate[1]+1}="
+                        f"{candidate[2]} esaurisce una casa per quel "
+                        "valore."
                     ),
                     eliminations=(candidate,),
                     assumptions=(source_on,),
@@ -1325,12 +1593,15 @@ class LogicEngine:
                     reasons=("x", "dynamic"),
                     kind="nishio",
                 ))
-            elif off_outcome.contradiction and not on_outcome.contradiction:
-                result.append(_deduction(
+            elif (
+                off_outcome.contradiction
+                and not on_outcome.contradiction
+            ):
+                collector.add(_deduction(
                     description=(
                         f"L'esclusione Nishio di {candidate[2]} in "
-                        f"R{candidate[0]+1}C{candidate[1]+1} esaurisce una "
-                        "casa: il candidato deve essere vero."
+                        f"R{candidate[0]+1}C{candidate[1]+1} esaurisce "
+                        "una casa: il candidato deve essere vero."
                     ),
                     placements=(candidate,),
                     assumptions=(source_off,),
@@ -1338,46 +1609,66 @@ class LogicEngine:
                     reasons=("x", "dynamic"),
                     kind="nishio",
                 ))
-        return result
 
-    def _find_dynamic_forcing_chain(self):
-        return self._binary_dynamic(
+        return collector.results
+
+    def _dynamic_tier(
+        self,
+        technique,
+        *,
+        required_feature,
+        advanced_level,
+        max_results,
+    ):
+        collector = _DeductionCollector(max_results)
+        self._binary_dynamic(
+            technique,
+            required_feature=required_feature,
+            advanced_level=advanced_level,
+            max_results=max_results,
+            collector=collector,
+        )
+
+        if not collector.full:
+            self._multiple_dynamic(
+                technique,
+                required_feature=required_feature,
+                advanced_level=advanced_level,
+                max_results=max_results,
+                collector=collector,
+            )
+
+        return collector.results
+
+    def _find_dynamic_forcing_chain(self, *, max_results):
+        return self._dynamic_tier(
             "Dynamic Forcing Chain",
             required_feature="dynamic",
             advanced_level=0,
-        ) + self._multiple_dynamic(
-            "Dynamic Forcing Chain",
-            required_feature="dynamic",
-            advanced_level=0,
+            max_results=max_results,
         )
 
-    def _find_dynamic_forcing_chain_plus(self):
-        return self._binary_dynamic(
+    def _find_dynamic_forcing_chain_plus(self, *, max_results):
+        return self._dynamic_tier(
             "Dynamic Forcing Chain Plus",
             required_feature="advanced",
             advanced_level=1,
-        ) + self._multiple_dynamic(
-            "Dynamic Forcing Chain Plus",
-            required_feature="advanced",
-            advanced_level=1,
+            max_results=max_results,
         )
 
-    def _find_nested_forcing_chain(self):
-        return self._binary_dynamic(
+    def _find_nested_forcing_chain(self, *, max_results):
+        return self._dynamic_tier(
             "Nested Forcing Chain",
             required_feature="nested",
             advanced_level=2,
-        ) + self._multiple_dynamic(
-            "Nested Forcing Chain",
-            required_feature="nested",
-            advanced_level=2,
+            max_results=max_results,
         )
 
 
 # Cache LRU indicizzata dal contenuto logico dello stato, non dall'identità
 # dell'oggetto Python. Anche due SudokuState distinti ma equivalenti possono
 # quindi riutilizzare lo stesso motore già preparato.
-_ENGINE_CACHE_MAXSIZE = 32
+_ENGINE_CACHE_MAXSIZE = 8
 _ENGINE_CACHE = OrderedDict()
 _ENGINE_CACHE_LOCK = RLock()
 _ENGINE_CACHE_HITS = 0
@@ -1406,31 +1697,49 @@ def _engine_for(state):
         return engine
 
 
-def prepare_logic_cache(state, technique=None, batch=None):
-    """Prepara la cache logica dello stato e restituisce il motore.
+def prepare_logic_cache(
+    state,
+    technique=None,
+    batch=None,
+    max_results=DEFAULT_MAX_DEDUCTIONS_PER_TECHNIQUE,
+):
+    """Prepara soltanto la tecnica o il batch richiesto.
 
-    Se viene fornita ``technique``, viene preparato il batch che la contiene.
-    Con ``batch`` si può richiedere esplicitamente ``static``, ``multiple``,
-    ``dynamic`` o ``all``. Senza argomenti prepara l'inventario completo.
+    ``max_results`` viene applicato durante la ricerca. Le strutture comuni
+    già calcolate per lo stesso stato vengono riutilizzate, senza promuovere
+    implicitamente una richiesta Dynamic a Plus o Nested.
     """
     if technique is not None and batch is not None:
         raise ValueError("Usa technique oppure batch, non entrambi.")
 
     engine = _engine_for(state)
     target = technique if technique is not None else (batch or "all")
-    engine.prepare(target)
+    engine.prepare(target, max_results=max_results)
     return engine
 
 
-def get_cached_logic_deductions(state, technique: str):
-    """Legge una tecnica già preparata senza avviare alcuna ricerca."""
-    return _engine_for(state).get_cached(technique)
+def get_cached_logic_deductions(
+    state,
+    technique: str,
+    max_results=DEFAULT_MAX_DEDUCTIONS_PER_TECHNIQUE,
+):
+    """Legge una tecnica già preparata con un limite sufficiente."""
+    return _engine_for(state).get_cached(
+        technique,
+        max_results=max_results,
+    )
 
 
-def find_logic_deductions(state, technique: str):
-    """Prepara il batch della tecnica e ne restituisce le deduzioni."""
-    engine = prepare_logic_cache(state, technique=technique)
-    return engine.get_cached(technique)
+def find_logic_deductions(
+    state,
+    technique: str,
+    max_results=DEFAULT_MAX_DEDUCTIONS_PER_TECHNIQUE,
+):
+    """Cerca una tecnica fermandosi agli esiti distinti richiesti."""
+    return _engine_for(state).find(
+        technique,
+        max_results=max_results,
+    )
 
 
 def clear_logic_cache(state=None):
@@ -1473,7 +1782,9 @@ def logic_cache_info():
 __all__ = [
     "Candidate",
     "Literal",
+    "DEFAULT_MAX_DEDUCTIONS_PER_TECHNIQUE",
     "LOGIC_TECHNIQUE_BATCHES",
+    "MAX_DEDUCTIONS_PER_TECHNIQUE",
     "LogicEngine",
     "StaticImplicationGraph",
     "clear_logic_cache",

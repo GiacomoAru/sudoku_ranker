@@ -1067,56 +1067,6 @@ def _resolve_puzzle_path(reference):
 # Salvataggio e caricamento dei Sudoku
 # ---------------------------------------------------------------------------
 
-_LEGACY_EMPTY_METADATA_VALUES = {
-    "nessun_riferimento",
-    "non_indicata",
-    "non_indicato",
-    "none",
-    "null",
-}
-
-
-def _clean_optional_text(value):
-    """Normalizza un testo facoltativo e converte i placeholder in None."""
-    if value is None:
-        return None
-
-    text = str(value).strip()
-
-    if not text or text.casefold() in _LEGACY_EMPTY_METADATA_VALUES:
-        return None
-
-    return text
-
-
-
-def _normalise_puzzle_metadata(metadata):
-    """Rimuove campi vuoti senza alterare numeri, booleani o strutture."""
-    if not metadata:
-        return {}
-
-    cleaned = {}
-
-    for key, value in dict(metadata).items():
-        key = str(key).strip()
-
-        if not key or value is None:
-            continue
-
-        if isinstance(value, str):
-            value = _clean_optional_text(value)
-
-            if value is None:
-                continue
-
-        elif isinstance(value, (list, tuple, set, dict)) and not value:
-            continue
-
-        cleaned[key] = value
-
-    return cleaned
-
-
 def save_sudoku(grid, name=None, metadata=None):
     """
     Salva un Sudoku nella cartella puzzles.
@@ -1136,15 +1086,12 @@ def save_sudoku(grid, name=None, metadata=None):
     canonical_fields = _canonical_fields(grid, existing)
 
     stored_metadata = dict(existing.get("metadata", {}))
-    incoming_metadata = _normalise_puzzle_metadata(metadata)
-    metadata_title = _clean_optional_text(
-        incoming_metadata.pop("title", None)
-    )
-    stored_metadata.update(incoming_metadata)
+
+    if metadata:
+        stored_metadata.update(metadata)
 
     stored_name = (
-        _clean_optional_text(name)
-        or metadata_title
+        name
         or existing.get("name")
         or f"sudoku_{puzzle_id[:8]}"
     )
@@ -1178,65 +1125,75 @@ def save_sudoku(grid, name=None, metadata=None):
 
 def save_with_standard_nomenclature(
     grid,
-    provenience=None,
-    tag=None,
-    difficulty=None,
+    provenience,
+    tag,
+    difficulty,
     metadata=None,
-    name=None,
 ):
     """
-    Salva un Sudoku accettando anche i vecchi parametri della web API.
+    Salva un Sudoku con nome:
 
-    Tutti i dati editoriali sono facoltativi. ``provenience``, ``tag`` e
-    ``difficulty`` restano supportati per compatibilità, ma vengono salvati
-    con nomi comprensibili: ``source``, ``source_reference`` e
-    ``stated_difficulty``. I valori vuoti non vengono scritti nel JSON.
+        provenience_difficulty_index
 
-    Se la griglia esiste già, i nuovi metadati vengono uniti al record
-    esistente invece di essere ignorati.
+    L'indice viene calcolato esclusivamente dai nomi già esistenti.
+
+    Se la stessa griglia è già salvata, restituisce il record esistente
+    senza modificarne nome o metadati.
     """
-    complete_metadata = _normalise_puzzle_metadata(metadata)
+    _ensure_sudoku_directories()
 
-    source = _clean_optional_text(provenience)
-    source_reference = _clean_optional_text(tag)
-    stated_difficulty = _clean_optional_text(difficulty)
+    puzzle_id = sudoku_id(grid)
+    existing_path = _puzzle_path(puzzle_id)
 
-    # Il vecchio client usava "web" come provenienza tecnica. Ora questo
-    # concetto è rappresentato da entry_channel e non viene confuso con la
-    # vera fonte editoriale, salvo che il client invii esplicitamente source.
-    if (
-        source
-        and not (
-            source.casefold() == "web"
-            and complete_metadata.get("entry_channel") == "web"
-            and "source" not in complete_metadata
-        )
-    ):
-        complete_metadata.setdefault("source", source)
+    if existing_path.exists():
+        existing = _read_json(existing_path)
 
-    if source_reference:
-        complete_metadata.setdefault(
-            "source_reference",
-            source_reference,
+        if (
+            existing.get("schema_version") == PUZZLE_SCHEMA_VERSION
+            and existing.get("canonical_id")
+        ):
+            return load_sudoku(existing_path)
+
+        return save_sudoku(
+            grid,
+            name=existing.get("name"),
+            metadata=existing.get("metadata"),
         )
 
-    if stated_difficulty:
-        complete_metadata.setdefault(
-            "stated_difficulty",
-            stated_difficulty,
-        )
+    prefix = f"{provenience}_{difficulty}_"
+    highest_index = -1
 
-    requested_name = (
-        _clean_optional_text(name)
-        or _clean_optional_text(complete_metadata.get("title"))
-    )
+    for path in SUDOKU_PUZZLES_DIR.glob("*.json"):
+        payload = _read_json(path)
+        name = str(payload.get("name", ""))
+
+        if not name.startswith(prefix):
+            continue
+
+        index_text = name[len(prefix):]
+
+        if index_text.isdigit():
+            highest_index = max(
+                highest_index,
+                int(index_text),
+            )
+
+    index = highest_index + 1
+    name = f"{provenience}_{difficulty}_{index}"
+
+    complete_metadata = dict(metadata or {})
+    complete_metadata.update({
+        "provenience": provenience,
+        "tag": tag,
+        "difficulty": difficulty,
+        "index": index,
+    })
 
     return save_sudoku(
         grid,
-        name=requested_name,
+        name=name,
         metadata=complete_metadata,
     )
-
     
 
 def load_sudoku(reference):

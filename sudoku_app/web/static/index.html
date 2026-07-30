@@ -35,43 +35,6 @@
           </button>
         </div>
 
-        <div class="nomenclature-fields">
-          <label class="field">
-            <span>Provenienza</span>
-            <input
-              id="puzzle-provenience"
-              name="provenience"
-              type="text"
-              maxlength="60"
-              value="web"
-              placeholder="es. settimana_sudoku"
-              required
-            >
-          </label>
-          <label class="field">
-            <span>Tag</span>
-            <input
-              id="puzzle-tag"
-              name="tag"
-              type="text"
-              maxlength="80"
-              placeholder="es. 28_07_2026"
-              required
-            >
-          </label>
-          <label class="field">
-            <span>Difficoltà dichiarata</span>
-            <input
-              id="puzzle-difficulty"
-              name="difficulty"
-              type="text"
-              maxlength="40"
-              placeholder="es. sfida"
-              required
-            >
-          </label>
-        </div>
-
         <section class="photo-capture" aria-labelledby="photo-capture-title">
           <div class="photo-capture-heading">
             <div>
@@ -137,6 +100,103 @@
             placeholder="Usa 0 o . per le celle vuote"
           ></textarea>
         </label>
+
+        <details class="metadata-card" id="metadata-details">
+          <summary>
+            <span class="metadata-summary-copy">
+              <span class="metadata-icon" aria-hidden="true">＋</span>
+              <span>
+                <strong>Dettagli facoltativi</strong>
+                <small>Fonte, difficoltà indicata e note</small>
+              </span>
+            </span>
+            <span class="metadata-summary-side">
+              <span class="metadata-count" id="metadata-count">Nessun dettaglio</span>
+              <span class="metadata-chevron" aria-hidden="true">⌄</span>
+            </span>
+          </summary>
+
+          <div class="metadata-fields">
+            <label class="field">
+              <span>Titolo</span>
+              <input
+                id="puzzle-title"
+                name="title"
+                type="text"
+                maxlength="100"
+                placeholder="es. Il Sudoku del sabato"
+              >
+              <small class="field-help">Un nome breve per riconoscerlo nell’archivio.</small>
+            </label>
+
+            <label class="field">
+              <span>Fonte</span>
+              <input
+                id="puzzle-source"
+                name="source"
+                type="text"
+                maxlength="100"
+                placeholder="es. La Settimana Sudoku"
+              >
+              <small class="field-help">Rivista, libro, sito, app o persona.</small>
+            </label>
+
+            <label class="field">
+              <span>Riferimento nella fonte</span>
+              <input
+                id="puzzle-source-reference"
+                name="source_reference"
+                type="text"
+                maxlength="160"
+                placeholder="es. n. 18, pagina 24, schema 7"
+              >
+              <small class="field-help">Numero, pagina, link o codice del puzzle.</small>
+            </label>
+
+            <label class="field">
+              <span>Difficoltà indicata</span>
+              <input
+                id="puzzle-stated-difficulty"
+                name="stated_difficulty"
+                type="text"
+                maxlength="60"
+                placeholder="es. Difficile, Sfida, 5 stelle"
+              >
+              <small class="field-help">La difficoltà scritta dalla fonte, non quella calcolata.</small>
+            </label>
+
+            <label class="field">
+              <span>Autore o editore</span>
+              <input
+                id="puzzle-author"
+                name="author_or_publisher"
+                type="text"
+                maxlength="100"
+                placeholder="es. Editore X o Mario Rossi"
+              >
+            </label>
+
+            <label class="field">
+              <span>Data di pubblicazione</span>
+              <input
+                id="puzzle-published-at"
+                name="published_at"
+                type="date"
+              >
+            </label>
+
+            <label class="field field-wide">
+              <span>Note</span>
+              <textarea
+                id="puzzle-notes"
+                name="notes"
+                rows="3"
+                maxlength="1000"
+                placeholder="es. Trovato interessante per il finale con due X-Wing"
+              ></textarea>
+            </label>
+          </div>
+        </details>
 
         <p class="hint">
           Analisi predefinita: <strong>profile</strong>, finestra

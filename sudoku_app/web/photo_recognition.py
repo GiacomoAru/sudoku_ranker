@@ -30,7 +30,9 @@ from PIL import (
 )
 
 
-RECOGNITION_VERSION = "opencv-hog-synthetic-v2"
+RECOGNITION_VERSION = "opencv-hog-synthetic-v3"
+DARK_GRID_MEAN_THRESHOLD = 115.0
+NEGATIVE_CONFIDENCE_MARGIN = 0.03
 MAX_IMAGE_BYTES = 12 * 1024 * 1024
 MAX_IMAGE_SIDE = 12000
 PROCESSING_MAX_SIDE = 4000
@@ -543,7 +545,7 @@ def _refine_rectified_grid(rectified):
     }
 
 
-def _find_grid(image):
+def _find_grid_once(image):
     height, width = image.shape[:2]
     detection_scale = min(1.0, 1800 / max(height, width))
     detection = cv2.resize(
@@ -732,6 +734,122 @@ def _find_grid(image):
         corners,
         round(detection_confidence, 4),
         detection_method,
+    )
+
+
+def _find_grid(image):
+    """
+    Cerca la griglia prima nell'immagine originale e, quando necessario,
+    anche nel negativo.
+
+    Il negativo viene provato quando la ricerca normale fallisce oppure
+    quando la griglia raddrizzata risulta prevalentemente scura.
+    """
+    normal_result = None
+    normal_error = None
+
+    try:
+        normal_result = _find_grid_once(image)
+    except PhotoRecognitionError as error:
+        normal_error = error
+
+    try_negative = normal_result is None
+
+    if normal_result is not None:
+        normal_rectified = normal_result[0]
+        normal_gray = cv2.cvtColor(
+            normal_rectified,
+            cv2.COLOR_BGR2GRAY,
+        )
+        normal_mean = float(np.mean(normal_gray))
+
+        if normal_mean < DARK_GRID_MEAN_THRESHOLD:
+            try_negative = True
+
+    if not try_negative:
+        rectified, corners, confidence, method = normal_result
+        return rectified, corners, confidence, method, False
+
+    negative_image = cv2.bitwise_not(image)
+    negative_result = None
+    negative_error = None
+
+    try:
+        negative_result = _find_grid_once(negative_image)
+    except PhotoRecognitionError as error:
+        negative_error = error
+
+    if normal_result is None and negative_result is None:
+        message = (
+            str(normal_error)
+            if normal_error is not None
+            else "Non riesco a individuare la griglia."
+        )
+        raise PhotoRecognitionError(
+            f"{message} Ho provato anche il negativo dell'immagine "
+            "senza trovare una griglia affidabile."
+        ) from negative_error
+
+    if normal_result is None:
+        rectified, corners, confidence, method = negative_result
+        return (
+            rectified,
+            corners,
+            confidence,
+            f"{method}+negative",
+            True,
+        )
+
+    if negative_result is None:
+        rectified, corners, confidence, method = normal_result
+        return rectified, corners, confidence, method, False
+
+    (
+        normal_rectified,
+        normal_corners,
+        normal_confidence,
+        normal_method,
+    ) = normal_result
+    (
+        negative_rectified,
+        negative_corners,
+        negative_confidence,
+        negative_method,
+    ) = negative_result
+
+    normal_mean = float(np.mean(cv2.cvtColor(
+        normal_rectified,
+        cv2.COLOR_BGR2GRAY,
+    )))
+    dark_background = normal_mean < DARK_GRID_MEAN_THRESHOLD
+
+    use_negative = (
+        negative_confidence
+        >= normal_confidence + NEGATIVE_CONFIDENCE_MARGIN
+    )
+
+    if (
+        dark_background
+        and negative_confidence
+        >= normal_confidence - NEGATIVE_CONFIDENCE_MARGIN
+    ):
+        use_negative = True
+
+    if use_negative:
+        return (
+            negative_rectified,
+            negative_corners,
+            negative_confidence,
+            f"{negative_method}+negative",
+            True,
+        )
+
+    return (
+        normal_rectified,
+        normal_corners,
+        normal_confidence,
+        normal_method,
+        False,
     )
 
 
@@ -1107,6 +1225,7 @@ class SudokuPhotoRecognizer:
             corners,
             grid_confidence,
             detection_method,
+            image_inverted,
         ) = _find_grid(image)
         gray = cv2.cvtColor(rectified, cv2.COLOR_BGR2GRAY)
         cell_size = RECTIFIED_SIZE // 9
@@ -1180,6 +1299,13 @@ class SudokuPhotoRecognizer:
         ]
         warnings = []
 
+        if image_inverted:
+            warnings.append(
+                "È stato rilevato uno sfondo scuro: "
+                "il riconoscimento ha usato automaticamente "
+                "il negativo dell'immagine."
+            )
+
         if len(detected) < 17:
             warnings.append(
                 "Sono state rilevate meno di 17 cifre: controlla che "
@@ -1211,6 +1337,7 @@ class SudokuPhotoRecognizer:
         return {
             "algorithm_version": RECOGNITION_VERSION,
             "grid": grid,
+            "image_inverted": image_inverted,
             "detected_digit_count": len(detected),
             "mean_confidence": round(mean_confidence, 4),
             "grid_detection_confidence": grid_confidence,

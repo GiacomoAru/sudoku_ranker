@@ -151,6 +151,64 @@ gridStringElement.addEventListener("input", () => {
   updateCellsFromString(gridStringElement.value);
 });
 
+const metadataDetails = document.querySelector("#metadata-details");
+const metadataCount = document.querySelector("#metadata-count");
+const metadataInputs = Array.from(
+  metadataDetails.querySelectorAll("input, textarea")
+);
+
+function optionalText(selector) {
+  const value = document.querySelector(selector)?.value;
+  const cleaned = String(value || "").trim();
+  return cleaned || null;
+}
+
+function collectPuzzleMetadata() {
+  const metadata = {
+    title: optionalText("#puzzle-title"),
+    source: optionalText("#puzzle-source"),
+    source_reference: optionalText("#puzzle-source-reference"),
+    stated_difficulty: optionalText("#puzzle-stated-difficulty"),
+    author_or_publisher: optionalText("#puzzle-author"),
+    published_at: optionalText("#puzzle-published-at"),
+    notes: optionalText("#puzzle-notes"),
+    entry_channel: "web",
+    input_method: currentPhotoId ? "photo" : "manual",
+    photo_id: currentPhotoId,
+  };
+
+  return Object.fromEntries(
+    Object.entries(metadata).filter(([, value]) => (
+      value !== null && value !== ""
+    ))
+  );
+}
+
+function updateMetadataCount() {
+  const count = metadataInputs.filter(
+    (input) => String(input.value || "").trim()
+  ).length;
+
+  metadataCount.textContent = count === 0
+    ? "Nessun dettaglio"
+    : `${count} ${count === 1 ? "dettaglio" : "dettagli"}`;
+  metadataCount.classList.toggle("has-values", count > 0);
+}
+
+function resetMetadata() {
+  metadataInputs.forEach((input) => {
+    input.value = "";
+  });
+  metadataDetails.open = false;
+  updateMetadataCount();
+}
+
+metadataInputs.forEach((input) => {
+  input.addEventListener("input", updateMetadataCount);
+  input.addEventListener("change", updateMetadataCount);
+});
+updateMetadataCount();
+
 document.querySelector("#clear-grid").addEventListener("click", () => {
   cells.forEach((cell) => {
     cell.value = "";
@@ -158,6 +216,7 @@ document.querySelector("#clear-grid").addEventListener("click", () => {
   });
   gridStringElement.value = "";
   resetPhoto();
+  resetMetadata();
   cells[0].focus();
 });
 
@@ -622,19 +681,24 @@ formElement.addEventListener("submit", async (event) => {
     const response = await fetch("/api/v1/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        grid,
-        provenience: document.querySelector(
-          "#puzzle-provenience"
-        ).value,
-        tag: document.querySelector("#puzzle-tag").value,
-        difficulty: document.querySelector(
-          "#puzzle-difficulty"
-        ).value,
-        analysis_mode: "profile",
-        profile_difficulty_window: 3.0,
-        photo_id: currentPhotoId,
-      }),
+      body: JSON.stringify((() => {
+        const metadata = collectPuzzleMetadata();
+
+        return {
+          grid,
+          name: metadata.title || null,
+          metadata,
+
+          // Compatibilità temporanea con la vecchia API.
+          provenience: metadata.source || "web",
+          tag: metadata.source_reference || "nessun_riferimento",
+          difficulty: metadata.stated_difficulty || "non_indicata",
+
+          analysis_mode: "profile",
+          profile_difficulty_window: 3.0,
+          photo_id: currentPhotoId,
+        };
+      })()),
     });
     const payload = await response.json();
 
