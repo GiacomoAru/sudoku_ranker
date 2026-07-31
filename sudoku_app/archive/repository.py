@@ -38,8 +38,8 @@ CANONICAL_CLASS_SCHEMA_VERSION = 1
 
 # Incrementare questo numero quando cambia il funzionamento del solver
 # o il formato dell'analisi. Le vecchie analisi verranno ricalcolate.
-ANALYSIS_VERSION = 25
-ANALYSIS_SCHEMA_VERSION = 13
+ANALYSIS_VERSION = 26
+ANALYSIS_SCHEMA_VERSION = 14
 
 # Evita anche letture ripetute dal disco durante la stessa esecuzione.
 # La chiave è (puzzle_id, analysis_variant), non soltanto puzzle_id.
@@ -723,14 +723,11 @@ def _restore_move(move):
     highlight = restored.get("highlight", {})
 
     restored["highlight"] = {
-        "primary": [
+        key: [
             tuple(int(value) for value in cell)
-            for cell in highlight.get("primary", [])
-        ],
-        "secondary": [
-            tuple(int(value) for value in cell)
-            for cell in highlight.get("secondary", [])
-        ],
+            for cell in highlight.get(key, [])
+        ]
+        for key in ("implication", "effect", "primary", "secondary")
     }
 
     for field in ("grid_before", "grid_after"):

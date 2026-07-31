@@ -22,7 +22,7 @@ class CandidateEvidenceTests(unittest.TestCase):
             2.6,
             "I due candidati sono confinati nelle celle del pattern.",
             [(0, 0, 5)],
-            [(0, 0)],
+            [(0, 0), (0, 1)],
             state,
         )
 
@@ -47,6 +47,8 @@ class CandidateEvidenceTests(unittest.TestCase):
             move["description"],
             move_presentation.render_explanation(move["explanation"]),
         )
+        self.assertEqual(move["highlight"]["effect"], [(0, 0)])
+        self.assertEqual(move["highlight"]["implication"], [(0, 1)])
 
     def test_proof_dag_candidates_and_links_are_derived(self):
         logic = proof_schema.normalize_proof({
@@ -75,6 +77,31 @@ class CandidateEvidenceTests(unittest.TestCase):
         self.assertIn("elimination", records[(0, 1, 1)]["roles"])
         self.assertEqual(len(evidence["links"]), 1)
         self.assertEqual(evidence["links"][0]["strength"], "weak")
+        self.assertEqual(evidence["links"][0]["relation"], "implication")
+        self.assertEqual(evidence["links"][0]["direction"], "forward")
+
+    def test_equivalence_is_only_preserved_when_explicit(self):
+        evidence = move_presentation.build_visual_evidence(
+            (),
+            (),
+            [(0, 1, 1)],
+            explicit={
+                "links": [{
+                    "source": {
+                        "row": 0, "column": 0, "value": 1, "state": "on",
+                    },
+                    "target": {
+                        "row": 0, "column": 1, "value": 1, "state": "off",
+                    },
+                    "relation": "equivalence",
+                    "strength": "strong",
+                    "reason": "prova in entrambi i versi",
+                }],
+            },
+        )
+
+        self.assertEqual(evidence["links"][0]["relation"], "equivalence")
+        self.assertEqual(evidence["links"][0]["direction"], "bidirectional")
 
 
 class CandidateGridTests(unittest.TestCase):
@@ -136,8 +163,8 @@ class CandidateSnapshotTests(unittest.TestCase):
             "candidates_after",
         ):
             self.assertIn(field, archive._STORED_MOVE_FIELDS)
-        self.assertEqual(archive.ANALYSIS_VERSION, 25)
-        self.assertEqual(archive.ANALYSIS_SCHEMA_VERSION, 13)
+        self.assertEqual(archive.ANALYSIS_VERSION, 26)
+        self.assertEqual(archive.ANALYSIS_SCHEMA_VERSION, 14)
 
 
 if __name__ == "__main__":

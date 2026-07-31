@@ -2000,7 +2000,7 @@ def bug_plus_one(state):
         f'R{target[0]+1}C{target[1]+1}. Il candidato {value} e '
         f'lunico candidato extra compatibile con una BUG+1 e deve '
         f'essere inserito.',
-        target[0], target[1], value, state=state,
+        target[0], target[1], value, primary=unsolved, state=state,
     )]
 
 

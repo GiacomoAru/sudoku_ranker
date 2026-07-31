@@ -124,6 +124,10 @@ class SudokuWebTests(unittest.TestCase):
         )
         self.assertIn("candidate-grid", javascript.text)
         self.assertIn("renderStepExplanation", javascript.text)
+        self.assertIn("renderImplicationLinks", javascript.text)
+        self.assertIn("implicationPath", javascript.text)
+        self.assertIn("Celle che implicano la mossa", response.text)
+        self.assertIn("Celle modificate", response.text)
 
     def test_internet_mode_requires_authentication(self):
         protected_app = create_app(

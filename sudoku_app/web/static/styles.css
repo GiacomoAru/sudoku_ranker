@@ -607,7 +607,12 @@ h3 {
 
 .result-panel {
   display: grid;
+  min-width: 0;
   gap: 22px;
+}
+
+.result-panel > * {
+  min-width: 0;
 }
 
 .summary,
@@ -766,11 +771,18 @@ h3 {
   align-items: start;
 }
 
+.solution-board {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+}
+
 .solution-grid {
   display: grid;
   grid-template-columns: repeat(9, minmax(0, 1fr));
   overflow: hidden;
   width: 100%;
+  height: 100%;
   aspect-ratio: 1;
   border: 3px solid var(--strong-line);
   border-radius: 8px;
@@ -802,7 +814,7 @@ h3 {
   inset: 2px;
   color: #64716b;
   font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: clamp(0.46rem, 1.05vw, 0.68rem);
+  font-size: clamp(0.58rem, 1.15vw, 0.72rem);
   font-weight: 700;
   line-height: 1;
 }
@@ -826,7 +838,13 @@ h3 {
 .candidate-link,
 .candidate-assumption {
   color: #5f3d82;
+  background: #f2eafa;
   box-shadow: inset 0 0 0 1px #a989c4;
+}
+
+.candidate-link.candidate-off {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
 }
 
 .candidate-placement {
@@ -858,14 +876,64 @@ h3 {
   color: var(--green);
 }
 
-.solution-cell.primary {
-  background: #ffd7c8;
-  box-shadow: inset 0 0 0 2px var(--accent);
+.solution-cell.implication {
+  background: #e5f0f7;
+  box-shadow: inset 0 0 0 2px #5685a1;
 }
 
-.solution-cell.secondary {
-  background: #d9eadf;
-  box-shadow: inset 0 0 0 2px #69a184;
+.solution-cell.effect {
+  background: #fff0c7;
+  box-shadow: inset 0 0 0 2px #d89419;
+}
+
+.implication-overlay {
+  position: absolute;
+  z-index: 4;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.implication-overlay[hidden] {
+  display: none;
+}
+
+.implication-link {
+  fill: none;
+  stroke: #5d4780;
+  stroke-width: 4;
+  stroke-linecap: round;
+  opacity: 0.82;
+}
+
+.implication-link.link-weak {
+  stroke: #4f6672;
+  stroke-width: 3.4;
+  stroke-dasharray: 10 8;
+}
+
+.implication-link.link-non-alternating,
+.implication-link.link-mixed {
+  stroke: #406f91;
+}
+
+.implication-link.relation-contradiction {
+  stroke: #b63b32;
+  stroke-width: 4.5;
+}
+
+#arrow-strong path {
+  fill: #5d4780;
+}
+
+#arrow-weak path {
+  fill: #4f6672;
+}
+
+#arrow-contradiction path {
+  fill: #b63b32;
 }
 
 .solution-cell.box-right {
@@ -925,7 +993,7 @@ h3 {
   grid-template-columns: auto auto minmax(120px, 1fr) auto auto;
   gap: 9px;
   align-items: center;
-  margin-top: 18px;
+  margin: 0 0 12px;
 }
 
 .player-controls input[type="range"] {
@@ -949,6 +1017,33 @@ h3 {
   color: var(--accent-dark);
 }
 
+.relation-toolbar {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.link-toggle {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+}
+
+.link-toggle:disabled {
+  visibility: hidden;
+}
+
 .highlight-legend {
   display: flex;
   flex-wrap: wrap;
@@ -970,19 +1065,19 @@ h3 {
   border-radius: 3px;
 }
 
-.legend-primary {
-  background: #ffd7c8;
-  border: 1px solid var(--accent);
+.legend-implication {
+  background: #e5f0f7;
+  border: 1px solid #5685a1;
+}
+
+.legend-effect {
+  background: #fff0c7;
+  border: 1px solid #d89419;
 }
 
 .legend-support {
   background: #dceef7;
   border: 1px solid #4f89a5;
-}
-
-.legend-link {
-  background: #efe5f7;
-  border: 1px solid #8e69ab;
 }
 
 .legend-placement {
@@ -993,6 +1088,27 @@ h3 {
 .legend-elimination {
   background: #ffd3ce;
   border: 1px solid #d85d50;
+}
+
+.highlight-legend .legend-strong-link,
+.highlight-legend .legend-weak-link {
+  width: 20px;
+  height: 0;
+  border-radius: 0;
+}
+
+.legend-strong-link {
+  border-top: 3px solid #5d4780;
+}
+
+.legend-weak-link {
+  border-top: 3px dashed #4f6672;
+}
+
+.legend-arrow {
+  color: #5d4780;
+  font-size: 1rem;
+  line-height: 1;
 }
 
 .plot-heading {
@@ -1185,6 +1301,19 @@ h3 {
     grid-template-columns: 1fr;
   }
 
+  .candidate-grid {
+    inset: 1px;
+    font-size: clamp(0.62rem, 2.8vw, 0.78rem);
+  }
+
+  .implication-link {
+    stroke-width: 5;
+  }
+
+  .implication-link.link-weak {
+    stroke-width: 4.4;
+  }
+
   .metadata-fields {
     grid-template-columns: 1fr;
   }
@@ -1259,6 +1388,11 @@ h3 {
 
   .player-controls {
     grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .relation-toolbar {
+    min-height: 42px;
+    font-size: 0.78rem;
   }
 
   .player-controls input[type="range"] {

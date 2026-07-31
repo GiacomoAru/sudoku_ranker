@@ -319,26 +319,12 @@
             <span class="step-badge" id="player-step">0 / 0</span>
           </div>
 
-          <div class="solution-layout">
-            <div
-              class="solution-grid"
-              id="solution-grid"
-              aria-label="Passaggio corrente della soluzione"
-            ></div>
-            <div class="step-copy">
-              <p class="step-technique" id="step-technique">Griglia iniziale</p>
-              <div class="step-description" id="step-description">
-                <p>I valori originali del puzzle.</p>
-              </div>
-            </div>
-          </div>
-
           <div class="player-controls">
             <button class="icon-button" id="first-step" type="button" title="Inizio">
-              |←
+              |&larr;
             </button>
             <button class="icon-button" id="previous-step" type="button" title="Precedente">
-              ←
+              &larr;
             </button>
             <input
               id="step-slider"
@@ -349,18 +335,65 @@
               aria-label="Passaggio della soluzione"
             >
             <button class="icon-button" id="next-step" type="button" title="Successivo">
-              →
+              &rarr;
             </button>
             <button class="icon-button" id="last-step" type="button" title="Soluzione">
-              →|
+              &rarr;|
             </button>
           </div>
+
+          <div class="relation-toolbar" aria-live="polite">
+            <span id="link-summary">Nessun collegamento logico</span>
+            <button id="toggle-links" class="link-toggle" type="button" disabled>
+              Nascondi collegamenti
+            </button>
+          </div>
+
+          <div class="solution-layout">
+            <div class="solution-board">
+              <div
+                class="solution-grid"
+                id="solution-grid"
+                aria-label="Passaggio corrente della soluzione"
+              ></div>
+              <svg
+                class="implication-overlay"
+                id="implication-overlay"
+                viewBox="0 0 900 900"
+                aria-hidden="true"
+              >
+                <defs>
+                  <marker id="arrow-strong" markerWidth="14" markerHeight="14" refX="13" refY="7" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+                    <path d="M0,0 L14,7 L0,14 Z"></path>
+                  </marker>
+                  <marker id="arrow-weak" markerWidth="14" markerHeight="14" refX="13" refY="7" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+                    <path d="M0,0 L14,7 L0,14 Z"></path>
+                  </marker>
+                  <marker id="arrow-contradiction" markerWidth="14" markerHeight="14" refX="13" refY="7" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+                    <path d="M0,0 L14,7 L0,14 Z"></path>
+                  </marker>
+                </defs>
+                <g id="implication-links"></g>
+              </svg>
+            </div>
+            <div class="step-copy">
+              <p class="step-technique" id="step-technique">Griglia iniziale</p>
+              <div class="step-description" id="step-description">
+                <p>I valori originali del puzzle.</p>
+              </div>
+            </div>
+          </div>
+
           <div class="highlight-legend">
-            <span><i class="legend-primary"></i>Celle del pattern</span>
+            <span><i class="legend-implication"></i>Celle che implicano la mossa</span>
+            <span><i class="legend-effect"></i>Celle modificate</span>
             <span><i class="legend-support"></i>Candidati di supporto</span>
-            <span><i class="legend-link"></i>Catena / assunzione</span>
             <span><i class="legend-placement"></i>Inserimento</span>
             <span><i class="legend-elimination"></i>Eliminazione</span>
+            <span><i class="legend-strong-link"></i>Strong link</span>
+            <span><i class="legend-weak-link"></i>Weak link</span>
+            <span><b class="legend-arrow">→</b>Implicazione</span>
+            <span><b class="legend-arrow">↔</b>Equivalenza dimostrata</span>
           </div>
         </article>
 

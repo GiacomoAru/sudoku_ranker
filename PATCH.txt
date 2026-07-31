@@ -27,6 +27,9 @@ Le patch P01-P09 e P06.5 sono applicate e non fanno più parte della roadmap ope
 * contratto di presentazione candidate-level: spiegazioni a sezioni,
   `visual_evidence` con ruoli semantici, snapshot candidati prima/dopo,
   renderer testuale pencil-mark e player web coerente;
+* P09.6 di presentazione: distinzione tra celle implicanti e celle modificate,
+  palette semantica, controlli stabili, candidati leggibili su telefono e
+  overlay SVG riservato alle inferenze esplicite del `ProofDAG`;
 * archi ordinati con motivo e forza `strong`/`weak`;
 * classificazione strutturale delle catene esistenti;
 * contesto di unicità verificato, givens distinti dalle celle risolte e famiglia Unique Loop strutturale;
@@ -517,6 +520,54 @@ Il motore non deve essere un “andare a caso”: deve preferire branch informat
 
 ---
 
+## P17.5. Revisione finale di spiegazioni e visualizzazioni
+
+### Collocazione
+
+Questa patch va eseguita dopo P10-P17 e dopo la revisione P16.5, quando ogni
+motore definitivo espone pattern, supporti e prove strutturate. Va completata
+prima di P18-P20, così archivio e API 1.0 congelano direttamente il formato
+editoriale definitivo.
+
+### Obiettivo
+
+Rivedere una per una tutte le tecniche implementate e trasformare i dati
+strutturali già disponibili in spiegazioni e visualizzazioni specifiche,
+senza spostare logica autorevole fuori da pattern e `ProofDAG`.
+
+### Problemi da chiudere
+
+1. Ogni spiegazione deve nominare con precisione pattern, vincolo logico,
+   candidati coinvolti e conseguenza, evitando testi generici ripetitivi.
+2. Celle che implicano la mossa e celle modificate devono restare sempre
+   semanticamente distinte, anche per Hidden Single, BUG, fish e forcing.
+3. Ogni tecnica deve dichiarare ruoli candidato appropriati (`base`, `cover`,
+   `fin`, `endo-fin`, `group`, `assumption`, `contradiction`, `target`).
+4. BUG+1 e gli altri pattern globali devono visualizzare l'intera struttura,
+   non soltanto la cella conclusiva.
+5. Le frecce devono rappresentare soltanto inferenze dimostrate: verso unico,
+   equivalenza esplicita, strong/weak link, contraddizione e link raggruppati.
+6. Group Node, ALS, Kraken, Nested e Complete Tree devono poter mostrare i
+   supporti interni senza trasformare una rete in una falsa catena lineare.
+7. Le prove molto dense devono offrire progressione o filtraggio, soprattutto
+   su telefono, invece di sovrapporre indiscriminatamente tutti gli archi.
+8. Palette, legenda, dimensioni dei candidati e contrasto devono superare una
+   revisione desktop/mobile e non affidarsi al solo colore.
+9. I controlli del player devono restare fermi durante il cambio di passo,
+   indipendentemente dalla lunghezza della spiegazione.
+10. Test snapshot/DOM devono coprire almeno una tecnica per ogni famiglia e
+    verificare coerenza fra spiegazione, evidenze, frecce e conclusioni.
+
+### Criteri di completamento
+
+* Tutte le tecniche attive hanno un template esplicativo specifico.
+* Ogni elemento disegnato è derivabile da pattern o `ProofDAG`.
+* Nessuna equivalenza viene dedotta automaticamente da un semplice strong link.
+* Desktop e telefono conservano candidati e relazioni chiaramente leggibili.
+* Il vocabolario editoriale e lo schema `visual_evidence` sono pronti al freeze.
+
+---
+
 # Blocco F: difficoltà, archivi e pubblicazione
 
 ## P18. Modello definitivo della difficoltà
@@ -732,6 +783,7 @@ La versione 1.0 è pronta quando:
 | `0.9.0`  | P12-P14       | AIC, Group Nodes, ALS e generalized wings                  |
 | `0.9.5`  | P15-P17       | Forcing Net, Kraken, vere Nested e profili                 |
 | `0.9.6`  | P16.5         | Complete Forcing Tree rivisto dopo checkpoint progettuale |
+| `0.9.7`  | P17.5         | Spiegazioni e visualizzazioni definitive                  |
 | `0.9.8`  | P18-P19       | Difficoltà definitiva e archivi consolidati                |
 | `1.0.0`  | P20           | API e tassonomia congelate                                 |
 
@@ -747,8 +799,9 @@ P13 -> P14 e profilo Nested
 P14 -> P15, P16 e profilo Nested
 P15 -> P16
 P16 -> P17
-P17 -> checkpoint P16.5 e P18
-P16.5 -> P18
+P17 -> checkpoint P16.5
+P16.5 -> P17.5
+P17.5 -> P18
 P18 -> P19
 P19 -> P20
 ```
@@ -766,9 +819,10 @@ P16 Vere Nested
 P17 Profili Dynamic, Plus e Nested
 CHECKPOINT obbligatorio prima di P16.5
 P16.5 Revisione Complete Forcing Tree
+P17.5 Revisione finale di spiegazioni e visualizzazioni
 P18 Difficoltà definitiva
 P19 Consolidamento archivi
 P20 Release 1.0
 ```
 
-Questa sequenza evita di riscrivere più volte gli stessi componenti. Le tecniche avanzate vengono costruite sopra il `ProofDAG` e i `chain_links` già disponibili; le Nested arrivano soltanto quando catene, gruppi, ALS e forcing sono formalizzati; il Complete Forcing Tree rimane un fallback estremo e viene rivisto soltanto dopo una decisione esplicita sui suoi default.
+Questa sequenza evita di riscrivere più volte gli stessi componenti. Le tecniche avanzate vengono costruite sopra il `ProofDAG` e i `chain_links` già disponibili; le Nested arrivano soltanto quando catene, gruppi, ALS e forcing sono formalizzati; il Complete Forcing Tree rimane un fallback estremo e viene rivisto soltanto dopo una decisione esplicita sui suoi default. La revisione editoriale finale arriva dopo tutti i motori, quando ogni tecnica può fornire supporti definitivi senza successive riscritture.

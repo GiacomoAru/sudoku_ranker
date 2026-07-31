@@ -7,13 +7,21 @@ materializza soltanto viste adatte a testo, archivio e interfaccia web.
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from . import proof as proof_model
 
 
-VISUAL_EVIDENCE_SCHEMA_VERSION = "1.0.0"
+VISUAL_EVIDENCE_SCHEMA_VERSION = "1.1.0"
 EXPLANATION_SCHEMA_VERSION = "1.0.0"
+
+LINK_RELATIONS = frozenset({
+    "implication",
+    "equivalence",
+    "contradiction",
+    "grouped-implication",
+})
+LINK_DIRECTIONS = frozenset({"forward", "bidirectional"})
 
 CANDIDATE_ROLES = frozenset({
     "pattern", "support", "link", "assumption", "contradiction", "target",
@@ -44,14 +52,18 @@ def build_highlight(primary, placements, eliminations):
     primary_cells = sorted({
         (int(row), int(column)) for row, column in primary
     })
-    secondary = {
+    effect = {
         (int(row), int(column)) for row, column, _ in placements
     } | {
         (int(row), int(column)) for row, column, _ in eliminations
     }
+    implication = set(primary_cells) - effect
     return {
+        "implication": sorted(implication),
+        "effect": sorted(effect),
+        # Viste storiche derivate: i renderer nuovi usano i nomi semantici.
         "primary": primary_cells,
-        "secondary": sorted(secondary),
+        "secondary": sorted(effect),
     }
 
 
@@ -154,6 +166,69 @@ def _iter_chain_links(logic):
                 yield link
 
 
+def _visual_literal(literal):
+    if (
+        isinstance(literal, Sequence)
+        and not isinstance(literal, (str, bytes))
+        and len(literal) == 4
+        and isinstance(literal[3], str)
+    ):
+        row, column, value, state = literal
+        literal = {
+            "row": row,
+            "column": column,
+            "value": value,
+            "state": state,
+        }
+    parts = _literal_parts(literal)
+    if parts is None:
+        return None
+    return {
+        "row": parts[0],
+        "column": parts[1],
+        "value": parts[2],
+        "state": parts[3],
+    }
+
+
+def _normalise_visual_link(link):
+    """Conserva soltanto relazioni dichiarate, senza inferire equivalenze."""
+    if not isinstance(link, Mapping):
+        return None
+    source = _visual_literal(link.get("source"))
+    target = _visual_literal(link.get("target"))
+    if source is None or target is None:
+        return None
+
+    relation = str(link.get("relation") or "implication")
+    if relation not in LINK_RELATIONS:
+        relation = "implication"
+    direction = str(link.get("direction") or "forward")
+    if relation == "equivalence":
+        direction = "bidirectional"
+    if direction not in LINK_DIRECTIONS:
+        direction = "forward"
+
+    support_candidates = []
+    for literal in link.get("support_candidates", ()) or ():
+        record = _visual_literal(literal)
+        if record is not None:
+            support_candidates.append(record)
+
+    return {
+        "source": source,
+        "target": target,
+        "relation": relation,
+        "direction": direction,
+        "strength": str(link.get("strength") or "unspecified"),
+        "reason": str(link.get("reason") or "unspecified"),
+        "support_candidates": support_candidates,
+        "support_house_ids": sorted({
+            int(value) for value in link.get("support_house_ids", ()) or ()
+        }),
+    }
+
+
 def build_visual_evidence(
     primary,
     placements,
@@ -176,7 +251,7 @@ def build_visual_evidence(
 
     for row, column in primary:
         key = (int(row), int(column))
-        cell_roles[key].add("pattern")
+        cell_roles[key].update(("pattern", "implication"))
         if state is not None and int(state.grid[key]) == 0:
             for value in state.candidates[key[0]][key[1]]:
                 add_candidate(*key, value, "support")
@@ -185,12 +260,16 @@ def build_visual_evidence(
         add_candidate(
             row, column, value, "target", "placement", literal_state="on"
         )
-        cell_roles[(int(row), int(column))].add("target")
+        key = (int(row), int(column))
+        cell_roles[key].discard("implication")
+        cell_roles[key].update(("target", "effect"))
     for row, column, value in eliminations:
         add_candidate(
             row, column, value, "target", "elimination", literal_state="off"
         )
-        cell_roles[(int(row), int(column))].add("target")
+        key = (int(row), int(column))
+        cell_roles[key].discard("implication")
+        cell_roles[key].update(("target", "effect"))
 
     if isinstance(logic, Mapping):
         raw_dag = logic.get("proof_dag")
@@ -217,18 +296,21 @@ def build_visual_evidence(
                 continue
             add_candidate(*source[:3], "link", literal_state=source[3])
             add_candidate(*target[:3], "link", literal_state=target[3])
-            links.append({
-                "source": {
-                    "row": source[0], "column": source[1],
-                    "value": source[2], "state": source[3],
-                },
-                "target": {
-                    "row": target[0], "column": target[1],
-                    "value": target[2], "state": target[3],
-                },
+            target_roles = candidate_roles[_candidate_key(*target[:3])]
+            visual_link = _normalise_visual_link({
+                "source": link.get("source"),
+                "target": link.get("target"),
+                "relation": (
+                    "contradiction"
+                    if "contradiction" in target_roles
+                    else "implication"
+                ),
+                "direction": "forward",
                 "strength": str(link.get("strength") or "unspecified"),
                 "reason": str(link.get("reason") or "unspecified"),
             })
+            if visual_link is not None:
+                links.append(visual_link)
 
     if isinstance(explicit, Mapping):
         for cell in explicit.get("cells", ()) or ():
@@ -240,7 +322,10 @@ def build_visual_evidence(
                 *(candidate.get("roles", ()) or ()),
                 literal_state=str(candidate.get("state") or "candidate"),
             )
-        links.extend(explicit.get("links", ()) or ())
+        for link in explicit.get("links", ()) or ():
+            normalized = _normalise_visual_link(link)
+            if normalized is not None:
+                links.append(normalized)
 
     return {
         "schema_version": VISUAL_EVIDENCE_SCHEMA_VERSION,
@@ -408,6 +493,8 @@ def print_candidate_grid(grid, candidates=None, *, visual_evidence=None, file=No
 __all__ = [
     "CANDIDATE_ROLES",
     "EXPLANATION_SCHEMA_VERSION",
+    "LINK_DIRECTIONS",
+    "LINK_RELATIONS",
     "VISUAL_EVIDENCE_SCHEMA_VERSION",
     "build_explanation",
     "build_highlight",

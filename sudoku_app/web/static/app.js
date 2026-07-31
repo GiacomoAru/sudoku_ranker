@@ -11,6 +11,7 @@ let currentAnalysis = null;
 let currentName = "sudoku-analysis";
 let solutionStates = [];
 let currentSolutionState = 0;
+let implicationLinksVisible = true;
 let currentPhotoId = null;
 
 const STATUS_PRESENTATION = {
@@ -586,21 +587,112 @@ function moveCandidateEvidence(move) {
 
 function moveHighlights(move) {
   const highlight = move?.highlight || {};
-  const primary = new Set(
-    (highlight.primary || []).map(cellKey)
+  const implication = new Set(
+    (highlight.implication || highlight.primary || []).map(cellKey)
   );
-  const secondary = new Set(
-    (highlight.secondary || []).map(cellKey)
+  const effect = new Set(
+    (highlight.effect || highlight.secondary || []).map(cellKey)
   );
 
   for (const placement of move?.placements || []) {
-    primary.add(cellKey(placement));
+    effect.add(cellKey(placement));
   }
   for (const elimination of move?.eliminations || []) {
-    secondary.add(cellKey(elimination));
+    effect.add(cellKey(elimination));
   }
-  for (const key of primary) secondary.delete(key);
-  return { primary, secondary };
+  for (const item of move?.visual_evidence?.cells || []) {
+    const key = `${Number(item.row)}:${Number(item.column)}`;
+    const roles = new Set(item.roles || []);
+    if (roles.has("effect") || roles.has("target")) effect.add(key);
+    if (roles.has("implication")) implication.add(key);
+  }
+  for (const key of effect) implication.delete(key);
+  return { implication, effect };
+}
+
+function candidatePoint(literal) {
+  const value = Number(literal.value) - 1;
+  return {
+    x: Number(literal.column) * 100 + (value % 3) * (100 / 3) + (100 / 6),
+    y: Number(literal.row) * 100 + Math.floor(value / 3) * (100 / 3) + (100 / 6),
+  };
+}
+
+function implicationPath(source, target, index) {
+  const dx = target.x - source.x;
+  const dy = target.y - source.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const trim = Math.min(11, length * 0.2);
+  const start = {
+    x: source.x + (dx / length) * trim,
+    y: source.y + (dy / length) * trim,
+  };
+  const end = {
+    x: target.x - (dx / length) * trim,
+    y: target.y - (dy / length) * trim,
+  };
+  const bend = ((index % 3) - 1) * 7;
+  const middle = {
+    x: (start.x + end.x) / 2 - (dy / length) * bend,
+    y: (start.y + end.y) / 2 + (dx / length) * bend,
+  };
+  return `M ${start.x} ${start.y} Q ${middle.x} ${middle.y} ${end.x} ${end.y}`;
+}
+
+function renderImplicationLinks(move) {
+  const overlay = document.querySelector("#implication-overlay");
+  const group = document.querySelector("#implication-links");
+  const summary = document.querySelector("#link-summary");
+  const toggle = document.querySelector("#toggle-links");
+  const links = move?.visual_evidence?.links || [];
+  group.replaceChildren();
+
+  const strongCount = links.filter((link) => link.strength === "strong").length;
+  const weakCount = links.filter((link) => link.strength === "weak").length;
+  if (!links.length) {
+    summary.textContent = "Nessun collegamento logico per questa mossa";
+    toggle.disabled = true;
+    overlay.setAttribute("hidden", "");
+    return;
+  }
+
+  summary.textContent = (
+    `${links.length} ${links.length === 1 ? "inferenza" : "inferenze"}` +
+    ` · ${strongCount} strong · ${weakCount} weak`
+  );
+  toggle.disabled = false;
+  toggle.textContent = implicationLinksVisible
+    ? "Nascondi collegamenti"
+    : "Mostra collegamenti";
+  overlay.toggleAttribute("hidden", !implicationLinksVisible);
+  if (!implicationLinksVisible) return;
+
+  const namespace = "http://www.w3.org/2000/svg";
+  links.forEach((link, index) => {
+    const source = candidatePoint(link.source);
+    const target = candidatePoint(link.target);
+    const path = document.createElementNS(namespace, "path");
+    const relation = link.relation || "implication";
+    const strength = link.strength || "unspecified";
+    path.setAttribute("d", implicationPath(source, target, index));
+    path.setAttribute(
+      "class",
+      `implication-link link-${strength} relation-${relation}`
+    );
+    const marker = relation === "contradiction"
+      ? "arrow-contradiction"
+      : strength === "weak" ? "arrow-weak" : "arrow-strong";
+    path.setAttribute("marker-end", `url(#${marker})`);
+    if (link.direction === "bidirectional" || relation === "equivalence") {
+      path.setAttribute("marker-start", `url(#${marker})`);
+    }
+    const title = document.createElementNS(namespace, "title");
+    title.textContent = (
+      `${relation} · ${strength} · ${link.reason || "inferenza logica"}`
+    );
+    path.appendChild(title);
+    group.appendChild(path);
+  });
 }
 
 function prepareSolutionPlayer(analysis) {
@@ -663,7 +755,7 @@ function renderSolutionState() {
   const state = solutionStates[currentSolutionState];
   const values = flattenGrid(state.grid);
   const original = flattenGrid(currentAnalysis.original);
-  const { primary, secondary } = moveHighlights(state.move);
+  const { implication, effect } = moveHighlights(state.move);
   const evidence = moveCandidateEvidence(state.move);
 
   solutionCells.forEach((view, index) => {
@@ -696,9 +788,11 @@ function renderSolutionState() {
       "solved-value",
       original[index] === 0 && value !== 0
     );
-    cell.classList.toggle("primary", primary.has(key));
-    cell.classList.toggle("secondary", secondary.has(key));
+    cell.classList.toggle("implication", implication.has(key));
+    cell.classList.toggle("effect", effect.has(key));
   });
+
+  renderImplicationLinks(state.move);
 
   document.querySelector("#player-title").textContent = state.title;
   document.querySelector("#player-step").textContent =
@@ -757,6 +851,13 @@ document.querySelector("#last-step").addEventListener(
 document.querySelector("#step-slider").addEventListener(
   "input",
   (event) => setSolutionState(event.target.value)
+);
+document.querySelector("#toggle-links").addEventListener(
+  "click",
+  () => {
+    implicationLinksVisible = !implicationLinksVisible;
+    renderImplicationLinks(solutionStates[currentSolutionState]?.move);
+  }
 );
 
 formElement.addEventListener("submit", async (event) => {

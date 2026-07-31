@@ -70,6 +70,32 @@ class TechniqueRegressionCorpusTests(unittest.TestCase):
                 }
                 self.assertIn(expected, outcomes)
 
+    def test_bug_plus_one_visualizes_the_global_pattern(self):
+        case = next(
+            item for item in load_hodoku_cases() if item.base_code == "0610"
+        )
+        state = case.build_state()
+        binding = ACTIVE_TECHNIQUE_BINDINGS["0610"]
+        moves = solver._call_registered_runner(
+            RUNNER_BY_DETECTOR_ID[binding.detector_id],
+            state,
+        )
+        move = next(
+            item for item in moves if item["technique_id"] == binding.technique_id
+        )
+        unsolved = {
+            (row, column)
+            for row in range(9)
+            for column in range(9)
+            if state.grid[row, column] == 0
+        }
+        effect = set(move["highlight"]["effect"])
+        implication = set(move["highlight"]["implication"])
+
+        self.assertEqual(len(effect), 1)
+        self.assertEqual(effect | implication, unsolved)
+        self.assertTrue(effect.isdisjoint(implication))
+
 
 class EndToEndPuzzleCorpusTests(unittest.TestCase):
     def test_compact_public_domain_bank_is_solved_in_superficial_mode(self):

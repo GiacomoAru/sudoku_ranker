@@ -157,6 +157,11 @@ Le mosse espongono inoltre una spiegazione strutturata e una mappa
 si possono usare `format_candidate_grid(...)` e `print_candidate_grid(...)`
 dal modulo `sudoku_app.core.move_presentation`.
 
+Nel player web le celle che forniscono le premesse sono distinte da quelle
+modificate. Le catene mostrano esclusivamente le inferenze dichiarate dal
+`ProofDAG`: linea continua per gli strong link, tratteggiata per i weak link e
+frecce bidirezionali soltanto per equivalenze dimostrate esplicitamente.
+
 ## Avvio dell’interfaccia web
 
 Per avviare il server in locale, nella rete LAN o tramite un collegamento HTTPS pubblico, consulta:
