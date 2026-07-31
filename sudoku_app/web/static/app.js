@@ -539,10 +539,22 @@ const solutionCells = Array.from({ length: 81 }, (_, index) => {
   const row = Math.floor(index / 9);
   const column = index % 9;
   cell.className = "solution-cell";
+  const valueElement = document.createElement("span");
+  valueElement.className = "solution-value";
+  const candidateGrid = document.createElement("span");
+  candidateGrid.className = "candidate-grid";
+  const candidates = Array.from({ length: 9 }, (_, candidateIndex) => {
+    const candidate = document.createElement("span");
+    candidate.className = "candidate";
+    candidate.dataset.value = String(candidateIndex + 1);
+    candidateGrid.appendChild(candidate);
+    return candidate;
+  });
+  cell.append(valueElement, candidateGrid);
   if (column === 2 || column === 5) cell.classList.add("box-right");
   if (row === 2 || row === 5) cell.classList.add("box-bottom");
   solutionGridElement.appendChild(cell);
-  return cell;
+  return { cell, valueElement, candidateGrid, candidates };
 });
 
 function flattenGrid(grid) {
@@ -554,6 +566,22 @@ function flattenGrid(grid) {
 
 function cellKey(cell) {
   return `${Number(cell[0])}:${Number(cell[1])}`;
+}
+
+function candidateKey(row, column, value) {
+  return `${Number(row)}:${Number(column)}:${Number(value)}`;
+}
+
+function moveCandidateEvidence(move) {
+  const records = new Map();
+  for (const item of move?.visual_evidence?.candidates || []) {
+    const key = candidateKey(item.row, item.column, item.value);
+    records.set(key, {
+      roles: new Set(item.roles || []),
+      state: item.state || "candidate",
+    });
+  }
+  return records;
 }
 
 function moveHighlights(move) {
@@ -583,6 +611,8 @@ function prepareSolutionPlayer(analysis) {
       title: "Griglia iniziale",
       technique: "Stato iniziale",
       description: "I valori originali del puzzle.",
+      explanation: null,
+      candidates: chain[0]?.candidates_before || null,
       move: null,
     },
     ...chain.map((move) => ({
@@ -606,6 +636,8 @@ function prepareSolutionPlayer(analysis) {
         )
       ),
       description: move.description,
+      explanation: move.explanation || null,
+      candidates: move.candidates_after || null,
       move,
     })),
     {
@@ -613,6 +645,8 @@ function prepareSolutionPlayer(analysis) {
       title: "Soluzione",
       technique: "Griglia risolta",
       description: "Soluzione finale verificata dal motore.",
+      explanation: null,
+      candidates: null,
       move: null,
     },
   ];
@@ -630,13 +664,33 @@ function renderSolutionState() {
   const values = flattenGrid(state.grid);
   const original = flattenGrid(currentAnalysis.original);
   const { primary, secondary } = moveHighlights(state.move);
+  const evidence = moveCandidateEvidence(state.move);
 
-  solutionCells.forEach((cell, index) => {
+  solutionCells.forEach((view, index) => {
+    const { cell, valueElement, candidateGrid, candidates } = view;
     const row = Math.floor(index / 9);
     const column = index % 9;
     const key = `${row}:${column}`;
     const value = values[index];
-    cell.textContent = value === 0 ? "" : value;
+    valueElement.textContent = value === 0 ? "" : value;
+    candidateGrid.hidden = value !== 0;
+    const available = new Set(
+      (state.candidates?.[row]?.[column] || []).map(Number)
+    );
+    candidates.forEach((candidate, candidateIndex) => {
+      const digit = candidateIndex + 1;
+      const item = evidence.get(candidateKey(row, column, digit));
+      const visible = value === 0 && (available.has(digit) || item);
+      candidate.textContent = visible ? String(digit) : "";
+      candidate.className = "candidate";
+      for (const role of item?.roles || []) {
+        candidate.classList.add(`candidate-${role}`);
+      }
+      candidate.classList.toggle("candidate-off", item?.state === "off");
+      candidate.title = item
+        ? `Candidato ${digit}: ${Array.from(item.roles).join(", ")}`
+        : "";
+    });
     cell.classList.toggle("given", original[index] !== 0);
     cell.classList.toggle(
       "solved-value",
@@ -650,8 +704,30 @@ function renderSolutionState() {
   document.querySelector("#player-step").textContent =
     `${currentSolutionState} / ${solutionStates.length - 1}`;
   document.querySelector("#step-technique").textContent = state.technique;
-  document.querySelector("#step-description").textContent = state.description;
+  renderStepExplanation(state);
   document.querySelector("#step-slider").value = currentSolutionState;
+}
+
+function renderStepExplanation(state) {
+  const container = document.querySelector("#step-description");
+  container.replaceChildren();
+  const sections = state.explanation?.sections || [];
+  if (!sections.length) {
+    const paragraph = document.createElement("p");
+    paragraph.textContent = state.description;
+    container.appendChild(paragraph);
+    return;
+  }
+  for (const section of sections) {
+    const block = document.createElement("section");
+    block.className = `explanation-section explanation-${section.kind || "detail"}`;
+    const label = document.createElement("strong");
+    label.textContent = section.label || "Dettaglio";
+    const text = document.createElement("p");
+    text.textContent = section.text || "";
+    block.append(label, text);
+    container.appendChild(block);
+  }
 }
 
 function setSolutionState(index) {

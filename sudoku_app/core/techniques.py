@@ -62,8 +62,10 @@ from itertools import combinations
 from .data_structure import *
 from . import logic_engine
 from . import difficulty as difficulty_model
+from . import exclusion as exclusion_patterns
 from . import move_presentation
 from . import proof_schema
+from . import sue_de_coq as sue_de_coq_patterns
 from . import technique_catalog
 from . import technique_classification
 from . import uniqueness as uniqueness_patterns
@@ -167,6 +169,7 @@ def _build_move(
     secondary=None,
     proof_count=1,
     extra=None,
+    state=None,
 ):
     """Costruisce una Move con tassonomia e conteggi uniformi."""
     placements = _normalise_triplets(placements)
@@ -199,14 +202,24 @@ def _build_move(
         placements,
         eliminations,
     )
-    description = move_presentation.normalize_description(
+    visual_evidence = move_presentation.build_visual_evidence(
+        highlight["primary"],
+        placements,
+        eliminations,
+        logic=logic,
+        state=state,
+        explicit=extra.pop("visual_evidence", None),
+    )
+    explanation = move_presentation.build_explanation(
         technique,
         description,
+        technique_id=definition.id,
         primary=highlight["primary"],
         placements=placements,
         eliminations=eliminations,
         logic=logic,
     )
+    description = move_presentation.render_explanation(explanation)
 
     move = {
         "technique_id": definition.id,
@@ -222,9 +235,11 @@ def _build_move(
         "base_difficulty": base_difficulty,
         "difficulty": max(base_difficulty, float(difficulty)),
         "description": description,
+        "explanation": explanation,
         "placements": placements,
         "eliminations": eliminations,
         "highlight": highlight,
+        "visual_evidence": visual_evidence,
         "proof_count": max(int(proof_count), 1),
         "conclusion_count": len(conclusions),
     }
@@ -354,10 +369,14 @@ def _elim_move(
         eliminations=real,
         primary=primary,
         extra=extra,
+        state=state,
     )
 
 
-def _place_move(technique, family, difficulty, description, r, c, v, primary=None):
+def _place_move(
+    technique, family, difficulty, description, r, c, v,
+    primary=None, *, state=None,
+):
     return _build_move(
         technique=technique,
         family=family,
@@ -367,6 +386,7 @@ def _place_move(technique, family, difficulty, description, r, c, v, primary=Non
         eliminations=(),
         primary=primary or [(r, c)],
         secondary=[(r, c)],
+        state=state,
     )
 
 
@@ -387,6 +407,7 @@ def _direct_move(technique, family, difficulty, description, placement,
         placements=[(r, c, value)],
         eliminations=real,
         primary=primary,
+        state=state,
     )
 
 
@@ -411,7 +432,7 @@ def last_value(state):
             'Last Value', 'Inserimenti diretti', 1.0,
             f'R{r+1}C{c+1} è l ultima cella vuota del {kind}: '
             f'deve contenere {value}.',
-            r, c, value, primary=list(unit),
+            r, c, value, primary=list(unit), state=state,
         ))
     return moves
 
@@ -427,7 +448,7 @@ def naked_single(state):
                 moves.append(_place_move(
                     'Naked Single', 'Inserimenti diretti', 2.3,
                     f'La cella R{r+1}C{c+1} ha un solo candidato possibile: {v}.',
-                    r, c, v))
+                    r, c, v, state=state))
     return moves
 
 
@@ -455,7 +476,7 @@ def hidden_single(state):
                     technique, 'Inserimenti diretti',
                     1.2 if kind == 'box' else 1.5,
                     f'Nel {kind} che contiene R{r+1}C{c+1}, il numero {v} puo comparire solo li.',
-                    r, c, v, primary=list(u)))
+                    r, c, v, primary=list(u), state=state))
     return moves
 
 
@@ -724,11 +745,19 @@ def direct_hidden_subset(state, size):
 
 
 # --------------------------------------------------------- 3. naked subsets
-_NAKED_DIFF = {2: 3.0, 3: 3.6, 4: 5.0}
-_NAKED_NAME = {2: 'Naked Pair', 3: 'Naked Triple', 4: 'Naked Quadruple'}
+_NAKED_DIFF = {2: 3.0, 3: 3.6, 4: 5.0, 5: 4.0, 6: 4.2}
+_NAKED_NAME = {
+    2: 'Naked Pair',
+    3: 'Naked Triple',
+    4: 'Naked Quadruple',
+    5: 'Generalized Naked Quintuple',
+    6: 'Generalized Naked Sextuple',
+}
 
 
 def naked_subset(state, size):
+    if size not in _NAKED_NAME:
+        raise ValueError("Naked subset supportato soltanto per size 2-6")
     moves = []
     diff = _NAKED_DIFF[size]
     name = _NAKED_NAME[size]
@@ -747,7 +776,14 @@ def naked_subset(state, size):
                 name, 'Sottoinsiemi bloccati', diff,
                 f'Le celle {", ".join(f"R{r+1}C{c+1}" for r,c in combo)} contengono '
                 f'solo i candidati {sorted(union)}: eliminati dal resto del {kind}.',
-                elim, list(combo), state)
+                elim, list(combo), state,
+                extra={
+                    'subset_size': size,
+                    'subset_cell_count': len(combo),
+                    'subset_digit_count': len(union),
+                    'unit_count': 1,
+                },
+            )
             if mv:
                 moves.append(mv)
     return moves
@@ -1964,7 +2000,7 @@ def bug_plus_one(state):
         f'R{target[0]+1}C{target[1]+1}. Il candidato {value} e '
         f'lunico candidato extra compatibile con una BUG+1 e deve '
         f'essere inserito.',
-        target[0], target[1], value,
+        target[0], target[1], value, state=state,
     )]
 
 
@@ -2138,90 +2174,116 @@ def bug_types_2_to_4(state):
     return moves
 
 
-# ---------------------------------------------- 6.2 aligned pair exclusion
-def aligned_pair_exclusion(state):
-    """Aligned Pair Exclusion classica di Sudoku Explainer.
-
-    Per ogni coppia di celle base valuta tutte le coppie di candidati. Una
-    combinazione è vietata se assegna lo stesso valore a celle che si vedono
-    oppure se svuota una cella bivalue che vede entrambe le basi. Un candidato
-    che non compare in alcuna combinazione ammessa può essere eliminato.
-
-    È un controllo combinatorio locale: non usa backtracking né un motore di
-    catene.
-    """
+# ---------------------------------------------- 5.0 Sue de Coq
+def sue_de_coq(state):
+    """Sue de Coq classica ed estesa fra intersezione, linea e box."""
     moves = []
     seen = set()
-    bivalue = {
-        (r, c) for r in range(9) for c in range(9)
-        if state.grid[r, c] == 0 and len(state.candidates[r][c]) == 2
-    }
-    base_cells = [
-        (r, c) for r in range(9) for c in range(9)
-        if state.grid[r, c] == 0
-        and len(state.candidates[r][c]) >= 2
-        and not any(
-            len(state.candidates[rr][cc]) == 1
-            for rr, cc in peers(r, c)
-            if state.grid[rr, cc] == 0
+    for pattern in sue_de_coq_patterns.enumerate_sue_de_coq(state):
+        technique = (
+            'Extended Sue de Coq'
+            if pattern.extended
+            else 'Sue de Coq'
         )
-        and bool(peers(r, c) & bivalue)
-    ]
-
-    excluders = {
-        cell: peers(*cell) & bivalue for cell in base_cells
-    }
-
-    for first, second in combinations(base_cells, 2):
-        common_excluders = excluders[first] & excluders[second]
-        # È la stessa soglia conservativa usata da SE 1.2.1.
-        if len(common_excluders) < 2:
-            continue
-
-        first_values = sorted(state.candidates[first[0]][first[1]])
-        second_values = sorted(state.candidates[second[0]][second[1]])
-        allowed = []
-        relevant_excluders = set()
-
-        for first_value in first_values:
-            for second_value in second_values:
-                if (
-                    first_value == second_value
-                    and second in peers(*first)
-                ):
-                    continue
-
-                assigned = {first_value, second_value}
-                blocking = [
-                    cell for cell in common_excluders
-                    if state.candidates[cell[0]][cell[1]] <= assigned
-                ]
-                if blocking:
-                    relevant_excluders.update(blocking)
-                    continue
-                allowed.append((first_value, second_value))
-
-        eliminations = []
-        for value in first_values:
-            if not any(pair[0] == value for pair in allowed):
-                eliminations.append((first[0], first[1], value))
-        for value in second_values:
-            if not any(pair[1] == value for pair in allowed):
-                eliminations.append((second[0], second[1], value))
-
+        primary = (
+            list(pattern.intersection_cells)
+            + list(pattern.line_cells)
+            + list(pattern.box_cells)
+        )
         mv = _elim_move(
-            'Aligned Pair Exclusion', 'Exclusion', 6.2,
-            f'Le celle base R{first[0]+1}C{first[1]+1} e '
-            f'R{second[0]+1}C{second[1]+1} condividono celle bivalue '
-            f'vincolanti. I candidati indicati non appartengono ad alcuna '
-            f'combinazione compatibile.',
-            eliminations,
-            [first, second] + sorted(relevant_excluders),
+            technique, 'Exclusion',
+            5.2 if pattern.extended else 5.0,
+            f'L intersezione fra {pattern.line_kind} '
+            f'{pattern.line_index+1} e box {pattern.box_index+1} usa i '
+            f'candidati {sorted(pattern.intersection_digits)}. I subset '
+            f'disgiunti della linea e del box ne assorbono esattamente il '
+            f'surplus, quindi i candidati indicati possono essere eliminati.',
+            pattern.eliminations,
+            primary,
             state,
+            extra={
+                'sue_de_coq': {
+                    'line_kind': pattern.line_kind,
+                    'line_index': pattern.line_index,
+                    'box_index': pattern.box_index,
+                    'intersection_cells': list(pattern.intersection_cells),
+                    'line_cells': list(pattern.line_cells),
+                    'box_cells': list(pattern.box_cells),
+                    'intersection_digits': sorted(
+                        pattern.intersection_digits
+                    ),
+                    'line_core_digits': sorted(pattern.line_core_digits),
+                    'box_core_digits': sorted(pattern.box_core_digits),
+                    'line_extra_digits': sorted(pattern.line_extra_digits),
+                    'box_extra_digits': sorted(pattern.box_extra_digits),
+                    'extended': pattern.extended,
+                },
+                'support_cell_count': len(primary),
+                'unit_count': 2,
+                'candidate_count': len(pattern.intersection_digits),
+                'subset_size': len(primary),
+                'subset_cell_count': len(primary),
+                'subset_digit_count': len(pattern.intersection_digits),
+            },
         )
         _append_unique(moves, mv, seen)
-
     return moves
+
+
+# ---------------------------------------------- 6.2/7.5 aligned exclusion
+_ALIGNED_EXCLUSION_CONFIG = {
+    2: ('Aligned Pair Exclusion', 6.2),
+    3: ('Aligned Triplet Exclusion', 7.5),
+}
+
+
+def aligned_exclusion(state, degree):
+    """Aligned Exclusion di grado 2 o 3, senza soluzione di riferimento."""
+    if degree not in _ALIGNED_EXCLUSION_CONFIG:
+        raise ValueError("Aligned Exclusion supporta soltanto grado 2 o 3")
+    technique, difficulty = _ALIGNED_EXCLUSION_CONFIG[degree]
+    moves = []
+    seen = set()
+    for pattern in exclusion_patterns.enumerate_aligned_exclusions(
+        state,
+        degree,
+    ):
+        mv = _elim_move(
+            technique, 'Exclusion', difficulty,
+            f'Le {degree} celle base condividono celle escludenti. '
+            f'I candidati eliminati non compaiono in nessuna delle '
+            f'{pattern.allowed_assignment_count} assegnazioni locali '
+            f'ammissibili.',
+            pattern.eliminations,
+            list(pattern.base_cells) + list(pattern.excluder_cells),
+            state,
+            extra={
+                'exclusion_degree': degree,
+                'base_cells': list(pattern.base_cells),
+                'excluder_cells': list(pattern.excluder_cells),
+                'allowed_assignment_count': (
+                    pattern.allowed_assignment_count
+                ),
+                'rejected_assignment_count': (
+                    pattern.rejected_assignment_count
+                ),
+                'assumption_count': degree,
+                'branch_count': (
+                    pattern.allowed_assignment_count
+                    + pattern.rejected_assignment_count
+                ),
+            },
+        )
+        _append_unique(moves, mv, seen)
+    return moves
+
+
+def aligned_pair_exclusion(state):
+    return aligned_exclusion(state, 2)
+
+
+def aligned_triplet_exclusion(state):
+    return aligned_exclusion(state, 3)
 
 
 # -------------------------------------------- logical implication engine
@@ -2407,6 +2469,7 @@ def _logic_moves(state, technique, excluded_effects=()):
             primary=deduction.get("primary", ()),
             proof_count=bucket["proof_count"],
             extra={"logic": proof},
+            state=state,
         )
         if move is not None:
             moves.append(move)

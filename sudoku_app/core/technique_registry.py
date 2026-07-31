@@ -266,6 +266,18 @@ _DECLARED_RUNNERS = (
         techniques.hidden_subset,
         4,
     ),
+    _local(
+        "naked_subset:5",
+        ("subset.naked.5",),
+        techniques.naked_subset,
+        5,
+    ),
+    _local(
+        "naked_subset:6",
+        ("subset.naked.6",),
+        techniques.naked_subset,
+        6,
+    ),
     _local("fish:2", ("fish.basic.2",), techniques.fish, 2),
     _local("fish:3", ("fish.basic.3",), techniques.fish, 3),
     _local("fish:4", ("fish.basic.4",), techniques.fish, 4),
@@ -359,9 +371,22 @@ _DECLARED_RUNNERS = (
         techniques.bug_types_2_to_4,
     ),
     _local(
+        "sue_de_coq",
+        (
+            "intersection.sue_de_coq",
+            "intersection.sue_de_coq.extended",
+        ),
+        techniques.sue_de_coq,
+    ),
+    _local(
         "aligned_pair_exclusion",
         ("exclusion.aligned_pair",),
         techniques.aligned_pair_exclusion,
+    ),
+    _local(
+        "aligned_triplet_exclusion",
+        ("exclusion.aligned_triplet",),
+        techniques.aligned_triplet_exclusion,
     ),
     _logic(
         "bidirectional_x_cycle",

@@ -1,4 +1,8 @@
-"""Helper comuni per descrizioni e celle evidenziate delle Move."""
+"""Presentazione derivata delle mosse del solver.
+
+Pattern e ``ProofDAG`` restano le fonti logiche autorevoli. Questo modulo
+materializza soltanto viste adatte a testo, archivio e interfaccia web.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +10,16 @@ from collections import defaultdict
 from collections.abc import Mapping
 
 from . import proof as proof_model
+
+
+VISUAL_EVIDENCE_SCHEMA_VERSION = "1.0.0"
+EXPLANATION_SCHEMA_VERSION = "1.0.0"
+
+CANDIDATE_ROLES = frozenset({
+    "pattern", "support", "link", "assumption", "contradiction", "target",
+    "placement", "elimination", "base", "cover", "fin", "endo-fin",
+    "group",
+})
 
 
 def format_cell(row, column):
@@ -31,11 +45,9 @@ def build_highlight(primary, placements, eliminations):
         (int(row), int(column)) for row, column in primary
     })
     secondary = {
-        (int(row), int(column))
-        for row, column, _ in placements
+        (int(row), int(column)) for row, column, _ in placements
     } | {
-        (int(row), int(column))
-        for row, column, _ in eliminations
+        (int(row), int(column)) for row, column, _ in eliminations
     }
     return {
         "primary": primary_cells,
@@ -121,6 +133,190 @@ def _proof_summary(technique, logic):
     return ""
 
 
+def _candidate_key(row, column, value):
+    return int(row), int(column), int(value)
+
+
+def _literal_parts(literal):
+    normalized = proof_model.normalize_literal(literal)
+    if normalized is None:
+        return None
+    row, column, value, is_on = normalized
+    return row, column, value, "on" if is_on else "off"
+
+
+def _iter_chain_links(logic):
+    if not isinstance(logic, Mapping):
+        return
+    for chain in logic.get("chain_links", ()) or ():
+        for link in chain or ():
+            if isinstance(link, Mapping):
+                yield link
+
+
+def build_visual_evidence(
+    primary,
+    placements,
+    eliminations,
+    *,
+    logic=None,
+    state=None,
+    explicit=None,
+):
+    """Deriva evidenze candidate-level da pattern, conclusioni e ProofDAG."""
+    candidate_roles = defaultdict(set)
+    candidate_states = {}
+    cell_roles = defaultdict(set)
+    links = []
+
+    def add_candidate(row, column, value, *roles, literal_state="candidate"):
+        key = _candidate_key(row, column, value)
+        candidate_roles[key].update(role for role in roles if role)
+        candidate_states.setdefault(key, literal_state)
+
+    for row, column in primary:
+        key = (int(row), int(column))
+        cell_roles[key].add("pattern")
+        if state is not None and int(state.grid[key]) == 0:
+            for value in state.candidates[key[0]][key[1]]:
+                add_candidate(*key, value, "support")
+
+    for row, column, value in placements:
+        add_candidate(
+            row, column, value, "target", "placement", literal_state="on"
+        )
+        cell_roles[(int(row), int(column))].add("target")
+    for row, column, value in eliminations:
+        add_candidate(
+            row, column, value, "target", "elimination", literal_state="off"
+        )
+        cell_roles[(int(row), int(column))].add("target")
+
+    if isinstance(logic, Mapping):
+        raw_dag = logic.get("proof_dag")
+        dag = proof_model.proof_dag(raw_dag) if raw_dag is not None else None
+        if dag is not None:
+            for node in dag.nodes.values():
+                if node.conclusion is None:
+                    continue
+                row, column, value, is_on = node.conclusion
+                roles = ["link"]
+                if node.kind == "assumption":
+                    roles.append("assumption")
+                if node.kind == "contradiction":
+                    roles.append("contradiction")
+                add_candidate(
+                    row, column, value, *roles,
+                    literal_state="on" if is_on else "off",
+                )
+
+        for link in _iter_chain_links(logic):
+            source = _literal_parts(link.get("source"))
+            target = _literal_parts(link.get("target"))
+            if source is None or target is None:
+                continue
+            add_candidate(*source[:3], "link", literal_state=source[3])
+            add_candidate(*target[:3], "link", literal_state=target[3])
+            links.append({
+                "source": {
+                    "row": source[0], "column": source[1],
+                    "value": source[2], "state": source[3],
+                },
+                "target": {
+                    "row": target[0], "column": target[1],
+                    "value": target[2], "state": target[3],
+                },
+                "strength": str(link.get("strength") or "unspecified"),
+                "reason": str(link.get("reason") or "unspecified"),
+            })
+
+    if isinstance(explicit, Mapping):
+        for cell in explicit.get("cells", ()) or ():
+            key = (int(cell["row"]), int(cell["column"]))
+            cell_roles[key].update(cell.get("roles", ()) or ())
+        for candidate in explicit.get("candidates", ()) or ():
+            add_candidate(
+                candidate["row"], candidate["column"], candidate["value"],
+                *(candidate.get("roles", ()) or ()),
+                literal_state=str(candidate.get("state") or "candidate"),
+            )
+        links.extend(explicit.get("links", ()) or ())
+
+    return {
+        "schema_version": VISUAL_EVIDENCE_SCHEMA_VERSION,
+        "cells": [
+            {"row": row, "column": column, "roles": sorted(roles)}
+            for (row, column), roles in sorted(cell_roles.items())
+        ],
+        "candidates": [
+            {
+                "row": row, "column": column, "value": value,
+                "state": candidate_states[(row, column, value)],
+                "roles": sorted(roles),
+            }
+            for (row, column, value), roles in sorted(candidate_roles.items())
+        ],
+        "links": links,
+    }
+
+
+def build_explanation(
+    technique,
+    description,
+    *,
+    technique_id=None,
+    primary=(),
+    placements=(),
+    eliminations=(),
+    logic=None,
+):
+    """Costruisce una spiegazione a sezioni, traducibile e renderizzabile."""
+    primary = sorted(set(primary))
+    pattern = (
+        f"Il pattern {technique} coinvolge {format_cells(primary)}."
+        if primary
+        else f"Il pattern {technique} è verificato nello stato corrente."
+    )
+    body = " ".join(str(description or "").split()).strip()
+    if body and body[-1] not in ".!?":
+        body += "."
+    if not body:
+        body = "I vincoli della tecnica rendono obbligatoria la conclusione."
+
+    sections = [
+        {"kind": "pattern", "label": "Pattern", "text": pattern},
+        {"kind": "reasoning", "label": "Ragionamento", "text": body},
+    ]
+    proof_summary = _proof_summary(technique, logic)
+    if proof_summary:
+        sections.append({
+            "kind": "proof", "label": "Dimostrazione", "text": proof_summary,
+        })
+    sections.append({
+        "kind": "conclusion", "label": "Conclusione",
+        "text": f"Di conseguenza, {conclusion_text(placements, eliminations)}.",
+    })
+    return {
+        "schema_version": EXPLANATION_SCHEMA_VERSION,
+        "key": f"{technique_id or technique}.default",
+        "title": str(technique),
+        "sections": sections,
+        "facts": {
+            "primary_cells": [list(cell) for cell in primary],
+            "placements": [list(item) for item in placements],
+            "eliminations": [list(item) for item in eliminations],
+        },
+    }
+
+
+def render_explanation(explanation):
+    return " ".join(
+        str(section.get("text") or "").strip()
+        for section in explanation.get("sections", ())
+        if str(section.get("text") or "").strip()
+    )
+
+
 def normalize_description(
     technique,
     description,
@@ -130,37 +326,99 @@ def normalize_description(
     eliminations,
     logic=None,
 ):
-    """Produce pattern, ragionamento e conclusione in ordine uniforme."""
-    primary = sorted(set(primary))
-    if primary:
-        pattern = (
-            f"Il pattern {technique} coinvolge {format_cells(primary)}."
-        )
-    else:
-        pattern = f"Il pattern {technique} è verificato nello stato corrente."
+    """Compatibilità testuale: rende la spiegazione strutturata."""
+    return render_explanation(build_explanation(
+        technique,
+        description,
+        primary=primary,
+        placements=placements,
+        eliminations=eliminations,
+        logic=logic,
+    ))
 
-    body = " ".join(str(description or "").split()).strip()
-    if body and body[-1] not in ".!?":
-        body += "."
-    if not body:
-        body = (
-            "I vincoli della tecnica rendono obbligatoria la conclusione."
-        )
 
-    proof_summary = _proof_summary(technique, logic)
-    conclusion = conclusion_text(placements, eliminations)
-    parts = [pattern, body]
-    if proof_summary:
-        parts.append(proof_summary)
-    parts.append(f"Di conseguenza, {conclusion}.")
-    return " ".join(parts)
+def snapshot_candidates(state):
+    """Copia stabile dei candidati, adatta a log e serializzazione."""
+    return [
+        [sorted(int(value) for value in state.candidates[row][column])
+         for column in range(9)]
+        for row in range(9)
+    ]
+
+
+def format_candidate_grid(grid, candidates=None, *, visual_evidence=None):
+    """Rende la griglia in pencil marks 3x3, con legenda delle evidenze."""
+    if candidates is None and hasattr(grid, "candidates"):
+        candidates = grid.candidates
+        grid = grid.grid
+    if candidates is None:
+        candidates = [[set() for _ in range(9)] for _ in range(9)]
+
+    def value_at(row, column):
+        try:
+            return int(grid[row, column])
+        except (TypeError, IndexError):
+            return int(grid[row][column])
+
+    border = "+" + "+".join("-" * 11 for _ in range(3)) + "+"
+    lines = [border]
+    for row in range(9):
+        for mini_row in range(3):
+            groups = []
+            for box in range(3):
+                rendered_cells = []
+                for column in range(box * 3, box * 3 + 3):
+                    solved = value_at(row, column)
+                    if solved:
+                        cell = f" {solved} " if mini_row == 1 else "   "
+                    else:
+                        values = set(candidates[row][column])
+                        digits = range(mini_row * 3 + 1, mini_row * 3 + 4)
+                        cell = "".join(
+                            str(digit) if digit in values else " " for digit in digits
+                        )
+                    rendered_cells.append(cell)
+                groups.append(" ".join(rendered_cells))
+            lines.append("|" + "|".join(groups) + "|")
+        if row in {2, 5, 8}:
+            lines.append(border)
+
+    evidence = visual_evidence or {}
+    records = evidence.get("candidates", ()) if isinstance(evidence, Mapping) else ()
+    if records:
+        lines.append("Evidenze candidati:")
+        for item in records:
+            roles = ", ".join(item.get("roles", ())) or "support"
+            lines.append(
+                f"- {format_cell(item['row'], item['column'])}#"
+                f"{int(item['value'])}: {roles}"
+            )
+    return "\n".join(lines)
+
+
+def print_candidate_grid(grid, candidates=None, *, visual_evidence=None, file=None):
+    """Stampa la vista candidate-level e restituisce il testo emesso."""
+    rendered = format_candidate_grid(
+        grid, candidates, visual_evidence=visual_evidence
+    )
+    print(rendered, file=file)
+    return rendered
 
 
 __all__ = [
+    "CANDIDATE_ROLES",
+    "EXPLANATION_SCHEMA_VERSION",
+    "VISUAL_EVIDENCE_SCHEMA_VERSION",
+    "build_explanation",
     "build_highlight",
+    "build_visual_evidence",
     "conclusion_text",
+    "format_candidate_grid",
     "format_cell",
     "format_cells",
     "normalize_description",
+    "print_candidate_grid",
     "proof_primary_cells",
+    "render_explanation",
+    "snapshot_candidates",
 ]

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import math
 
 
-TECHNIQUE_CATALOG_VERSION = "1.2.0"
+TECHNIQUE_CATALOG_VERSION = "1.3.0"
 
 LEGACY_TECHNIQUE_ALIASES = {
     "Nested Forcing Chain": "Complete Forcing Tree",
@@ -282,6 +282,18 @@ _CATALOG_ROWS = (
         aliases=_aliases("Hidden Quad"),
         proof_metric_profile=SUBSET_METRICS,
     ),
+    _entry(
+        "subset.naked.5", "Generalized Naked Quintuple", 4.0,
+        "subsets", "subsets_intersections", "naked_subset:5",
+        aliases=_aliases("Naked Quintuple"),
+        rating_kind="pseudo_se", proof_metric_profile=SUBSET_METRICS,
+    ),
+    _entry(
+        "subset.naked.6", "Generalized Naked Sextuple", 4.2,
+        "subsets", "subsets_intersections", "naked_subset:6",
+        aliases=_aliases("Naked Sextuple"),
+        rating_kind="pseudo_se", proof_metric_profile=SUBSET_METRICS,
+    ),
 
     # Fish, wings e pattern a cifra singola.
     _entry(
@@ -539,6 +551,18 @@ _CATALOG_ROWS = (
         proof_metric_profile=CHAIN_METRICS,
     ),
     _entry(
+        "intersection.sue_de_coq", "Sue de Coq", 5.0,
+        "exclusion", "uniqueness_exclusion", "sue_de_coq",
+        aliases=_aliases("SdC"), rating_kind="pseudo_se",
+        proof_metric_profile=SUBSET_METRICS,
+    ),
+    _entry(
+        "intersection.sue_de_coq.extended", "Extended Sue de Coq", 5.2,
+        "exclusion", "uniqueness_exclusion", "sue_de_coq",
+        aliases=_aliases("Extended SdC"), rating_kind="pseudo_se",
+        proof_metric_profile=SUBSET_METRICS,
+    ),
+    _entry(
         "se.forcing_chain", "Forcing Chain", 6.7,
         "forcing_chains", "static_chains", "forcing_chain",
         aliases=_aliases("Forward Implication Chain"),
@@ -548,6 +572,12 @@ _CATALOG_ROWS = (
         "exclusion.aligned_pair", "Aligned Pair Exclusion", 6.2,
         "exclusion", "uniqueness_exclusion", "aligned_pair_exclusion",
         aliases=_aliases("APE"), proof_metric_profile=FORCING_METRICS,
+    ),
+    _entry(
+        "exclusion.aligned_triplet", "Aligned Triplet Exclusion", 7.5,
+        "exclusion", "uniqueness_exclusion", "aligned_triplet_exclusion",
+        aliases=_aliases("ATE"), rating_kind="pseudo_se",
+        proof_metric_profile=FORCING_METRICS,
     ),
 
     # Forcing ordinary.

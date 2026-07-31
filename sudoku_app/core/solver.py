@@ -23,6 +23,7 @@ import math
 from . import canonicalization as sc
 from . import data_structure as sds
 from . import difficulty as difficulty_model
+from . import move_presentation
 from . import proof_schema
 from . import techniques as st
 from . import technique_catalog
@@ -1035,7 +1036,10 @@ def solve_and_log(
             technical_score
         )
 
+        grid_before = state.grid.copy()
+        candidates_before = move_presentation.snapshot_candidates(state)
         apply_move(state, chosen)
+        candidates_after = move_presentation.snapshot_candidates(state)
         step_no += 1
 
         record = {
@@ -1052,9 +1056,11 @@ def solve_and_log(
                 "engine_type",
                 "fallback_tier",
                 "description",
+                "explanation",
                 "placements",
                 "eliminations",
                 "highlight",
+                "visual_evidence",
                 "logic",
                 "difficulty_extra",
                 "difficulty_metrics",
@@ -1064,7 +1070,10 @@ def solve_and_log(
             if key in chosen
         }
         record["step"] = step_no
+        record["grid_before"] = grid_before
         record["grid_after"] = state.grid.copy()
+        record["candidates_before"] = candidates_before
+        record["candidates_after"] = candidates_after
         record["base_difficulty"] = base_score
         record["technical_difficulty"] = technical_score
         record["resolution_load"] = resolution_load
@@ -1188,11 +1197,16 @@ def solve_with_naked_singles(grid, max_steps=81):
         )
         chosen = moves[0]
 
+        grid_before = state.grid.copy()
+        candidates_before = move_presentation.snapshot_candidates(state)
         apply_move(state, chosen)
 
         record = dict(chosen)
         record["step"] = len(chain) + 1
+        record["grid_before"] = grid_before
         record["grid_after"] = state.grid.copy()
+        record["candidates_before"] = candidates_before
+        record["candidates_after"] = move_presentation.snapshot_candidates(state)
         chain.append(record)
 
     status = "solved" if state.is_solved() else "stuck"

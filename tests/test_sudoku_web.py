@@ -122,6 +122,8 @@ class SudokuWebTests(unittest.TestCase):
             "profile_difficulty_window: 1.5",
             javascript.text,
         )
+        self.assertIn("candidate-grid", javascript.text)
+        self.assertIn("renderStepExplanation", javascript.text)
 
     def test_internet_mode_requires_authentication(self):
         protected_app = create_app(
@@ -215,6 +217,10 @@ class SudokuWebTests(unittest.TestCase):
         self.assertIn("resolution_load", analysis["chain"][0])
         self.assertIn("technique_id", analysis["chain"][0])
         self.assertIn("difficulty_metrics", analysis["chain"][0])
+        self.assertIn("explanation", analysis["chain"][0])
+        self.assertIn("visual_evidence", analysis["chain"][0])
+        self.assertIn("candidates_before", analysis["chain"][0])
+        self.assertIn("candidates_after", analysis["chain"][0])
         self.assertEqual(
             analysis["chain"][0]["difficulty_metrics"][
                 "metrics_version"
@@ -276,6 +282,9 @@ class SudokuWebTests(unittest.TestCase):
         self.assertIn("available_by_technique", stored_move)
         self.assertIn("technique_id", stored_move)
         self.assertIn("difficulty_metrics", stored_move)
+        self.assertIn("explanation", stored_move)
+        self.assertIn("visual_evidence", stored_move)
+        self.assertIn("candidates_after", stored_move)
         self.assertNotIn("availability", stored_move)
         archive._ANALYSIS_MEMORY_CACHE.clear()
         reloaded_move = archive.load_analysis(

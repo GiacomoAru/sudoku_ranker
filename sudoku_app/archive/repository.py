@@ -38,8 +38,8 @@ CANONICAL_CLASS_SCHEMA_VERSION = 1
 
 # Incrementare questo numero quando cambia il funzionamento del solver
 # o il formato dell'analisi. Le vecchie analisi verranno ricalcolate.
-ANALYSIS_VERSION = 23
-ANALYSIS_SCHEMA_VERSION = 12
+ANALYSIS_VERSION = 25
+ANALYSIS_SCHEMA_VERSION = 13
 
 # Evita anche letture ripetute dal disco durante la stessa esecuzione.
 # La chiave è (puzzle_id, analysis_variant), non soltanto puzzle_id.
@@ -781,14 +781,19 @@ _STORED_MOVE_FIELDS = (
     "resolution_load",
     "move_discovery_difficulty",
     "description",
+    "explanation",
     "placements",
     "eliminations",
     "highlight",
+    "visual_evidence",
     "logic",
     "proof_count",
     "conclusion_count",
     "step",
+    "grid_before",
     "grid_after",
+    "candidates_before",
+    "candidates_after",
     "available_move_count",
     "frontier_move_count",
     "effective_move_count",

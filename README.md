@@ -20,7 +20,8 @@ Repository: [github.com/GiacomoAru/sudoku_ranker](https://github.com/GiacomoAru/
 - archivio JSON separato per uso offline e web;
 - canonicalizzazione MinLex e raggruppamento dei Sudoku isomorfi;
 - verifica obbligatoria della soluzione unica;
-- visualizzazione della catena di risoluzione e delle tecniche disponibili;
+- visualizzazione della catena di risoluzione, dei candidati coinvolti e
+  delle tecniche disponibili;
 - accesso locale, tramite rete LAN o tunnel HTTPS.
 
 ## Struttura del progetto
@@ -141,6 +142,20 @@ Da PowerShell:
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
+
+Il corpus compatto e permanente del solver può essere eseguito da solo con:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest tests.test_solver_corpus -v
+```
+
+Origini, formato e procedura di estensione sono documentati in
+[`tests/fixtures/solver_corpus/README.md`](tests/fixtures/solver_corpus/README.md).
+
+Le mosse espongono inoltre una spiegazione strutturata e una mappa
+`visual_evidence` a livello di candidato. Per una vista testuale pencil-mark
+si possono usare `format_candidate_grid(...)` e `print_candidate_grid(...)`
+dal modulo `sudoku_app.core.move_presentation`.
 
 ## Avvio dell’interfaccia web
 

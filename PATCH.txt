@@ -17,59 +17,23 @@ Non è necessario includere ogni nome mai inventato nella comunità Sudoku. La c
 
 ## Baseline acquisito
 
-Le patch P01-P08 e P06.5 sono applicate e non fanno più parte della roadmap operativa. Il progetto dispone già di:
+Le patch P01-P09 e P06.5 sono applicate e non fanno più parte della roadmap operativa. Il progetto dispone già di:
 
 * catalogo centrale e identificatori stabili;
 * registro dichiarativo dei detector;
 * pipeline ordinary, Nested e Complete Tree separata;
 * `ProofDAG` autorevole e viste lineari derivate;
 * metriche condivise, descrizioni e highlight normalizzati;
+* contratto di presentazione candidate-level: spiegazioni a sezioni,
+  `visual_evidence` con ruoli semantici, snapshot candidati prima/dopo,
+  renderer testuale pencil-mark e player web coerente;
 * archi ordinati con motivo e forza `strong`/`weak`;
 * classificazione strutturale delle catene esistenti;
 * contesto di unicità verificato, givens distinti dalle celle risolte e famiglia Unique Loop strutturale;
+* Sue de Coq classica ed estesa, Aligned Pair/Triplet Exclusion e subset generalizzati fino al Sextuple;
 * versionamento esplicito di prove e analisi archiviate.
 
 Le patch future devono estendere queste strutture, non crearne copie parallele.
-
----
-
-# Blocco C: completamento delle tecniche locali
-
-## P09. Tecniche locali avanzate ed exclusion
-
-### Obiettivo
-
-Completare le tecniche locali che non richiedono il futuro motore ALS o AIC.
-
-### Tecniche
-
-```text
-Sue de Coq
-Extended Sue de Coq
-Aligned Pair Exclusion
-Aligned Triplet Exclusion
-Generalized Naked Quintuple
-Generalized Naked Sextuple
-```
-
-Quintuple e Sextuple possono essere abilitate come compatibilità SukakuExplainer, pur essendo logicamente ridondanti rispetto ai subset complementari.
-
-### Moduli consigliati
-
-```text
-techniques/subsets.py
-techniques/sue_de_coq.py
-techniques/exclusion.py
-```
-
-La suddivisione dei moduli deve avvenire soltanto se riduce realmente la responsabilità dell’attuale `techniques.py`; catalogo e registro restano le fonti di verità.
-
-### Criteri di completamento
-
-* Sue de Coq verifica formalmente cardinalità e disgiunzione dei subset.
-* APE e ATE enumerano tutte le combinazioni ammissibili.
-* Nessuna esclusione dipende dalla soluzione completa.
-* I subset ridondanti possono essere nascosti dall’interfaccia senza essere rimossi dal catalogo.
 
 ---
 
@@ -764,7 +728,6 @@ La versione 1.0 è pronta quando:
 
 | Versione | Patch incluse | Risultato                                                  |
 | -------- | ------------- | ---------------------------------------------------------- |
-| `0.8.0`  | P08-P09       | Unicità e tecniche locali complete                         |
 | `0.8.5`  | P10-P11       | Fish e coloring completi                                   |
 | `0.9.0`  | P12-P14       | AIC, Group Nodes, ALS e generalized wings                  |
 | `0.9.5`  | P15-P17       | Forcing Net, Kraken, vere Nested e profili                 |
@@ -774,7 +737,7 @@ La versione 1.0 è pronta quando:
 
 # Dipendenze principali
 
-Le fondamenta P01-P08 sono già acquisite.
+Le fondamenta P01-P09 sono già acquisite.
 
 ```text
 P10 -> P15 e profilo Plus
@@ -793,7 +756,6 @@ P19 -> P20
 # Ordine pratico restante
 
 ```text
-P09 Tecniche locali avanzate
 P10 Fish
 P11 Coloring
 P12 AIC e Nice Loop

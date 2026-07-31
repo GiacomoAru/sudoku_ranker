@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "source": {
+    "name": "Sudoku Exchange Puzzle Bank",
+    "url": "https://github.com/grantm/sudoku-exchange-puzzle-bank",
+    "license": "Public domain / Unlicense"
+  },
+  "cases": [
+    {
+      "id": "0000183b305c",
+      "tier": "easy",
+      "source_rating": 1.2,
+      "puzzle": "050703060007000800000816000000030000005000100730040086906000204840572093000409000"
+    },
+    {
+      "id": "0000847b216e",
+      "tier": "medium",
+      "source_rating": 2.3,
+      "puzzle": "020900000048000031000063020009407003003080200400105600030570000250000180000006050"
+    },
+    {
+      "id": "0000b2c3fc62",
+      "tier": "hard",
+      "source_rating": 4.3,
+      "puzzle": "210950004090060037000700000000000308920000015805000000000002000680010040100047096"
+    },
+    {
+      "id": "0001d2888928",
+      "tier": "diabolical",
+      "source_rating": 7.1,
+      "puzzle": "200050006010000090600801003007090600000703000900080002100000005060902010003060200"
+    }
+  ]
+}
