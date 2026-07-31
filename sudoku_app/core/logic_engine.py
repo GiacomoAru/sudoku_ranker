@@ -10,9 +10,9 @@ assunto falso. Le implicazioni statiche sono di due tipi:
 Le propagazioni dinamiche applicano le esclusioni a una copia locale dei
 candidati e scoprono nuovi single. I livelli Plus aggiungono locking, coppie
 e X-Wing. Il Complete Forcing Tree usa invece una ricerca ricorsiva completa
-per casi, senza limiti interni di profondita', nodi o rami. Il limite riguarda
-soltanto quante deduzioni distinte vengono restituite. Nessuna funzione
-modifica lo ``SudokuState`` ricevuto.
+per casi, senza troncare profondita', nodi o rami. I limiti di presentazione
+non modificano la prova autorevole. Nessuna funzione modifica lo
+``SudokuState`` ricevuto.
 
 L'API pubblica e' intenzionalmente piccola: ``find_logic_deductions``
 restituisce deduzioni neutrali. ``sudoku_app.core.techniques`` le converte nel
@@ -28,18 +28,18 @@ from itertools import chain, combinations
 from threading import RLock
 
 from .data_structure import UNITS, UNIT_KINDS, peers
+from . import proof as proof_model
 from . import proof_schema
 
 
 Candidate = tuple[int, int, int]
 Literal = tuple[int, int, int, bool]
 
-# Limiti sul numero di deduzioni restituite. Non limitano mai la
-# profondita', i nodi o i rami della ricerca completa.
+# Limiti espliciti di output e delle viste lineari.
 MAX_DEDUCTIONS_PER_TECHNIQUE = 16 # limite massimo non valicabile
 MAX_NESTED_DEDUCTIONS = 2 # limite massimo non valicabile
 MAX_COMPLETE_TREE_DEDUCTIONS = 1 # limite massimo non valicabile
-MAX_STATIC_CYCLE_EDGES = 50
+MAX_STATIC_CYCLE_EDGES = 16
 STORE_COMPLETE_FORCING_TREE_PROOF = False
 
 if not (
@@ -197,16 +197,36 @@ def _literal_record(literal: Literal) -> dict:
     }
 
 
-def _proof(kind: str, assumptions, chains, reasons=None) -> dict:
+def _proof(
+    kind: str,
+    assumptions,
+    chains,
+    reasons=None,
+    *,
+    placements=(),
+    eliminations=(),
+) -> dict:
+    dag = proof_model.ProofDAG.from_chains(
+        assumptions=assumptions,
+        chains=chains,
+        reasons=reasons,
+        proof_kind=kind,
+        placements=placements,
+        eliminations=eliminations,
+    )
     proof = {
         "schema_version": proof_schema.PROOF_SCHEMA_VERSION,
         "kind": kind,
-        "assumptions": [_literal_record(item) for item in assumptions],
+        "assumptions": [
+            _literal_record(item) for item in assumptions
+        ],
         "chains": [
             [_literal_record(item) for item in chain]
-            for chain in chains
+            for chain in dag.derived_chains()
         ],
         "reasons": sorted(set(reasons or ())),
+        "proof_dag": dag.to_dict(),
+        "dag_digest": dag.digest(),
     }
     proof["metrics"] = proof_schema.normalize_proof_metrics(proof)
     return proof
@@ -237,7 +257,14 @@ def _deduction(
         "placements": placements,
         "eliminations": eliminations,
         "primary": primary,
-        "logic": _proof(kind, assumptions, chain_list, reasons),
+        "logic": _proof(
+            kind,
+            assumptions,
+            chain_list,
+            reasons,
+            placements=placements,
+            eliminations=eliminations,
+        ),
     }
 
 
@@ -907,10 +934,9 @@ def _technique_result_limit(technique, max_results):
 class CompleteForcingTreeSearch:
     """Ricerca completa per contraddizione sui vincoli Sudoku.
 
-    La ricerca non impone limiti di profondita', nodi, rami o propagazioni.
-    Termina perche' ogni ramo assegna almeno una cella e lo spazio degli stati
-    Sudoku e' finito. Le cache memorizzano stati soddisfacibili e prove
-    contraddittorie gia' calcolate.
+    Ogni ramo assegna almeno una cella e lo spazio degli stati Sudoku e'
+    finito. Le cache memorizzano stati soddisfacibili e prove contraddittorie
+    gia' calcolate.
     """
 
     def __init__(self, grid, candidates):
@@ -1314,6 +1340,101 @@ class CompleteForcingTreeSearch:
             "nodes": nodes,
         }
 
+    @staticmethod
+    def _formal_proof_dag(root, conclusion):
+        """Converte l'intero albero dei casi nel DAG autorevole P06."""
+        nodes = {}
+        next_id = 0
+
+        def add(kind, literal, parents, reason, payload=None):
+            nonlocal next_id
+            parents = tuple(dict.fromkeys(parents))
+            depth = (
+                0
+                if not parents
+                else 1 + max(nodes[parent].depth for parent in parents)
+            )
+            node = proof_model.ProofNode(
+                id=next_id,
+                kind=kind,
+                conclusion=literal,
+                parents=parents,
+                reason=reason,
+                depth=depth,
+                payload=payload or {},
+            )
+            nodes[node.id] = node
+            next_id += 1
+            return node.id
+
+        def visit(current, parent=None):
+            cursor = parent
+            if current.assumption is not None:
+                cursor = add(
+                    "assumption",
+                    current.assumption,
+                    (() if cursor is None else (cursor,)),
+                    "case-assumption",
+                    {"presentation": True},
+                )
+
+            for literal in current.propagations:
+                cursor = add(
+                    "dynamic-single",
+                    literal,
+                    (() if cursor is None else (cursor,)),
+                    "complete-tree-propagation",
+                    {"presentation": True},
+                )
+
+            if current.contradiction:
+                contradiction_id = add(
+                    "contradiction",
+                    None,
+                    (() if cursor is None else (cursor,)),
+                    current.contradiction_reason or "contradiction",
+                    {"presentation": False},
+                )
+                return (contradiction_id,)
+
+            if not current.children:
+                return (() if cursor is None else (cursor,))
+
+            branch_id = add(
+                "branch",
+                None,
+                (() if cursor is None else (cursor,)),
+                "complete-case-split",
+                {
+                    "branch_cell": list(current.branch_cell or ()),
+                    "branch_count": len(current.children),
+                    "presentation": False,
+                },
+            )
+            leaves = []
+            for child in current.children:
+                leaves.extend(visit(child, branch_id))
+            return tuple(leaves)
+
+        evidence = tuple(dict.fromkeys(visit(root)))
+        row, column, value = conclusion
+        conclusion_id = add(
+            "common-conclusion",
+            (row, column, value, False),
+            evidence,
+            "elimination",
+            {"action": "elimination", "presentation": False},
+        )
+        roots = tuple(sorted(
+            node.id for node in nodes.values() if not node.parents
+        ))
+        return proof_model.ProofDAG(
+            nodes=nodes,
+            roots=roots,
+            conclusions=(conclusion_id,),
+            nested_proofs={},
+        )
+
     def find_deductions(self, max_results):
         collector = _DeductionCollector(max_results)
         solution = self._find_solution(self.initial_masks)
@@ -1350,8 +1471,8 @@ class CompleteForcingTreeSearch:
                 )
 
                 if proof is None:
-                    # Il ramo e' soddisfacibile: il puzzle potrebbe avere piu'
-                    # soluzioni oppure questa non e' una deduzione valida.
+                    # Il ramo e' soddisfacibile: il puzzle potrebbe avere
+                    # piu' soluzioni oppure non essere una deduzione.
                     continue
 
                 representative_chain = self._longest_chain(proof)
@@ -1365,14 +1486,32 @@ class CompleteForcingTreeSearch:
                     eliminations=(candidate,),
                     assumptions=(assumption,),
                     chains=(representative_chain,),
-                    reasons=("dynamic", "complete-tree", "complete-search"),
+                    reasons=(
+                        "dynamic",
+                        "complete-tree",
+                        "complete-search",
+                    ),
                     kind="complete-forcing-tree-contradiction",
                 )
+                formal_dag = self._formal_proof_dag(proof, candidate)
+                deduction["logic"]["proof_dag"] = formal_dag.to_dict()
+                deduction["logic"]["dag_digest"] = formal_dag.digest()
+                deduction["logic"]["chains"] = [
+                    [
+                        proof_model.literal_record(literal)
+                        for literal in chain
+                    ]
+                    for chain in formal_dag.derived_chains()
+                ]
                 if STORE_COMPLETE_FORCING_TREE_PROOF:
                     deduction["logic"]["proof_tree"] = (
                         self._serialize_proof(proof)
                     )
-                deduction["logic"]["metrics"] = self._proof_metrics(proof)
+                deduction["logic"]["metrics"] = (
+                    proof_schema.normalize_proof_metrics(
+                        deduction["logic"]
+                    )
+                )
                 deduction["logic"]["complete"] = True
                 deduction["logic"]["exhaustive"] = True
                 deduction["logic"]["proof_tree_stored"] = bool(

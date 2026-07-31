@@ -38,8 +38,8 @@ CANONICAL_CLASS_SCHEMA_VERSION = 1
 
 # Incrementare questo numero quando cambia il funzionamento del solver
 # o il formato dell'analisi. Le vecchie analisi verranno ricalcolate.
-ANALYSIS_VERSION = 20
-ANALYSIS_SCHEMA_VERSION = 9
+ANALYSIS_VERSION = 21
+ANALYSIS_SCHEMA_VERSION = 10
 
 # Evita anche letture ripetute dal disco durante la stessa esecuzione.
 # La chiave è (puzzle_id, analysis_variant), non soltanto puzzle_id.
@@ -2141,7 +2141,7 @@ def analyse_puzzle_cached(
     force=False,
     analysis_mode=ss.DEFAULT_ANALYSIS_MODE,
     profile_difficulty_window=ss.DEFAULT_PROFILE_DIFFICULTY_WINDOW,
-    max_steps=10000,
+    max_steps=ss.MAX_SOLVER_STEPS,
     verbose=False,
 ):
     """

@@ -49,6 +49,7 @@ MAX_MOVES_PER_TECHNIQUE = 16
 MAX_LOGIC_ENGINE_MOVES_PER_TECHNIQUE = 8
 MAX_NESTED_MOVES_PER_STEP = 2
 MAX_COMPLETE_TREE_MOVES_PER_STEP = 1
+MAX_SOLVER_STEPS = 8_192
 
 if not (
     1
@@ -235,7 +236,11 @@ def _prepare_move(move):
     )
     move["rating_kind"] = definition.rating_kind
     if move.get("logic") is not None:
-        move["logic"] = proof_schema.normalize_proof(move["logic"])
+        move["logic"] = proof_schema.normalize_proof(
+            move["logic"],
+            placements=move.get("placements", ()),
+            eliminations=move.get("eliminations", ()),
+        )
     metrics = _proof_metrics(move)
     extra = _proof_complexity_extra(move)
     move["base_difficulty"] = _base_difficulty(move)
@@ -267,6 +272,7 @@ def _move_sort_key(move, canonical_transform=None):
         _tie_rank(move),
         metrics["proof_node_count"],
         metrics["max_chain_length"],
+        proof_schema.proof_signature(move.get("logic", {})),
     )
 
     if canonical_transform is None:
@@ -305,6 +311,20 @@ def _normalise_analysis_mode(mode):
         )
 
     return normalised
+
+
+def _normalise_solver_step_limit(max_steps):
+    if isinstance(max_steps, bool):
+        raise TypeError("max_steps deve essere un intero positivo.")
+    try:
+        max_steps = int(max_steps)
+    except (TypeError, ValueError) as error:
+        raise TypeError("max_steps deve essere un intero positivo.") from error
+    if not 1 <= max_steps <= MAX_SOLVER_STEPS:
+        raise ValueError(
+            f"max_steps deve essere compreso tra 1 e {MAX_SOLVER_STEPS}."
+        )
+    return max_steps
 
 
 def _move_outcome_signature(move):
@@ -769,6 +789,7 @@ def collect_moves_for_analysis(
         "max_complete_tree_moves_per_step": (
             MAX_COMPLETE_TREE_MOVES_PER_STEP
         ),
+        "max_static_cycle_edges": st.logic_engine.MAX_STATIC_CYCLE_EDGES,
         "capped_techniques": capped_techniques,
     }
 
@@ -913,12 +934,13 @@ def apply_move(state, move):
 
 def solve_and_log(
     grid,
-    max_steps=10000,
+    max_steps=MAX_SOLVER_STEPS,
     verbose=False,
     analysis_mode=DEFAULT_ANALYSIS_MODE,
     profile_difficulty_window=DEFAULT_PROFILE_DIFFICULTY_WINDOW,
 ):
     """Risolve il Sudoku e registra l'inventario logico di ogni stato."""
+    max_steps = _normalise_solver_step_limit(max_steps)
     analysis_mode = _normalise_analysis_mode(analysis_mode)
     state = sds.SudokuState(grid)
     canonical_transform = sc.canonicalize_details(
@@ -1729,10 +1751,11 @@ def analyse_puzzle(
     name=None,
     analysis_mode=DEFAULT_ANALYSIS_MODE,
     profile_difficulty_window=DEFAULT_PROFILE_DIFFICULTY_WINDOW,
-    max_steps=10000,
+    max_steps=MAX_SOLVER_STEPS,
     verbose=False,
 ):
     """Valida, risolve, valuta e confeziona l'analisi del puzzle."""
+    max_steps = _normalise_solver_step_limit(max_steps)
     analysis_mode = _normalise_analysis_mode(analysis_mode)
     original = sds.SudokuState(grid).grid.copy()
     solution_count = sds.count_solutions(original, limit=2)

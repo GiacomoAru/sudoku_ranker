@@ -1086,6 +1086,15 @@ Serve anche un cycle guard per evitare sottoprove ricorsive autoreferenziali.
 * La profondità e il numero di sottoprove vengono conservati correttamente.
 
 ---
+## P16.5 Rivedere Full Tree Ricrosion o come cavovlo si chiama, l'ultimo fallback.
+### Obiettivo
+rendere il fallback finale che rappresenta la tecnica più complessa più "sudoku friently" possibile
+Renderla sempre senza limiti e capace di risolvere qualsiasi cosa, ma lavorare sia dal punto di vista di ottimizzazione della computazione
+sia di comprensibilità e umanizzazione.
+Deve essere meglio quindi di un "andare a caso".
+
+--- 
+PRIMA DI QUESTO STEP FERMATI SEMPRE, E DISCUTI DELLA IMPLEMENTAZIONE E DI COSA RENDERE DEFAULT ECC
 
 ## P17. Profili Dynamic, Plus e Nested
 

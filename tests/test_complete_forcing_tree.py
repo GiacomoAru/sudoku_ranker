@@ -57,6 +57,9 @@ class CompleteForcingTreeTests(unittest.TestCase):
         self.assertEqual(moves[0]["engine_type"], "complete_tree")
         self.assertEqual(moves[0]["fallback_tier"], 2)
         self.assertEqual(moves[0]["conclusion_count"], 1)
+        self.assertIn("albero completo di casi", moves[0]["description"])
+        self.assertEqual(moves[0]["highlight"]["secondary"], [(0, 0)])
+        self.assertIn("proof_dag", moves[0]["logic"])
 
     def test_nested_does_not_execute_the_complete_search(self):
         engine = logic_engine.LogicEngine(self._near_solved_state())

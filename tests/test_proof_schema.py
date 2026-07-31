@@ -34,7 +34,7 @@ class ProofMetricNormalizationTests(unittest.TestCase):
         })
 
         self.assertEqual(metrics, {
-            "metrics_version": "2.0.0",
+            "metrics_version": proof_schema.PROOF_METRICS_VERSION,
             "proof_node_count": 3,
             "proof_edge_count": 2,
             "displayed_literal_count": 3,
@@ -112,36 +112,27 @@ class ProofPipelineTests(unittest.TestCase):
             proof_schema.PROOF_METRICS_VERSION,
         )
 
-    def test_explicit_metrics_survive_conversion_to_move(self):
+    def test_dag_metrics_replace_non_authoritative_serialized_metrics(self):
         state = SudokuState(np.zeros((9, 9), dtype=int))
-        expected = {
-            "metrics_version": proof_schema.PROOF_METRICS_VERSION,
-            "proof_node_count": 17,
-            "proof_edge_count": 16,
-            "displayed_literal_count": 2,
-            "assumption_count": 3,
-            "chain_count": 4,
-            "max_chain_length": 7,
-            "total_chain_length": 18,
-            "branch_count": 6,
-            "leaf_count": 4,
-            "nested_depth": 2,
-            "nested_subproof_count": 3,
+        logic = proof_schema.normalize_proof({
+            "kind": "dynamic-contradiction",
+            "assumptions": [literal(0, 0, 1)],
+            "chains": [[
+                literal(0, 0, 1),
+                literal(0, 1, 1, "off"),
+            ]],
+        }, eliminations=[(0, 0, 1)])
+        expected = dict(logic["metrics"])
+        logic["metrics"] = {
+            field: 99
+            for field in proof_schema.PROOF_METRIC_FIELDS
         }
         deduction = {
             "description": "Prova sintetica ramificata",
             "placements": [],
             "eliminations": [(0, 0, 1)],
             "primary": [(0, 0), (0, 1)],
-            "logic": {
-                "kind": "dynamic-contradiction",
-                "assumptions": [literal(0, 0, 1)],
-                "chains": [[
-                    literal(0, 0, 1),
-                    literal(0, 1, 1, "off"),
-                ]],
-                "metrics": expected,
-            },
+            "logic": logic,
         }
 
         with mock.patch.object(
@@ -167,32 +158,27 @@ class ProofPipelineTests(unittest.TestCase):
         definition = technique_catalog.resolve_technique(
             "Dynamic Contradiction Forcing Chain"
         )
-        structural = {
-            "proof_node_count": 24,
-            "proof_edge_count": 23,
-            "assumption_count": 2,
-            "chain_count": 3,
-            "max_chain_length": 8,
-            "total_chain_length": 19,
-            "branch_count": 4,
-            "leaf_count": 3,
-            "nested_depth": 1,
-            "nested_subproof_count": 0,
-        }
+        authoritative = proof_schema.normalize_proof({
+            "kind": "dynamic-contradiction",
+            "assumptions": [literal(0, 0, 1)],
+            "chains": [[
+                literal(0, 0, 1),
+                literal(0, 1, 1, "off"),
+                literal(0, 2, 1),
+            ]],
+        }, eliminations=[(0, 0, 1)])
 
         def move(chains, displayed_literal_count):
-            metrics = dict(structural)
-            metrics["displayed_literal_count"] = displayed_literal_count
+            logic = copy.deepcopy(authoritative)
+            logic["chains"] = chains
+            logic["metrics"]["displayed_literal_count"] = (
+                displayed_literal_count
+            )
             return {
                 "technique_id": definition.id,
                 "placements": [],
                 "eliminations": [(0, 0, 1)],
-                "logic": {
-                    "kind": "dynamic-contradiction",
-                    "assumptions": [literal(0, 0, 1)],
-                    "chains": chains,
-                    "metrics": metrics,
-                },
+                "logic": logic,
             }
 
         compact = move([[literal(0, 0, 1)]], 1)
@@ -204,7 +190,7 @@ class ProofPipelineTests(unittest.TestCase):
         prepared_compact = solver._prepare_move(copy.deepcopy(compact))
         prepared_verbose = solver._prepare_move(copy.deepcopy(verbose))
 
-        self.assertNotEqual(
+        self.assertEqual(
             prepared_compact["difficulty_metrics"][
                 "displayed_literal_count"
             ],
@@ -269,26 +255,12 @@ class ProofPipelineTests(unittest.TestCase):
         definition = technique_catalog.resolve_technique(
             "Dynamic Contradiction Forcing Chain"
         )
-        metrics = {
-            "metrics_version": proof_schema.PROOF_METRICS_VERSION,
-            "proof_node_count": 17,
-            "proof_edge_count": 16,
-            "displayed_literal_count": 4,
-            "assumption_count": 3,
-            "chain_count": 4,
-            "max_chain_length": 7,
-            "total_chain_length": 18,
-            "branch_count": 6,
-            "leaf_count": 4,
-            "nested_depth": 2,
-            "nested_subproof_count": 3,
-        }
         proof = proof_schema.normalize_proof({
             "kind": "dynamic-contradiction",
             "assumptions": [literal(0, 0, 5)],
             "chains": [[literal(0, 0, 5)]],
-            "metrics": metrics,
-        })
+        }, placements=[(0, 0, 5)])
+        metrics = proof["metrics"]
         move = {
             "technique_id": definition.id,
             "technique": definition.canonical_name,
@@ -358,6 +330,10 @@ class ProofPipelineTests(unittest.TestCase):
         self.assertEqual(restored_move["detector_id"], definition.detector_id)
         self.assertEqual(restored_move["difficulty_metrics"], metrics)
         self.assertEqual(restored_move["logic"]["metrics"], metrics)
+        self.assertEqual(
+            restored_move["logic"]["proof_dag"],
+            proof["proof_dag"],
+        )
         self.assertEqual(restored_move["proof_count"], 1)
         self.assertEqual(restored_move["conclusion_count"], 1)
         self.assertFalse(restored_move["move_inventory_censored"])

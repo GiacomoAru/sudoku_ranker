@@ -62,6 +62,7 @@ from itertools import combinations
 from .data_structure import *
 from . import logic_engine
 from . import difficulty as difficulty_model
+from . import move_presentation
 from . import proof_schema
 from . import technique_catalog
 
@@ -178,12 +179,32 @@ def _build_move(
     canonical_strategy = technique_strategy(technique, canonical_family)
     base_difficulty = _canonical_difficulty(technique, difficulty)
     primary = _normalise_cells(primary)
+    extra = dict(extra or {})
+    logic = extra.get("logic")
+    if logic is not None:
+        logic = proof_schema.normalize_proof(
+            logic,
+            placements=placements,
+            eliminations=eliminations,
+        )
+        extra["logic"] = logic
+        primary = _normalise_cells(
+            primary + move_presentation.proof_primary_cells(logic)
+        )
 
-    if secondary is None:
-        secondary = [
-            (r, c)
-            for _, r, c, _ in conclusions
-        ]
+    highlight = move_presentation.build_highlight(
+        primary,
+        placements,
+        eliminations,
+    )
+    description = move_presentation.normalize_description(
+        technique,
+        description,
+        primary=highlight["primary"],
+        placements=placements,
+        eliminations=eliminations,
+        logic=logic,
+    )
 
     move = {
         "technique_id": definition.id,
@@ -201,10 +222,7 @@ def _build_move(
         "description": description,
         "placements": placements,
         "eliminations": eliminations,
-        "highlight": {
-            "primary": primary,
-            "secondary": _normalise_cells(secondary),
-        },
+        "highlight": highlight,
         "proof_count": max(int(proof_count), 1),
         "conclusion_count": len(conclusions),
     }
@@ -1923,7 +1941,7 @@ def _proof_rank(deduction, placements, eliminations):
         metrics["max_chain_length"],
         len(set(deduction.get("primary", ()))),
         len(placements) + len(eliminations),
-        deduction.get("description", ""),
+        proof_schema.proof_signature(deduction.get("logic", {})),
     )
 
 
@@ -1966,6 +1984,13 @@ def _logic_moves(state, technique, excluded_effects=()):
 
         if not placements and not eliminations:
             continue
+
+        deduction = dict(deduction)
+        deduction["logic"] = proof_schema.normalize_proof(
+            deduction.get("logic", {}),
+            placements=placements,
+            eliminations=eliminations,
+        )
 
         specific = _specific_logic_technique(
             state,
@@ -2024,7 +2049,11 @@ def _logic_moves(state, technique, excluded_effects=()):
         proof["parent_technique"] = technique
         proof["specific_technique"] = specific
         proof["equivalent_proof_count"] = bucket["proof_count"]
-        proof = proof_schema.normalize_proof(proof)
+        proof = proof_schema.normalize_proof(
+            proof,
+            placements=bucket["placements"],
+            eliminations=bucket["eliminations"],
+        )
 
         move = _build_move(
             technique=specific,

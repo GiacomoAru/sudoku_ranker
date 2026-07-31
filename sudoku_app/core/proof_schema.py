@@ -1,8 +1,7 @@
-"""Schema condiviso delle prove logiche e delle relative metriche.
+"""Schema serializzato delle prove logiche e delle relative metriche.
 
-Le metriche dichiarate dal motore descrivono la prova completa e sono
-autorevoli. Le catene presenti in ``logic`` sono invece una vista destinata
-alla presentazione: vengono usate soltanto per completare metriche assenti.
+Da P06 il ``proof_dag`` e' autorevole. ``chains`` e ``metrics`` sono viste
+derivate, conservate nel payload per rendere semplici renderer e archivi.
 """
 
 from __future__ import annotations
@@ -10,9 +9,11 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 
+from . import proof as proof_model
 
-PROOF_SCHEMA_VERSION = "2.0.0"
-PROOF_METRICS_VERSION = "2.0.0"
+
+PROOF_SCHEMA_VERSION = "3.0.0"
+PROOF_METRICS_VERSION = "3.0.0"
 
 PROOF_METRIC_FIELDS = (
     "proof_node_count",
@@ -118,7 +119,7 @@ def _derive_metrics_from_display(logic):
 
 
 def normalize_proof_metrics(logic):
-    """Restituisce le metriche v2, dando precedenza ai valori del motore.
+    """Restituisce le metriche v3 derivate dal DAG quando presente.
 
     La presenza di una chiave esplicita e' significativa: anche uno zero
     dichiarato dal motore prevale su un valore ricavabile dalla vista. Il
@@ -129,11 +130,16 @@ def normalize_proof_metrics(logic):
     if not isinstance(logic, Mapping):
         raise TypeError("La prova logica deve essere una mappa.")
 
+    raw_dag = logic.get("proof_dag")
+    dag_metrics = None
+    if raw_dag is not None:
+        dag_metrics = proof_model.proof_dag(raw_dag).metrics()
+
     raw_metrics = logic.get("metrics") or {}
     if not isinstance(raw_metrics, Mapping):
         raise TypeError("logic['metrics'] deve essere una mappa.")
 
-    explicit = dict(raw_metrics)
+    explicit = dict(dag_metrics if dag_metrics is not None else raw_metrics)
     if (
         "nested_depth" not in explicit
         and "nesting_depth" in explicit
@@ -150,8 +156,8 @@ def normalize_proof_metrics(logic):
     return metrics
 
 
-def normalize_proof(logic):
-    """Materializza lo schema v2 conservando i dettagli non strutturali."""
+def normalize_proof(logic, *, placements=None, eliminations=None):
+    """Materializza lo schema v3 e rende il DAG fonte autorevole."""
     if logic is None:
         logic = {}
     if not isinstance(logic, Mapping):
@@ -160,9 +166,45 @@ def normalize_proof(logic):
     proof = dict(logic)
     proof["schema_version"] = PROOF_SCHEMA_VERSION
     proof["kind"] = str(proof.get("kind") or "unspecified")
-    proof["assumptions"] = _items(proof.get("assumptions"))
+    assumptions = _items(proof.get("assumptions"))
+    chains = [_items(chain) for chain in _items(proof.get("chains"))]
+    dag = proof_model.proof_dag(proof.get("proof_dag"))
+    if dag is None:
+        dag = proof_model.ProofDAG.from_chains(
+            assumptions=assumptions,
+            chains=chains,
+            reasons=_items(proof.get("reasons")),
+            proof_kind=proof["kind"],
+            placements=placements or (),
+            eliminations=eliminations or (),
+        )
+    elif placements is not None or eliminations is not None:
+        dag = dag.select_conclusions(
+            placements=placements or (),
+            eliminations=eliminations or (),
+        )
+
+    proof["proof_dag"] = dag.to_dict()
+    proof["dag_digest"] = dag.digest()
+    proof["assumptions"] = [
+        proof_model.literal_record(node.conclusion)
+        for node in sorted(dag.nodes.values(), key=lambda node: node.id)
+        if node.kind == "assumption" and node.conclusion is not None
+    ]
     proof["chains"] = [
-        _items(chain) for chain in _items(proof.get("chains"))
+        [proof_model.literal_record(literal) for literal in chain]
+        for chain in dag.derived_chains()
     ]
     proof["metrics"] = normalize_proof_metrics(proof)
     return proof
+
+
+def proof_signature(logic):
+    """Firma stabile del DAG, usabile da deduplicazione e tie-break."""
+    if not logic or not isinstance(logic, Mapping):
+        return ""
+    cached = logic.get("dag_digest")
+    if cached:
+        return str(cached)
+    dag = proof_model.proof_dag(logic.get("proof_dag"))
+    return "" if dag is None else dag.digest()
