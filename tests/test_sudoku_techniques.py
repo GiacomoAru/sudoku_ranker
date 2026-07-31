@@ -5,6 +5,8 @@ import numpy as np
 
 from sudoku_app.core import solver
 from sudoku_app.core import techniques
+from sudoku_app.core import technique_catalog
+from sudoku_app.core import technique_registry
 from sudoku_app.core.data_structure import SudokuState
 
 
@@ -91,7 +93,10 @@ class SERatingTests(unittest.TestCase):
                 )
 
     def test_registry_is_sorted_by_minimum_rating(self):
-        ratings = [rating for rating, _ in techniques.TECHNIQUE_FUNCS]
+        ratings = [
+            runner.minimum_difficulty
+            for runner in technique_registry.TECHNIQUE_RUNNERS
+        ]
         self.assertEqual(ratings, sorted(ratings))
 
     def test_move_uses_canonical_rating_not_legacy_literal(self):
@@ -385,6 +390,7 @@ class SERatingTests(unittest.TestCase):
 class LogicEngineTests(unittest.TestCase):
     def test_collection_caps_each_specific_technique(self):
         moves = [{
+            "technique_id": "se.forcing_chain",
             "technique": "Forcing Chain",
             "family": "Catene forzanti",
             "difficulty": 7.0,
@@ -392,17 +398,40 @@ class LogicEngineTests(unittest.TestCase):
             "eliminations": [(index // 9, index % 9, 1)],
         } for index in range(20)]
 
-        with mock.patch.object(
-            techniques,
-            "TECHNIQUE_FUNCS",
-            [(7.0, lambda state: moves)],
+        definition = technique_catalog.technique_definition(
+            "se.forcing_chain"
+        )
+        runner = technique_registry.TechniqueRunner(
+            detector_id=definition.detector_id,
+            technique_ids=(definition.id,),
+            function=lambda state: moves,
+            engine_type=definition.engine_type,
+            fallback_tier=definition.fallback_tier,
+            minimum_difficulty=definition.base_difficulty,
+            priority=definition.priority,
+        )
+
+        with (
+            mock.patch.object(
+                technique_registry,
+                "ORDINARY_RUNNERS",
+                (runner,),
+            ),
+            mock.patch.object(
+                technique_registry,
+                "NESTED_RUNNERS",
+                (),
+            ),
         ):
             collected, metadata = solver.collect_moves_for_analysis(
                 object(),
                 mode="deep",
             )
 
-        self.assertEqual(len(collected), solver.MAX_MOVES_PER_TECHNIQUE)
+        self.assertEqual(
+            len(collected),
+            solver.MAX_LOGIC_ENGINE_MOVES_PER_TECHNIQUE,
+        )
         self.assertEqual(metadata["capped_techniques"], ["Forcing Chain"])
 
     def test_all_declared_logic_engine_techniques_are_now_implemented(self):
@@ -419,15 +448,16 @@ class LogicEngineTests(unittest.TestCase):
             "Dynamic Forcing Chain Plus",
             "Nested Forcing Chain",
         }
-        self.assertEqual(
-            set(techniques.LOGIC_ENGINE_TECHNIQUE_RANGES),
-            expected,
-        )
-        self.assertEqual(
-            techniques.TECHNIQUES_REQUIRING_LOGIC_ENGINE,
-            {},
-        )
+        registered = {
+            technique_catalog.technique_definition(
+                technique_id
+            ).canonical_name
+            for runner in technique_registry.TECHNIQUE_RUNNERS
+            if runner.engine_type != "local"
+            for technique_id in runner.technique_ids
+        }
         self.assertTrue(expected <= set(techniques.TECHNIQUE_DIFFICULTY))
+        self.assertTrue(expected <= registered)
 
     def test_x_wing_is_not_duplicated_as_bidirectional_x_cycle(self):
         # Lo stesso grafo può spiegare questa eliminazione come ciclo X, ma

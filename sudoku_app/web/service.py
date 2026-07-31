@@ -40,9 +40,17 @@ class SudokuWebService:
         )
         self.photo_recognizer = SudokuPhotoRecognizer()
 
-    def analyse(self, submission: SudokuSubmission):
-        grid = archive.validate_unique_sudoku(submission.grid)
-        source_metadata = {"source": "web"}
+    def _submission_metadata(self, submission: SudokuSubmission):
+        """Costruisce i metadati da salvare senza perdere quelli del client."""
+        metadata = dict(submission.metadata or {})
+
+        # Questi sono dati tecnici dell'endpoint web, non la fonte editoriale.
+        metadata["entry_channel"] = "web"
+
+        # input_method e photo_id sono determinati dal campo top-level validato.
+        # Non ci fidiamo di eventuali valori omonimi dentro metadata.
+        metadata.pop("photo_id", None)
+        metadata["input_method"] = "manual"
 
         if submission.photo_id:
             try:
@@ -51,10 +59,15 @@ class SudokuWebService:
                 raise ValueError(
                     "La foto collegata non esiste nell'archivio web."
                 ) from error
-            source_metadata = {
-                "source": "web-photo",
-                "photo_id": submission.photo_id,
-            }
+
+            metadata["input_method"] = "photo"
+            metadata["photo_id"] = submission.photo_id
+
+        return metadata
+
+    def analyse(self, submission: SudokuSubmission):
+        grid = archive.validate_unique_sudoku(submission.grid)
+        metadata = self._submission_metadata(submission)
 
         with self._lock:
             puzzle = archive.save_with_standard_nomenclature(
@@ -62,14 +75,17 @@ class SudokuWebService:
                 provenience=submission.provenience,
                 tag=submission.tag,
                 difficulty=submission.difficulty,
-                metadata=source_metadata,
+                metadata=metadata,
+                name=submission.name,
             )
+
             if submission.photo_id:
                 self.photo_archive.confirm(
                     submission.photo_id,
                     submission.grid,
                     puzzle_id=puzzle["id"],
                 )
+
             analysis = archive.analyse_puzzle_cached(
                 puzzle["id"],
                 force=submission.force,

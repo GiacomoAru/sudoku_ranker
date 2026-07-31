@@ -882,8 +882,16 @@ def _compact_analysis_for_storage(analysis):
         migrated = {
             key: move[key]
             for key in (
+                "technique_id",
                 "technique",
                 "family",
+                "strategy",
+                "parent_id",
+                "se_equivalent_parent_id",
+                "rating_kind",
+                "detector_id",
+                "engine_type",
+                "fallback_tier",
                 "description",
                 "placements",
                 "eliminations",
@@ -1117,6 +1125,62 @@ def _normalise_puzzle_metadata(metadata):
     return cleaned
 
 
+def _merge_puzzle_metadata(existing_metadata, incoming_metadata):
+    """Unisce i metadati preservando la provenienza fotografica.
+
+    I nuovi valori non vuoti sostituiscono quelli omonimi già salvati. I
+    campi assenti non cancellano il contenuto precedente. Per il metodo di
+    inserimento, ``photo`` ha priorità su ``manual``: un reinvio manuale non
+    può perdere il collegamento alla foto, mentre una foto può promuovere un
+    record nato manualmente.
+    """
+    stored = _normalise_puzzle_metadata(existing_metadata)
+    incoming = _normalise_puzzle_metadata(incoming_metadata)
+
+    # Il titolo autorevole vive nel campo principale ``name``.
+    stored.pop("title", None)
+    incoming.pop("title", None)
+
+    stored_photo_id = _clean_optional_text(stored.get("photo_id"))
+    incoming_photo_id = _clean_optional_text(incoming.get("photo_id"))
+
+    # Un photo_id e' una prova piu' forte di input_method. Questo sistema
+    # anche i record legacy che avevano photo_id ma non input_method e rende
+    # innocue eventuali richieste contraddittorie photo_id + manual.
+    if stored_photo_id:
+        stored["photo_id"] = stored_photo_id
+        stored["input_method"] = "photo"
+
+    if incoming_photo_id:
+        incoming["photo_id"] = incoming_photo_id
+        incoming["input_method"] = "photo"
+
+    previous_method = str(stored.get("input_method", "")).strip().casefold()
+    incoming_method = str(incoming.get("input_method", "")).strip().casefold()
+
+    if previous_method in {"manual", "photo"}:
+        stored["input_method"] = previous_method
+    if incoming_method in {"manual", "photo"}:
+        incoming["input_method"] = incoming_method
+
+    if previous_method == "photo" and incoming_method == "manual":
+        incoming.pop("input_method", None)
+        incoming.pop("photo_id", None)
+
+    stored.update(incoming)
+
+    # photo_id ha senso soltanto quando la provenienza effettiva e' photo.
+    effective_method = str(stored.get("input_method", "")).strip().casefold()
+    if effective_method == "photo":
+        stored["input_method"] = "photo"
+    else:
+        if effective_method == "manual":
+            stored["input_method"] = "manual"
+        stored.pop("photo_id", None)
+
+    return stored
+
+
 def save_sudoku(grid, name=None, metadata=None):
     """
     Salva un Sudoku nella cartella puzzles.
@@ -1135,12 +1199,14 @@ def save_sudoku(grid, name=None, metadata=None):
     existing = _read_json(path) if path.exists() else {}
     canonical_fields = _canonical_fields(grid, existing)
 
-    stored_metadata = dict(existing.get("metadata", {}))
     incoming_metadata = _normalise_puzzle_metadata(metadata)
     metadata_title = _clean_optional_text(
-        incoming_metadata.pop("title", None)
+        incoming_metadata.get("title")
     )
-    stored_metadata.update(incoming_metadata)
+    stored_metadata = _merge_puzzle_metadata(
+        existing.get("metadata", {}),
+        incoming_metadata,
+    )
 
     stored_name = (
         _clean_optional_text(name)
@@ -1166,6 +1232,20 @@ def save_sudoku(grid, name=None, metadata=None):
     }
 
     _write_json(path, payload)
+
+    # Verifica nel punto autorevole: il file appena scritto su disco.
+    # Questo evita controlli falsi basati su oggetti intermedi del servizio
+    # web, che possono essere sintetici o non ancora ricaricati.
+    persisted = _read_json(path)
+    if persisted.get("metadata", {}) != payload["metadata"]:
+        raise RuntimeError(
+            "I metadati del Sudoku non sono stati persistiti correttamente."
+        )
+    if persisted.get("name") != payload["name"]:
+        raise RuntimeError(
+            "Il nome del Sudoku non e stato persistito correttamente."
+        )
+
     _register_canonical_variant(payload)
 
     return {
@@ -1183,6 +1263,8 @@ def save_with_standard_nomenclature(
     difficulty=None,
     metadata=None,
     name=None,
+    input_method=None,
+    photo_id=None,
 ):
     """
     Salva un Sudoku accettando anche i vecchi parametri della web API.
@@ -1200,6 +1282,18 @@ def save_with_standard_nomenclature(
     source = _clean_optional_text(provenience)
     source_reference = _clean_optional_text(tag)
     stated_difficulty = _clean_optional_text(difficulty)
+    legacy_input_method = _clean_optional_text(input_method)
+    legacy_photo_id = _clean_optional_text(photo_id)
+
+    if legacy_input_method:
+        complete_metadata.setdefault(
+            "input_method",
+            legacy_input_method,
+        )
+
+    if legacy_photo_id:
+        complete_metadata.setdefault("photo_id", legacy_photo_id)
+        complete_metadata["input_method"] = "photo"
 
     # Il vecchio client usava "web" come provenienza tecnica. Ora questo
     # concetto è rappresentato da entry_channel e non viene confuso con la

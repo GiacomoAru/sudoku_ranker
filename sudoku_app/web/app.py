@@ -53,6 +53,7 @@ def _analysis_envelope(service, submission):
         "puzzle_id": puzzle["id"],
         "canonical_id": puzzle["canonical_id"],
         "name": puzzle["name"],
+        "metadata": dict(puzzle.get("metadata", {})),
         "archive_profile": service.archive_configuration["profile"],
         "is_isomorphic_duplicate": puzzle.get(
             "is_isomorphic_duplicate",
@@ -252,9 +253,13 @@ def create_app(
         status_code=202,
     )
     def submit_job(submission: SudokuSubmission):
+        # Il job viene eseguito in un thread separato. La copia profonda
+        # conserva in modo esplicito anche il dizionario metadata.
+        queued_submission = submission.model_copy(deep=True)
+
         try:
             job = job_manager.submit(
-                lambda: _analysis_envelope(service, submission)
+                lambda: _analysis_envelope(service, queued_submission)
             )
         except JobQueueFullError as error:
             raise HTTPException(

@@ -14,12 +14,13 @@ conservano il proprio nome, ma ricevono il rating della famiglia SE
 equivalente. Il metadata della mossa conserva anche la tecnica logica genitrice
 per consentire sia report dettagliati sia aggregazioni per famiglia.
 
-Il registro `TECHNIQUE_FUNCS` in fondo è ordinato per rating SE minimo. Le
-tecniche basate su catene generali, Nishio e forcing dinamiche delegano la
-ricerca al motore di inferenza dedicato in `sudoku_app.core.logic_engine`. I risultati
-sono classificati con tre granularità indipendenti: tecnica, famiglia logica
-e strategia generale. Una cache per stato evita di ricalcolare i rilevatori
-locali e le catene già richiesti durante lo stesso step di analisi.
+Il registro dichiarativo dei detector vive in
+`sudoku_app.core.technique_registry`. Le tecniche basate su catene generali,
+Nishio e forcing dinamiche delegano la ricerca al motore di inferenza dedicato
+in `sudoku_app.core.logic_engine`. I risultati sono classificati con tre
+granularità indipendenti: tecnica, famiglia logica e strategia generale. Una
+cache per stato evita di ricalcolare i rilevatori locali e le catene già
+richiesti durante lo stesso step di analisi.
 '''
 
 """
@@ -30,9 +31,16 @@ the single simplest move across all techniques and apply it.
 
 Move dict schema:
 {
+    'technique_id': str,        # permanent identifier from the catalog
     'technique': str,           # display name, matches the taxonomy document
     'family': str,              # logical family, for detailed aggregation
     'strategy': str,            # broader strategy, for compact aggregation
+    'parent_id': str | None,     # structural parent in the catalog
+    'se_equivalent_parent_id': str | None,
+    'rating_kind': str,         # se, pseudo_se or project
+    'detector_id': str,         # explicit registered detector
+    'engine_type': str,         # local, logic, nested or complete_tree
+    'fallback_tier': int,       # 0 ordinary, 1 nested, 2 complete_tree
     'difficulty': float,        # Sudoku Explainer 1.2.1 rating
     'description': str,         # human readable explanation of this instance
     'placements': [(r,c,v)],    # cells to solve (usually 0 or 1 entries)
@@ -56,163 +64,22 @@ from itertools import combinations
 from .data_structure import *
 from . import logic_engine
 from . import difficulty as difficulty_model
+from . import technique_catalog
 
 
-# Ordine per difficoltà crescente.
-# A parità, sorted() mantiene l'ordine originale del dizionario.
-_TECHNIQUE_ORDER = sorted(
-    difficulty_model.TECHNIQUE_DIFFICULTY,
-    key=difficulty_model.TECHNIQUE_DIFFICULTY.get,
+# Viste derivate dal catalogo. I nomi storici restano locali a questo modulo
+# perché sono ancora consumati dal renderer, ma i dati non sono duplicati.
+TECHNIQUE_DIFFICULTY = technique_catalog.TECHNIQUE_DIFFICULTY
+TECHNIQUE_FAMILY = technique_catalog.TECHNIQUE_FAMILY
+TECHNIQUE_STRATEGY = technique_catalog.TECHNIQUE_STRATEGY
+MODERN_TECHNIQUE_PARENT = technique_catalog.MODERN_TECHNIQUE_PARENT
+_TECHNIQUE_ORDER = list(technique_catalog.TECHNIQUE_ORDER)
+TECHNIQUE_FAMILY_ORDER = list(
+    technique_catalog.TECHNIQUE_FAMILY_ORDER
 )
-
-# Il nome specifico resta distinto dalla famiglia logica che ne determina il
-# rating SE e l'algoritmo. È utile anche ai report che vogliono aggregare o
-# espandere la tassonomia a seconda del livello di dettaglio desiderato.
-MODERN_TECHNIQUE_PARENT = {
-    "Remote Pair": "Bidirectional Y-Cycle",
-    "XY-Chain": "Bidirectional Y-Cycle",
-    "XY-Cycle": "Bidirectional Y-Cycle",
-    "Skyscraper": "Forcing X-Chain",
-    "Two-String Kite": "Forcing X-Chain",
-    "Empty Rectangle": "Forcing X-Chain",
-    "Turbot Fish": "Forcing X-Chain",
-    "W-Wing": "Forcing Chain",
-    "Alternating Inference Chain": "Forcing Chain",
-    "Continuous Nice Loop": "Bidirectional Cycle",
-    "Dynamic Contradiction Forcing Chain": "Dynamic Forcing Chain",
-    "Dynamic Double Forcing Chain": "Dynamic Forcing Chain",
-    "Dynamic Cell Forcing Chain": "Dynamic Forcing Chain",
-    "Dynamic Region Forcing Chain": "Dynamic Forcing Chain",
-    "Dynamic Contradiction Forcing Chain Plus": "Dynamic Forcing Chain Plus",
-    "Dynamic Double Forcing Chain Plus": "Dynamic Forcing Chain Plus",
-    "Dynamic Cell Forcing Chain Plus": "Dynamic Forcing Chain Plus",
-    "Dynamic Region Forcing Chain Plus": "Dynamic Forcing Chain Plus",
-    "Nested Contradiction Forcing Chain": "Nested Forcing Chain",
-    "Nested Double Forcing Chain": "Nested Forcing Chain",
-    "Nested Cell Forcing Chain": "Nested Forcing Chain",
-    "Nested Region Forcing Chain": "Nested Forcing Chain",
-}
-
-
-# La generalizzazione dei rettangoli a Unique Loop di 6+ celle richiede un
-# enumeratore di cicli alternati con validazione delle case. È un componente
-# a grafo dedicato; i rettangoli (loop di quattro celle) restano coperti dai
-# cinque rilevatori granulari già presenti.
-TECHNIQUES_REQUIRING_PATTERN_ENGINE = {
-    "Unique Loop (6+ cells)": (4.6, 5.0),
-}
-
-
-
-# ---------------------------------------------------------------- taxonomy
-# ``family`` mantiene una tassonomia abbastanza granulare per le heatmap
-# dettagliate. ``strategy`` raggruppa invece famiglie affini in poche righe
-# leggibili. La tecnica specifica resta sempre disponibile in ``technique``.
-TECHNIQUE_FAMILY = {
-    "Last Value": "Inserimenti diretti",
-    "Hidden Single (Box)": "Inserimenti diretti",
-    "Hidden Single (Row/Column)": "Inserimenti diretti",
-    "Naked Single": "Inserimenti diretti",
-    "Direct Pointing": "Intersezioni box/linee",
-    "Direct Claiming": "Intersezioni box/linee",
-    "Pointing": "Intersezioni box/linee",
-    "Claiming": "Intersezioni box/linee",
-    "Direct Hidden Pair": "Sottoinsiemi bloccati",
-    "Direct Hidden Triplet": "Sottoinsiemi bloccati",
-    "Naked Pair": "Sottoinsiemi bloccati",
-    "Hidden Pair": "Sottoinsiemi bloccati",
-    "Naked Triple": "Sottoinsiemi bloccati",
-    "Hidden Triple": "Sottoinsiemi bloccati",
-    "Naked Quadruple": "Sottoinsiemi bloccati",
-    "Hidden Quadruple": "Sottoinsiemi bloccati",
-    "X-Wing": "Fish",
-    "Swordfish": "Fish",
-    "Jellyfish": "Fish",
-    "Y-Wing": "Wings",
-    "XYZ-Wing": "Wings",
-    "W-Wing": "Wings",
-    "Unique Rectangle Type 1": "Unicita",
-    "Unique Rectangle Type 2": "Unicita",
-    "Unique Rectangle Type 3": "Unicita",
-    "Unique Rectangle Type 4": "Unicita",
-    "Unique Rectangle Type 5": "Unicita",
-    "BUG+1": "Unicita",
-    "BUG Type 2": "Unicita",
-    "BUG Type 3 (Pair)": "Unicita",
-    "BUG Type 3 (Triplet)": "Unicita",
-    "BUG Type 3 (Quad)": "Unicita",
-    "BUG Type 4": "Unicita",
-    "Aligned Pair Exclusion": "Exclusion",
-    "Skyscraper": "Pattern a cifra singola",
-    "Two-String Kite": "Pattern a cifra singola",
-    "Empty Rectangle": "Pattern a cifra singola",
-    "Turbot Fish": "Pattern a cifra singola",
-    "Bidirectional X-Cycle": "Cicli bidirezionali",
-    "Bidirectional Y-Cycle": "Cicli bidirezionali",
-    "Remote Pair": "Catene bivalue",
-    "XY-Chain": "Catene bivalue",
-    "XY-Cycle": "Cicli bidirezionali",
-    "Bidirectional Cycle": "Cicli bidirezionali",
-    "Continuous Nice Loop": "Cicli bidirezionali",
-    "Forcing X-Chain": "Catene forzanti",
-    "Forcing Chain": "Catene forzanti",
-    "Alternating Inference Chain": "Catene forzanti",
-    "Nishio": "Assunzioni logiche",
-    "Cell Forcing Chain": "Forcing multipli",
-    "Region Forcing Chain": "Forcing multipli",
-    "Dynamic Forcing Chain": "Forcing dinamici",
-    "Dynamic Contradiction Forcing Chain": "Forcing dinamici",
-    "Dynamic Double Forcing Chain": "Forcing dinamici",
-    "Dynamic Cell Forcing Chain": "Forcing dinamici",
-    "Dynamic Region Forcing Chain": "Forcing dinamici",
-    "Dynamic Forcing Chain Plus": "Forcing dinamici",
-    "Dynamic Contradiction Forcing Chain Plus": "Forcing dinamici",
-    "Dynamic Double Forcing Chain Plus": "Forcing dinamici",
-    "Dynamic Cell Forcing Chain Plus": "Forcing dinamici",
-    "Dynamic Region Forcing Chain Plus": "Forcing dinamici",
-    "Nested Forcing Chain": "Forcing annidati",
-    "Nested Contradiction Forcing Chain": "Forcing annidati",
-    "Nested Double Forcing Chain": "Forcing annidati",
-    "Nested Cell Forcing Chain": "Forcing annidati",
-    "Nested Region Forcing Chain": "Forcing annidati",
-}
-
-TECHNIQUE_FAMILY_ORDER = list(dict.fromkeys(
-    TECHNIQUE_FAMILY[technique]
-    for technique in _TECHNIQUE_ORDER
-))
-
-
-
-_FAMILY_TO_STRATEGY = {
-    "Inserimenti diretti": "Tecniche elementari",
-    "Intersezioni box/linee": "Sottoinsiemi e intersezioni",
-    "Sottoinsiemi bloccati": "Sottoinsiemi e intersezioni",
-    "Fish": "Fish e wings",
-    "Wings": "Fish e wings",
-    "Unicita": "Unicita ed esclusione",
-    "Exclusion": "Unicita ed esclusione",
-    "Pattern a cifra singola": "Pattern a cifra singola",
-    "Catene bivalue": "Catene statiche",
-    "Cicli bidirezionali": "Catene statiche",
-    "Catene forzanti": "Catene statiche",
-    "Assunzioni logiche": "Assunzioni logiche",
-    "Forcing multipli": "Forcing multipli",
-    "Forcing dinamici": "Forcing dinamici",
-    "Forcing annidati": "Forcing annidati",
-}
-
-TECHNIQUE_STRATEGY = {
-    technique: _FAMILY_TO_STRATEGY[family]
-    for technique, family in TECHNIQUE_FAMILY.items()
-}
-
-# Ordina le strategie in base alla prima tecnica che compare
-# nell'ordine canonico delle difficoltà.
-TECHNIQUE_STRATEGY_ORDER = list(dict.fromkeys(
-    TECHNIQUE_STRATEGY[technique]
-    for technique in _TECHNIQUE_ORDER
-))
+TECHNIQUE_STRATEGY_ORDER = list(
+    technique_catalog.TECHNIQUE_STRATEGY_ORDER
+)
 
 
 def technique_family(technique, fallback=None):
@@ -232,15 +99,17 @@ def technique_strategy(technique, family=None):
     if technique in TECHNIQUE_STRATEGY:
         return TECHNIQUE_STRATEGY[technique]
     family = family or technique_family(technique)
-    return _FAMILY_TO_STRATEGY.get(family, "Altro")
+    return technique_catalog.FAMILY_TO_STRATEGY.get(family, "Altro")
 
 
 def technique_metadata(technique):
     """Metadata stabile consumabile da solver, report e visualizzazioni."""
+    definition = technique_catalog.resolve_technique(technique)
     family = technique_family(technique)
     technical_difficulty = _canonical_difficulty(technique)
 
     return {
+        "technique_id": definition.id,
         "technique": technique,
         "family": family,
         "strategy": technique_strategy(technique, family),
@@ -250,17 +119,14 @@ def technique_metadata(technique):
                 technical_difficulty
             )
         ),
-        "parent": MODERN_TECHNIQUE_PARENT.get(
-            technique,
-            technique,
-        ),
+        "parent_id": definition.parent_id,
+        "se_equivalent_parent_id": definition.se_equivalent_parent_id,
+        "parent": MODERN_TECHNIQUE_PARENT.get(technique, technique),
+        "rating_kind": definition.rating_kind,
+        "detector_id": definition.detector_id,
+        "engine_type": definition.engine_type,
+        "fallback_tier": definition.fallback_tier,
     }
-
-
-_missing_family_metadata = set(difficulty_model.TECHNIQUE_DIFFICULTY) - set(TECHNIQUE_FAMILY)
-if _missing_family_metadata:
-    missing = ", ".join(sorted(_missing_family_metadata))
-    raise RuntimeError(f"Metadata di famiglia mancante per: {missing}")
 
 
 # ---------------------------------------------------------- move utilities
@@ -308,8 +174,10 @@ def _build_move(
     if not conclusions:
         return None
 
+    definition = technique_catalog.resolve_technique(technique)
     canonical_family = technique_family(technique, family)
     canonical_strategy = technique_strategy(technique, canonical_family)
+    base_difficulty = _canonical_difficulty(technique, difficulty)
     primary = _normalise_cells(primary)
 
     if secondary is None:
@@ -319,20 +187,18 @@ def _build_move(
         ]
 
     move = {
+        "technique_id": definition.id,
         "technique": technique,
         "family": canonical_family,
         "strategy": canonical_strategy,
-        "base_difficulty": _canonical_difficulty(
-            technique,
-            difficulty,
-        ),
-        "difficulty": max(
-            _canonical_difficulty(
-                technique,
-                difficulty,
-            ),
-            float(difficulty),
-        ),
+        "parent_id": definition.parent_id,
+        "se_equivalent_parent_id": definition.se_equivalent_parent_id,
+        "rating_kind": definition.rating_kind,
+        "detector_id": definition.detector_id,
+        "engine_type": definition.engine_type,
+        "fallback_tier": definition.fallback_tier,
+        "base_difficulty": base_difficulty,
+        "difficulty": max(base_difficulty, float(difficulty)),
         "description": description,
         "placements": placements,
         "eliminations": eliminations,
@@ -2026,13 +1892,14 @@ def _specific_logic_technique(state, parent, deduction):
     if parent == "Bidirectional Cycle":
         return "Continuous Nice Loop"
 
-    dynamic_names = {
+    forcing_subtypes = {
         "dynamic-contradiction": "Contradiction",
         "dynamic-reduction": "Double",
         "dynamic-cell-reduction": "Cell",
         "dynamic-region-reduction": "Region",
+        "nested-complete-contradiction": "Contradiction",
     }
-    subtype = dynamic_names.get(kind)
+    subtype = forcing_subtypes.get(kind)
     if subtype and parent == "Dynamic Forcing Chain":
         return f"Dynamic {subtype} Forcing Chain"
     if subtype and parent == "Dynamic Forcing Chain Plus":
@@ -2506,234 +2373,3 @@ def nested_forcing_chain(state):
         return _logic_moves(state, "Nested Forcing Chain", excluded)
 
     return _cached_moves(state, "logic:Nested Forcing Chain", produce)
-
-
-# --------------------------------------------------------------- registry
-
-def _local_runner(key, function, *args):
-    def runner(state):
-        return _cached_local(state, key, function, *args)
-
-    runner.__name__ = f"cached_{key.replace(':', '_')}"
-    return runner
-
-
-def _spec(key, engine, runner, techniques):
-    if isinstance(techniques, str):
-        techniques = (techniques,)
-    else:
-        techniques = tuple(techniques)
-
-    missing = [
-        technique
-        for technique in techniques
-        if technique not in difficulty_model.TECHNIQUE_DIFFICULTY
-    ]
-    if missing:
-        raise KeyError(
-            f"Rating mancante per {key}: {', '.join(missing)}"
-        )
-
-    return {
-        "key": key,
-        "engine": engine,
-        "runner": runner,
-        "techniques": techniques,
-        "minimum_difficulty": min(
-            difficulty_model.TECHNIQUE_DIFFICULTY[technique]
-            for technique in techniques
-        ),
-    }
-
-
-def _local_spec(key, techniques, function, *args):
-    return _spec(
-        key,
-        "local",
-        _local_runner(key, function, *args),
-        techniques,
-    )
-
-
-def _logic_spec(key, techniques, runner):
-    return _spec(key, "logic", runner, techniques)
-
-
-TECHNIQUE_SPECS = [
-    _local_spec("last_value", "Last Value", last_value),
-    _local_spec("naked_single", "Naked Single", naked_single),
-    _local_spec(
-        "hidden_single",
-        ("Hidden Single (Box)", "Hidden Single (Row/Column)"),
-        hidden_single,
-    ),
-    _local_spec(
-        "direct_locked",
-        ("Direct Pointing", "Direct Claiming"),
-        direct_locked_candidates,
-    ),
-    _local_spec(
-        "direct_hidden_subset:2",
-        "Direct Hidden Pair",
-        direct_hidden_subset,
-        2,
-    ),
-    _local_spec(
-        "direct_hidden_subset:3",
-        "Direct Hidden Triplet",
-        direct_hidden_subset,
-        3,
-    ),
-    _local_spec(
-        "locked_candidates",
-        ("Pointing", "Claiming"),
-        locked_candidates,
-    ),
-
-    _local_spec("naked_subset:2", "Naked Pair", naked_subset, 2),
-    _local_spec("hidden_subset:2", "Hidden Pair", hidden_subset, 2),
-    _local_spec("naked_subset:3", "Naked Triple", naked_subset, 3),
-    _local_spec("hidden_subset:3", "Hidden Triple", hidden_subset, 3),
-    _local_spec("naked_subset:4", "Naked Quadruple", naked_subset, 4),
-    _local_spec("hidden_subset:4", "Hidden Quadruple", hidden_subset, 4),
-
-    _local_spec("fish:2", "X-Wing", fish, 2),
-    _local_spec("fish:3", "Swordfish", fish, 3),
-    _local_spec("fish:4", "Jellyfish", fish, 4),
-
-    _local_spec("skyscraper", "Skyscraper", skyscraper),
-    _local_spec("two_string_kite", "Two-String Kite", two_string_kite),
-    _local_spec("empty_rectangle", "Empty Rectangle", empty_rectangle),
-    _local_spec("y_wing", "Y-Wing", y_wing),
-    _local_spec("xyz_wing", "XYZ-Wing", xyz_wing),
-    _local_spec("w_wing", "W-Wing", w_wing),
-
-    _local_spec(
-        "ur_type_1",
-        "Unique Rectangle Type 1",
-        unique_rectangle_type1,
-    ),
-    _local_spec(
-        "ur_type_2",
-        "Unique Rectangle Type 2",
-        unique_rectangle_type2,
-    ),
-    _local_spec(
-        "ur_type_3",
-        "Unique Rectangle Type 3",
-        unique_rectangle_type3,
-    ),
-    _local_spec(
-        "ur_type_4",
-        "Unique Rectangle Type 4",
-        unique_rectangle_type4,
-    ),
-    _local_spec(
-        "ur_type_5",
-        "Unique Rectangle Type 5",
-        unique_rectangle_type5,
-    ),
-    _local_spec("bug_plus_one", "BUG+1", bug_plus_one),
-    _local_spec(
-        "bug_types",
-        (
-            "BUG Type 2",
-            "BUG Type 4",
-            "BUG Type 3 (Pair)",
-            "BUG Type 3 (Triplet)",
-            "BUG Type 3 (Quad)",
-        ),
-        bug_types_2_to_4,
-    ),
-    _local_spec(
-        "aligned_pair_exclusion",
-        "Aligned Pair Exclusion",
-        aligned_pair_exclusion,
-    ),
-
-    _logic_spec(
-        "bidirectional_x_cycle",
-        "Bidirectional X-Cycle",
-        bidirectional_x_cycle,
-    ),
-    _logic_spec(
-        "xy_chain",
-        ("Remote Pair", "XY-Chain"),
-        xy_chain,
-    ),
-    _logic_spec(
-        "bidirectional_y_cycle",
-        ("XY-Cycle", "Bidirectional Y-Cycle"),
-        bidirectional_y_cycle,
-    ),
-    _logic_spec(
-        "forcing_x_chain",
-        ("Turbot Fish", "Forcing X-Chain"),
-        forcing_x_chain,
-    ),
-    _logic_spec(
-        "forcing_chain",
-        ("Alternating Inference Chain", "Forcing Chain"),
-        forcing_chain,
-    ),
-    _logic_spec(
-        "bidirectional_cycle",
-        ("Continuous Nice Loop", "Bidirectional Cycle"),
-        bidirectional_cycle,
-    ),
-
-    _logic_spec("nishio", "Nishio", nishio),
-    _logic_spec(
-        "cell_forcing_chain",
-        "Cell Forcing Chain",
-        cell_forcing_chain,
-    ),
-    _logic_spec(
-        "region_forcing_chain",
-        "Region Forcing Chain",
-        region_forcing_chain,
-    ),
-    _logic_spec(
-        "dynamic_forcing_chain",
-        (
-            "Dynamic Forcing Chain",
-            "Dynamic Contradiction Forcing Chain",
-            "Dynamic Double Forcing Chain",
-            "Dynamic Cell Forcing Chain",
-            "Dynamic Region Forcing Chain",
-        ),
-        dynamic_forcing_chain,
-    ),
-    _logic_spec(
-        "dynamic_forcing_chain_plus",
-        (
-            "Dynamic Forcing Chain Plus",
-            "Dynamic Contradiction Forcing Chain Plus",
-            "Dynamic Double Forcing Chain Plus",
-            "Dynamic Cell Forcing Chain Plus",
-            "Dynamic Region Forcing Chain Plus",
-        ),
-        dynamic_forcing_chain_plus,
-    ),
-    _logic_spec(
-        "nested_forcing_chain",
-        (
-            "Nested Forcing Chain",
-            "Nested Contradiction Forcing Chain",
-            "Nested Double Forcing Chain",
-            "Nested Cell Forcing Chain",
-            "Nested Region Forcing Chain",
-        ),
-        nested_forcing_chain,
-    ),
-]
-
-# Il sort è stabile: a parità di rating mantiene l'ordine dichiarato sopra.
-TECHNIQUE_SPECS.sort(
-    key=lambda spec: spec["minimum_difficulty"]
-)
-
-TECHNIQUE_FUNCS = [
-    (spec["minimum_difficulty"], spec["runner"])
-    for spec in TECHNIQUE_SPECS
-]

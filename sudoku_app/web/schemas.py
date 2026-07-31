@@ -7,16 +7,21 @@ AnalysisMode = Literal["profile", "deep", "superficial"]
 
 
 class SudokuSubmission(BaseModel):
-    """Payload minimo accettato dall'endpoint di analisi."""
+    """Payload accettato dagli endpoint di analisi e archiviazione."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
     grid: str = Field(
         description="Griglia di 81 cifre; 0 o punto indicano una cella vuota.",
     )
-    provenience: str = Field(min_length=1, max_length=60)
-    tag: str = Field(min_length=1, max_length=80)
-    difficulty: str = Field(min_length=1, max_length=40)
+    name: str | None = Field(default=None, max_length=100)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    # Campi legacy mantenuti per compatibilita con vecchi client e script.
+    provenience: str = Field(default="web", min_length=1, max_length=100)
+    tag: str = Field(default="nessun_riferimento", min_length=1, max_length=160)
+    difficulty: str = Field(default="non_indicata", min_length=1, max_length=60)
+
     analysis_mode: AnalysisMode = "profile"
     profile_difficulty_window: float = Field(
         default=3.0,
@@ -45,7 +50,7 @@ class SudokuSubmission(BaseModel):
 
         if any(character not in "0123456789" for character in normalised):
             raise ValueError(
-                "La griglia può contenere soltanto cifre, punti e spazi."
+                "La griglia puo contenere soltanto cifre, punti e spazi."
             )
 
         return normalised
@@ -56,12 +61,48 @@ class SudokuSubmission(BaseModel):
         value = " ".join(value.split())
 
         if not value:
-            raise ValueError("Il campo non può essere vuoto.")
+            raise ValueError("Il campo non puo essere vuoto.")
 
         if any(character in value for character in "\r\n\t"):
             raise ValueError("Il campo contiene caratteri non validi.")
 
         return value
+
+    @field_validator("metadata")
+    @classmethod
+    def validate_metadata(cls, value):
+        """Valida i campi noti senza impedire metadati futuri."""
+        metadata = dict(value or {})
+        text_limits = {
+            "title": 100,
+            "source": 100,
+            "source_reference": 160,
+            "stated_difficulty": 60,
+            "author_or_publisher": 100,
+            "published_at": 32,
+            "notes": 1000,
+            "entry_channel": 40,
+            "input_method": 20,
+            "photo_id": 64,
+        }
+
+        for key, limit in text_limits.items():
+            if key not in metadata or metadata[key] is None:
+                continue
+
+            if not isinstance(metadata[key], str):
+                raise ValueError(
+                    f"Il metadato {key!r} deve essere testuale."
+                )
+
+            cleaned = metadata[key].strip()
+            if len(cleaned) > limit:
+                raise ValueError(
+                    f"Il metadato {key!r} supera {limit} caratteri."
+                )
+            metadata[key] = cleaned
+
+        return metadata
 
 
 class PlotLinks(BaseModel):
@@ -73,6 +114,7 @@ class AnalysisEnvelope(BaseModel):
     puzzle_id: str
     canonical_id: str
     name: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
     archive_profile: str
     is_isomorphic_duplicate: bool
     isomorphic_variant_count: int

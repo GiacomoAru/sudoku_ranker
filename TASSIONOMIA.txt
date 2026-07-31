@@ -1,0 +1,1318 @@
+# Tassonomia implementabile delle tecniche di risoluzione del Sudoku
+
+## Sintesi esecutiva
+
+Non esiste una tassonomia universale e definitivamente “esaustiva” delle tecniche Sudoku. Sudoku Explainer stesso osserva che tecniche diverse possono essere casi particolari della stessa inferenza, che alcune classificazioni producono più o meno nomi a parità di semantica e che la terminologia delle tecniche avanzate non è standardizzata tra i solver. Il catalogo proposto adotta quindi un perimetro preciso: **Sudoku classico 9×9, tecniche umane documentate ufficialmente da HoDoKu, famiglie di Sudoku Explainer 1.2.1 e relative estensioni di SukakuExplainer, più il fallback progettuale Complete Forcing Tree**. Sono escluse le varianti Sudoku, i pattern esotici privi di nomenclatura stabile e i metodi puramente matematici non destinati a produrre spiegazioni umane. citeturn12view1turn8search5
+
+Le decisioni architetturali principali sono:
+
+| Decisione | Regola proposta |
+|---|---|
+| Nome canonico | Nome inglese più diffuso nei solver, con descrizione italiana e alias registrati |
+| Valore `se` | Rating pubblicato da Sudoku Explainer o SukakuExplainer |
+| Valore `pseudo_se` | Valore progettuale interpolato sulla scala SE, esplicitamente non ufficiale |
+| Valore `project` | Valore interno per tecniche non confrontabili direttamente con SE |
+| Tecniche specifiche | Prevalgono sui nomi generici quando il rilevatore ha verificato tutta la struttura |
+| Tecniche generiche | Restano come parent astratti o fallback di classificazione |
+| Nested | Una catena contiene inferenze giustificate da sottocatene |
+| Complete Forcing Tree | Albero esaustivo di contraddizione, separato dalle Nested |
+| Fallback | `0 = ordinary`, `1 = nested`, `2 = complete_tree` |
+| Difficoltà | `base_difficulty + proof_complexity_extra`, conservando separatamente i due valori |
+
+La scala ufficiale SE 1.2.1 costituisce l’ancora numerica: da 1.0 per Last Value a 6.2 per Aligned Pair Exclusion, da 6.5 in poi per cicli e catene, da 8.5 per Dynamic Forcing Chains, da 9.0 per Dynamic Forcing Chains Plus e oltre 9.5 per Nested Forcing Chains. SukakuExplainer ha poi introdotto intervalli per Skyscraper, Two-String Kite, Turbot Crane, generalized wings e livelli Nested più profondi. citeturn13view0turn14view0
+
+Nel solver allegato, la separazione tra tecniche ordinarie e Nested è già presente, ma dipende da nomi e metadata dei runner. Il calcolo della difficoltà usa metriche strutturali e una crescita logaritmica. fileciteturn0file0 L’attuale `Nested Forcing Chain`, tuttavia, chiama `_CompleteNestedSearch`, che esplora ricorsivamente tutte le alternative senza limiti interni di profondità, nodi o rami. Questa procedura deve diventare `Complete Forcing Tree`. fileciteturn0file1 Inoltre, `techniques.py` ricostruisce le metriche dalla sola rappresentazione visualizzata, usa `nesting_depth` invece di `nested_depth` e sostituisce le metriche complete prodotte dal motore. Questo è l’errore prioritario della pipeline. fileciteturn0file2
+
+La priorità finale raccomandata è:
+
+| Ordine | Famiglie |
+|---:|---|
+| Primo | Singles, Direct, intersections, subsets |
+| Secondo | Basic fish, single-digit patterns, coloring, wings |
+| Terzo | Uniqueness, Sue de Coq, exclusion, complex fish |
+| Quarto | Bivalue chains, AIC, grouped chains, ALS |
+| Quinto | Multiple, dynamic e advanced forcing, templates, Kraken, nets |
+| Sesto | Vere Nested Forcing Chains |
+| Ultimo | Complete Forcing Tree |
+
+## Fondamenti formali e architettura del motore
+
+Si assuma uno stato Sudoku composto da:
+
+```text
+Grid[r,c]                  valore risolto oppure 0
+Candidates[r,c]            insieme dei candidati ancora possibili
+Units                      9 righe + 9 colonne + 9 box
+Peers[r,c]                 celle che condividono almeno una casa
+Candidate                  (row, column, digit)
+Literal                    (row, column, digit, state)
+```
+
+Un **weak link** tra due candidati significa che non possono essere entrambi veri. Un **strong link** significa che, se uno è falso, l’altro deve essere vero. Una AIC alterna strong e weak link; una catena reversibile può essere letta in entrambi i sensi. HoDoKu distingue inoltre i group link, nei quali un nodo rappresenta più candidati equivalenti, e le forcing net, nelle quali un’inferenza dipende da più predecessori o il ragionamento si ramifica e riconverge. citeturn0search0
+
+Un ALS è un insieme di `N` celle appartenenti a una casa che contiene complessivamente `N+1` candidati. Due ALS sono collegabili tramite un Restricted Common Candidate, RCC, quando tutte le occorrenze di quel candidato nei due ALS si vedono reciprocamente. citeturn7search2
+
+Un fish è rappresentabile come un problema di incidenza tra **base sets** e **cover sets** per una singola cifra. X-Wing, Swordfish e Jellyfish hanno rispettivamente dimensione 2, 3 e 4. Un Franken Fish usa almeno un box tra base o cover; un Mutant Fish combina tutti i tipi di casa; fins, endo-fins e cannibalismo sono proprietà strutturali del fish, non semplici differenze nel numero di candidati. citeturn1search4turn1search1turn1search3
+
+Le strutture minime consigliate sono:
+
+```python
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Mapping, Sequence
+
+
+Candidate = tuple[int, int, int]
+
+
+@dataclass(frozen=True, slots=True)
+class Literal:
+    row: int
+    column: int
+    digit: int
+    state: bool
+
+
+@dataclass(frozen=True, slots=True)
+class GroupNode:
+    digit: int
+    cells: frozenset[tuple[int, int]]
+    house_ids: tuple[int, ...]
+    role: str
+    # Esempi: "row-segment", "column-segment", "box-segment"
+
+
+@dataclass(frozen=True, slots=True)
+class ALS:
+    id: int
+    house_id: int
+    cells: frozenset[tuple[int, int]]
+    candidates: frozenset[int]
+
+    def validate(self) -> None:
+        if len(self.candidates) != len(self.cells) + 1:
+            raise ValueError("Un ALS deve avere N celle e N+1 candidati.")
+
+
+@dataclass(frozen=True, slots=True)
+class RCC:
+    digit: int
+    left_als_id: int
+    right_als_id: int
+    left_occurrences: frozenset[tuple[int, int]]
+    right_occurrences: frozenset[tuple[int, int]]
+
+
+@dataclass(slots=True)
+class ProofNode:
+    id: int
+    kind: str
+    conclusion: Literal | None
+    parents: tuple[int, ...]
+    reason: str
+    depth: int
+    payload: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ProofDAG:
+    nodes: dict[int, ProofNode]
+    roots: tuple[int, ...]
+    conclusions: tuple[int, ...]
+    nested_proofs: dict[int, "ProofDAG"] = field(default_factory=dict)
+```
+
+Il DAG deve essere la fonte autorevole della prova. Le liste lineari di candidati utilizzate dall’interfaccia devono essere viste renderizzate del DAG, non la fonte da cui ricostruire la complessità.
+
+```mermaid
+flowchart TD
+    A[Assunzione principale] --> B[Inferenza statica]
+    B --> C[Inferenza dinamica]
+    C --> D{Inferenza non direttamente disponibile}
+    D -->|sottoprova| N1[Assunzione della Nested]
+    N1 --> N2[Catena interna]
+    N2 --> N3[Conclusione della sottoprova]
+    N3 --> E[Inferenza giustificata nella catena principale]
+    D -->|regola diretta| E
+    E --> F[Conclusione finale]
+    C --> G[Ramo alternativo]
+    G --> F
+```
+
+Questo modello corrisponde alla semantica delle Nested di Sudoku Explainer: un potenziale della catena principale può contenere una `nestedChain`; le catene annidate vengono raccolte ricorsivamente, la loro complessità viene sommata e operano su uno stato che include le eliminazioni già prodotte dalla catena contenitore. Non è quindi necessario risolvere esaustivamente l’intero Sudoku per produrre una Nested. citeturn12view0
+
+Il flusso del solver deve invece essere:
+
+```mermaid
+flowchart TD
+    S[Stato Sudoku] --> O[Runner ordinary ordinati per difficoltà]
+    O --> Q{Esiste una mossa ordinary?}
+    Q -->|Sì| R[Deduplica, classifica e ordina]
+    R --> A[Applica la mossa più semplice]
+    Q -->|No| N[Motore Nested con budget]
+    N --> NQ{Esiste una vera Nested?}
+    NQ -->|Sì| NR[Valuta ProofDAG Nested]
+    NR --> A
+    NQ -->|No| C[Complete Forcing Tree]
+    C --> CQ{Esiste una contraddizione completa?}
+    CQ -->|Sì| CR[Restituisce una sola conclusione estrema]
+    CR --> A
+    CQ -->|No| X[Stuck o solver esterno]
+    A --> S
+```
+
+Il fallback non deve essere dedotto dal nome del runner. Deve provenire direttamente dal catalogo:
+
+```python
+ordinary = entry.fallback_tier == 0
+nested = entry.fallback_tier == 1
+complete_tree = entry.fallback_tier == 2
+```
+
+## Catalogo tassonomico completo
+
+Le definizioni seguenti sintetizzano il repertorio ufficiale HoDoKu, la tassonomia SE 1.2.1 e le estensioni pubblicate da SukakuExplainer. HoDoKu documenta singles, subsets, locked candidates, fish, wings, coloring, uniqueness, chains, ALS, Sue de Coq e last-resort methods. citeturn0search2turn8search5 Le equivalenze dei nomi avanzati e i rating SE provengono dalla documentazione e dal codice di Sudoku Explainer e SukakuExplainer. citeturn12view1turn13view0turn14view0
+
+**Legenda dei livelli**
+
+| Codice | Livello |
+|---|---|
+| E | `elementary` |
+| I | `intermediate` |
+| A | `advanced` |
+| N | `nested` |
+| L | `last-resort` |
+
+**Profili metrici**
+
+| Profilo | Metriche tipiche |
+|---|---|
+| `L` | `support_cell_count`, `unit_count`, `candidate_count`, `conclusion_count` |
+| `S` | `subset_size`, `subset_cell_count`, `subset_digit_count`, `unit_count` |
+| `F` | `node_count`, `fish_size`, `base_set_count`, `cover_set_count`, `fin_count`, `endo_fin_count`, `cannibalistic_count` |
+| `C` | `node_count`, `edge_count`, `chain_length`, `strong_link_count`, `weak_link_count` |
+| `G` | metriche `C`, `group_node_count`, `max_group_size` |
+| `A` | `node_count`, `als_count`, `als_cell_count`, `rcc_count`, `chain_length` |
+| `K` | `node_count`, `color_component_count`, `colored_candidate_count`, `contradiction_count` |
+| `B` | `node_count`, `assumption_count`, `branch_count`, `leaf_count`, `max_chain_length` |
+| `N` | metriche `B`, `nested_depth`, `nested_subproof_count` |
+| `T` | metriche `B`, `max_search_depth`, `states_visited`, `cache_hits`, `cache_misses` |
+
+I rating `se` sono valori o minimi pubblicati. I valori `pseudo_se` sono proposte di catalogo. I valori `project` non devono essere presentati come rating ufficiali.
+
+| Priorità e ID | Tecnica canonica, alias | Condizione formale e conclusione | Tier, engine | Base, kind | Metriche | Fallback |
+|---|---|---|---|---:|---|---:|
+| 010 `single.last_value` | **Last Value**, Last Digit, Full House | Una casa ha una sola cella vuota e un solo valore mancante. Output: placement. | E, local | 1.0 `se` | L | 0 |
+| 020 `single.hidden.box` | **Hidden Single in Box**, Only Position | Una cifra compare tra i candidati di una sola cella del box. Output: placement. | E, local | 1.2 `se` | L | 0 |
+| 030 `single.hidden.line` | **Hidden Single in Row/Column** | Una cifra compare tra i candidati di una sola cella della riga o colonna. | E, local | 1.5 `se` | L | 0 |
+| 040 `direct.pointing` | **Direct Pointing** | Un Pointing elimina candidati e rende immediatamente disponibile un Hidden Single riconoscibile senza candidati completi. | E, local | 1.7 `se` | L | 0 |
+| 050 `direct.claiming` | **Direct Claiming** | Un Claiming produce direttamente un Hidden Single. | E, local | 1.9 `se` | L | 0 |
+| 060 `direct.hidden_pair` | **Direct Hidden Pair** | Una Hidden Pair, dopo le restrizioni, rende una cifra un Hidden Single. | E, local | 2.0 `se` | L, S | 0 |
+| 070 `single.naked` | **Naked Single**, Sole Candidate | Una cella contiene un solo candidato. Output: placement. | E, local | 2.3 `se` | L | 0 |
+| 080 `direct.hidden_triple` | **Direct Hidden Triplet** | Una Hidden Triple produce direttamente un Hidden Single. | E, local | 2.5 `se` | L, S | 0 |
+| 090 `intersection.pointing` | **Pointing**, Locked Candidates Type 1 | In un box, tutte le occorrenze di una cifra sono nella stessa riga o colonna. Eliminare la cifra dalla linea fuori dal box. | I, local | 2.6 `se` | L | 0 |
+| 100 `intersection.claiming` | **Claiming**, Box-Line Reduction, Locked Candidates Type 2 | In una riga o colonna, tutte le occorrenze di una cifra sono nello stesso box. Eliminare dal resto del box. | I, local | 2.8 `se` | L | 0 |
+| 110 `subset.naked.2` | **Naked Pair** | Due celle di una casa hanno unione di due candidati. Eliminare quei candidati dalle altre celle della casa. | I, local | 3.0 `se` | S | 0 |
+| 120 `subset.hidden.2` | **Hidden Pair** | Due cifre compaiono soltanto nelle stesse due celle di una casa. Eliminare gli altri candidati da quelle celle. | I, local | 3.4 `se` | S | 0 |
+| 130 `subset.naked.3` | **Naked Triple**, Naked Triplet | Tre celle hanno unione di tre candidati. | I, local | 3.6 `se` | S | 0 |
+| 140 `subset.hidden.3` | **Hidden Triple**, Hidden Triplet | Tre cifre sono confinate a tre celle della casa. | I, local | 4.0 `se` | S | 0 |
+| 150 `subset.naked.4` | **Naked Quadruple**, Naked Quad | Quattro celle hanno unione di quattro candidati. | I, local | 5.0 `se` | S | 0 |
+| 160 `subset.hidden.4` | **Hidden Quadruple**, Hidden Quad | Quattro cifre sono confinate a quattro celle. | I, local | 5.4 `se` | S | 0 |
+| 170 `subset.naked.5` | **Generalized Naked Quintuple** | Cinque celle hanno unione di cinque cifre. Ridondante rispetto a un Hidden Quad nella stessa casa, ma utile per compatibilità Sukaku. | A, local | 5.6 `se` | S | 0 |
+| 180 `subset.naked.6` | **Generalized Naked Sextuple** | Sei celle hanno unione di sei cifre. Ridondante rispetto a una Hidden Triple. | A, local | 6.5 `se` | S | 0 |
+
+Le tecniche “Direct” sono specializzazioni nelle quali una tecnica intermedia rivela immediatamente un Hidden Single, distinzione esplicitamente usata da Sudoku Explainer. SE evita inoltre di cercare sottoinsiemi ridondanti quando esiste automaticamente un equivalente più semplice. citeturn12view1turn13view0
+
+| Priorità e ID | Tecnica canonica, alias | Condizione formale e conclusione | Tier, engine | Base, kind | Metriche | Fallback |
+|---|---|---|---|---:|---|---:|
+| 200 `fish.basic.2` | **X-Wing** | Per una cifra, due base lines hanno candidati confinati alle stesse due cover lines. Eliminare dalle cover fuori dalle basi. | I, fish | 3.2 `se` | F | 0 |
+| 210 `fish.basic.3` | **Swordfish** | Tre base sets sono coperti da tre cover sets. | I, fish | 3.8 `se` | F | 0 |
+| 220 `fish.basic.4` | **Jellyfish** | Quattro base sets sono coperti da quattro cover sets. | I, fish | 5.2 `se` | F | 0 |
+| 230 `fish.finned.2` | **Finned X-Wing** | Un X-Wing con candidati eccedenti, fins, confinati in un box; eliminare solo target che vedono tutte le fins. | I, fish | 3.6 `pseudo_se` | F | 0 |
+| 240 `fish.sashimi.2` | **Sashimi X-Wing** | Variante finned nella quale il fish residuo senza fins è incompleto o degenerato. | I, fish | 3.7 `pseudo_se` | F | 0 |
+| 250 `fish.finned.3` | **Finned Swordfish** | Swordfish con fins valide. | A, fish | 4.1 `pseudo_se` | F | 0 |
+| 260 `fish.sashimi.3` | **Sashimi Swordfish** | Swordfish degenerato completato dalle fins. | A, fish | 4.2 `pseudo_se` | F | 0 |
+| 270 `fish.finned.4` | **Finned Jellyfish** | Jellyfish con fins. | A, fish | 4.7 `pseudo_se` | F | 0 |
+| 280 `fish.sashimi.4` | **Sashimi Jellyfish** | Jellyfish sashimi. | A, fish | 4.8 `pseudo_se` | F | 0 |
+| 290 `fish.franken.2/3/4` | **Franken X-Wing**, **Franken Swordfish**, **Franken Jellyfish** | Almeno un base o cover set è un box, ma non sono mescolati tutti i tipi di casa. | A, fish | 4.5 / 4.9 / 5.3 `pseudo_se` | F | 0 |
+| 300 `fish.franken.finned.2/3/4` | **Finned Franken Fish**, **Sashimi Franken Fish** | Franken Fish con fins o struttura sashimi. | A, fish | 4.7 / 5.1 / 5.5 `pseudo_se` | F | 0 |
+| 310 `fish.mutant.2/3/4` | **Mutant X-Wing**, **Mutant Swordfish**, **Mutant Jellyfish** | Base e cover possono mescolare righe, colonne e box. | A, fish | 4.8 / 5.2 / 5.6 `pseudo_se` | F | 0 |
+| 320 `fish.mutant.finned.2/3/4` | **Finned Mutant Fish**, **Sashimi Mutant Fish** | Mutant Fish con fins o sashimi. | A, fish | 5.0 / 5.4 / 5.8 `pseudo_se` | F | 0 |
+| 330 `fish.siamese` | **Siamese Fish** | Due fish finned dello stesso tipo condividono gran parte della struttura, differiscono per almeno un cover set e producono eliminazioni distinte. | A, fish | `max(componenti)+0.2` `pseudo_se` | F | 0 |
+| 340 `fish.modifier.endo` | **Endo-Finned Fish** | Una fin è interna all’intersezione di due base sets. È un modificatore strutturale, non un detector indipendente. | A, fish | `base+0.2` `pseudo_se` | F | 0 |
+| 350 `fish.modifier.cannibalistic` | **Cannibalistic Fish** | Un’eliminazione cade in una cella appartenente alla struttura del fish. | A, fish | `base+0.2` `pseudo_se` | F | 0 |
+
+Le definizioni di fish finned, sashimi, Franken, Mutant e Siamese seguono la classificazione di HoDoKu. La distinzione sashimi non è completamente uniforme nella comunità, quindi il catalogo deve conservare anche gli attributi strutturali che hanno prodotto il nome. citeturn1search1turn1search3turn1search7
+
+| Priorità e ID | Tecnica canonica, alias | Condizione formale e conclusione | Tier, engine | Base, kind | Metriche | Fallback |
+|---|---|---|---|---:|---|---:|
+| 370 `sdp.skyscraper` | **Skyscraper** | Due strong link paralleli per la stessa cifra condividono una base line; le due estremità non allineate sono i roofs. Eliminare dalla loro intersezione di visibilità. | I, chain | 4.0 `se` | C | 0 |
+| 380 `sdp.two_string_kite` | **Two-String Kite**, 2-String Kite | Una strong link in riga e una in colonna hanno due estremità nello stesso box; le altre estremità implicano l’eliminazione comune. | I, chain | 4.1 `se` | C | 0 |
+| 390 `sdp.empty_rectangle` | **Empty Rectangle**, ER | Le occorrenze della cifra in un box sono confinate a una mini-riga più mini-colonna con intersezione vuota; una conjugate pair esterna chiude la catena. | I, chain | 4.2 `pseudo_se` | C | 0 |
+| 400 `sdp.turbot_fish` | **Turbot Fish**, Turbot Chain, Turbot Crane | X-Chain minima composta da due strong link collegati da un weak link. Assegnare il nome specifico soltanto dopo aver escluso Skyscraper, Kite ed ER. | I, chain | 4.3 `se` | C | 0 |
+| 410 `color.simple.trap` | **Simple Colors: Color Trap** | In una componente di conjugate pairs a due colori, un candidato non colorato vede entrambi i colori. Eliminarlo. | I, coloring | 4.0 `pseudo_se` | K | 0 |
+| 420 `color.simple.wrap` | **Simple Colors: Color Wrap** | Due candidati dello stesso colore si vedono; quel colore è falso in tutta la componente. | I, coloring | 4.1 `pseudo_se` | K | 0 |
+| 430 `color.multi.type1` | **Multi Colors Type 1** | Due componenti scollegate hanno colori incompatibili collegati debolmente; i colori opposti forzano eliminazioni comuni. | I, coloring | 4.4 `pseudo_se` | K | 0 |
+| 440 `color.multi.type2` | **Multi Colors Type 2** | Due nodi dello stesso colore vedono i due colori opposti di un’altra componente; il primo colore è falso. | I, coloring | 4.5 `pseudo_se` | K | 0 |
+| 450 `wing.xy` | **XY-Wing**, Y-Wing | Pivot `{X,Y}`, pincers `{X,Z}` e `{Y,Z}` visibili dal pivot. Eliminare `Z` dalle celle che vedono entrambe le pincers. | I, local | 4.2 `se` | L, C | 0 |
+| 460 `wing.xyz` | **XYZ-Wing** | Pivot `{X,Y,Z}`, pincers `{X,Z}` e `{Y,Z}`. Eliminare `Z` dalle celle che vedono pivot e pincers. | I, local | 4.4 `se` | L, C | 0 |
+| 470 `wing.w` | **W-Wing**, Woods’ Wing | Due celle bivalue uguali `{X,Y}` sono connesse da una strong link su `X`; eliminare `Y` dai target che vedono entrambe. | I, chain | 4.5 `pseudo_se` | C | 0 |
+| 480 `wing.wxyz` | **WXYZ-Wing** | Quattro celle formano un ALS a quattro cifre con una restricted non-common digit che rende una cifra eliminabile. | A, ALS | 5.5 `se` | A | 0 |
+| 490 `wing.wxyz.double` | **Double-Linked WXYZ-Wing** | WXYZ-Wing con due collegamenti ristretti validi e conclusioni aggiuntive. | A, ALS | 5.6 `se` | A | 0 |
+| 500 `wing.vwxyz` | **VWXYZ-Wing**, generalized wing size 5 | Cinque celle, sei candidati strutturali secondo il generalized wing model. | A, ALS | 6.2 `se` | A | 0 |
+| 510 `wing.vwxyz.double` | **Double-Linked VWXYZ-Wing** | Variante con doppio collegamento. | A, ALS | 6.4 `se` | A | 0 |
+| 520 `wing.uvwxyz` | **UVWXYZ-Wing** | Generalized wing di dimensione 6. | A, ALS | 6.6 `se` | A | 0 |
+| 530 `wing.uvwxyz.double` | **Double-Linked UVWXYZ-Wing** | Variante double-linked. | A, ALS | 6.8 `pseudo_se` | A | 0 |
+| 540 `wing.tuvwxyz` | **TUVWXYZ-Wing** | Generalized wing di dimensione 7. | A, ALS | 7.5 `se` | A | 0 |
+
+Skyscraper, Two-String Kite e Turbot Crane sono collocati da SukakuExplainer nell’intervallo 4.0-4.3; generalized wings e double-linked wings dispongono di intervalli pubblicati separati. citeturn14view0 HoDoKu documenta XY-Wing, XYZ-Wing e W-Wing, specificando che XY-Wing e W-Wing sono rappresentabili come catene. citeturn7search4 Il coloring deriva dal grafo delle conjugate pairs; HoDoKu distingue Color Trap, Color Wrap e due casi Multi Colors. citeturn7search0
+
+| Priorità e ID | Tecnica canonica, alias | Condizione formale e conclusione | Tier, engine | Base, kind | Metriche | Fallback |
+|---|---|---|---|---:|---|---:|
+| 560 `unique.ur.1` | **Unique Rectangle Type 1**, UR1 | Rettangolo su due righe, due colonne e due box; tre celle contengono solo la coppia base, la quarta ha extra. Eliminare la coppia base dalla quarta. | I, local | 4.5 `pseudo_se` | L, U | 0 |
+| 570 `unique.ur.2` | **Unique Rectangle Type 2**, UR2 | Due roof non diagonali hanno lo stesso singolo extra `Z`. Eliminare `Z` dai target che vedono entrambi. | I, local | 4.6 `pseudo_se` | L, U | 0 |
+| 580 `unique.ur.3` | **Unique Rectangle Type 3**, UR3 | Gli extra delle due roof agiscono come pseudo-cella in un Naked Subset. | A, local | 4.8 `pseudo_se` | S, U | 0 |
+| 590 `unique.ur.4` | **Unique Rectangle Type 4**, UR4 | Una cifra base è coniugata tra le due roof in una casa comune; eliminare l’altra cifra base dalle roof. | I, local | 4.7 `pseudo_se` | L, U | 0 |
+| 600 `unique.ur.5` | **Unique Rectangle Type 5**, UR5 | Lo stesso extra compare in due celle diagonali o tre celle; almeno uno deve essere vero. | A, local | 4.9 `pseudo_se` | L, U | 0 |
+| 610 `unique.ur.6` | **Unique Rectangle Type 6**, UR6 | Due celle diagonali hanno extra; una cifra base forma una struttura X-Wing interna al rettangolo e va eliminata dalle due celle con extra. | A, local | 5.0 `pseudo_se` | L, F, U | 0 |
+| 620 `unique.hidden_rectangle` | **Hidden Rectangle**, Hidden UR | Fino a tre celle possono avere extra; una cifra base è assente fuori dal rettangolo nelle case dell’angolo opposto, permettendo l’eliminazione dell’altra. | A, local | 4.8 `pseudo_se` | L, U | 0 |
+| 630 `unique.avoidable.1` | **Avoidable Rectangle Type 1**, AR1 | Rettangolo con alcune celle già risolte, non date iniziali; analogo a UR1. | A, local | 4.7 `pseudo_se` | L, U | 0 |
+| 640 `unique.avoidable.2` | **Avoidable Rectangle Type 2**, AR2 | Analogo a UR2 con celle risolte non-given. | A, local | 4.8 `pseudo_se` | L, U | 0 |
+| 650 `unique.loop.1` | **Unique Loop Type 1**, UL1 | Ciclo alternato pari di almeno sei celle con coppia base; una sola cella ha extra. Eliminare la coppia base da quella cella. | A, chain | 4.7 `pseudo_se` | C, U | 0 |
+| 660 `unique.loop.2` | **Unique Loop Type 2**, UL2 | Due celle compatibili del ciclo condividono lo stesso extra. Eliminare l’extra dai target comuni. | A, chain | 4.8 `pseudo_se` | C, U | 0 |
+| 670 `unique.loop.3` | **Unique Loop Type 3**, UL3 | Gli extra di più celle del loop formano una pseudo-cella in un locked subset. | A, chain | 4.9 `pseudo_se` | C, S, U | 0 |
+| 680 `unique.loop.4` | **Unique Loop Type 4**, UL4 | Una cifra base è coniugata in una casa tra due celle del loop, eliminando l’altra cifra base. | A, chain | 5.0 `pseudo_se` | C, U | 0 |
+| 690 `unique.bug.1` | **BUG+1**, BUG Type 1 | Tutte le celle irrisolte sono bivalue salvo una; ogni cifra compare 0 o 2 volte per casa salvo il candidato extra, che deve essere vero. | A, local | 5.6 `se` | L, U | 0 |
+| 700 `unique.bug.2` | **BUG Type 2** | Più celle BUG condividono lo stesso candidato extra; almeno uno è vero, con eliminazioni dai peer comuni. | A, local | 5.7 `pseudo_se` | L, U | 0 |
+| 710 `unique.bug.3.2/3/4` | **BUG Type 3 Pair**, **Triplet**, **Quad** | Gli extra BUG agiscono come pseudo-cella e completano un Naked Pair, Triple o Quad. | A, local | 5.8 / 5.9 / 6.0 `pseudo_se` | S, U | 0 |
+| 720 `unique.bug.4` | **BUG Type 4** | Due celle BUG in una casa hanno un candidato non-extra coniugato, consentendo eliminazioni nelle stesse celle. | A, local | 5.9 `pseudo_se` | L, U | 0 |
+| 730 `unique.bug_lite` | **BUG-Lite**, Generalized Unique Loop | Generalizzazione locale del deadly pattern BUG. Da implementare solo come estensione opzionale, non come compatibilità SE 1.2.1. | A, group | 6.1 `pseudo_se` | G, U | 0 |
+| 740 `misc.sue_de_coq.basic` | **Sue de Coq**, Two-Sector Disjoint Subsets, SDC | Intersezione casa-linea con candidati eccedenti compensati da set disgiunti nella linea e nel box. Produce due locked sets sovrapposti. | A, local | 5.0 `pseudo_se` | S, L | 0 |
+| 750 `misc.sue_de_coq.extended` | **Extended Sue de Coq** | Forma generalizzata con set aggiuntivi e candidati esterni all’intersezione. | A, local | 5.3 `pseudo_se` | S, L | 0 |
+| 760 `exclusion.aligned_pair` | **Aligned Pair Exclusion**, APE | Enumerare le assegnazioni di due base cells; una combinazione è vietata se viola una casa o svuota un excluder comune. Eliminare valori assenti da tutte le combinazioni valide. | A, local | 6.2 `se` | B, L | 0 |
+| 770 `exclusion.aligned_triple` | **Aligned Triplet Exclusion**, ATE | Come APE su tre base cells, con enumerazione combinatoria e common excluders. | A, local | 7.5 `se` | B, L | 0 |
+
+Le tecniche di unicità sono valide soltanto quando il puzzle è stato verificato come univoco. Un UR occupa esattamente due righe, due colonne e due box; HoDoKu documenta UR Type 1-6, Hidden Rectangle, Avoidable Rectangle Type 1-2 e BUG+1. citeturn8search3turn7search1 Sue de Coq è formalizzabile come una costruzione di subset disgiunti all’intersezione di linea e box, con una variante base e forme estese. citeturn8search0
+
+| Priorità e ID | Tecnica canonica, alias | Condizione formale e conclusione | Tier, engine | Base, kind | Metriche | Fallback |
+|---|---|---|---|---:|---|---:|
+| 790 `als.xz.single` | **Singly Linked ALS-XZ**, ALS-XZ | Due ALS condividono un RCC `X` e una cifra comune non-RCC `Z`. Eliminare `Z` dai target che vedono tutte le sue occorrenze nei due ALS. | A, ALS | 5.2 `pseudo_se` | A | 0 |
+| 800 `als.xz.double` | **Doubly Linked ALS-XZ** | Due ALS hanno due RCC distinti. Oltre alle eliminazioni comuni, ciascun RCC può essere eliminato fuori dall’unione nelle case pertinenti. | A, ALS | 5.4 `pseudo_se` | A | 0 |
+| 810 `als.xy_wing` | **ALS-XY-Wing** | Tre ALS: `A-X-C-Y-B`, con `X != Y`; A e B condividono `Z`. Eliminare `Z` dai target che vedono tutte le sue occorrenze in A e B. | A, ALS | 5.7 `pseudo_se` | A | 0 |
+| 820 `als.chain` | **ALS Chain**, ALS-XY-Chain | Sequenza di ALS con RCC adiacenti distinti. La cifra terminale è forzata in almeno un ALS terminale. | A, ALS | 6.2 `pseudo_se` | A | 0 |
+| 830 `als.death_blossom` | **Death Blossom** | Una stem cell è collegata a un petal ALS per ogni suo candidato; tutti i petals condividono una cifra `Z`. Eliminare `Z` dai target che vedono tutte le occorrenze nei petals. | A, ALS | 6.7 `pseudo_se` | A, B | 0 |
+| 840 `chain.remote_pair` | **Remote Pair** | Catena pari di celle tutte bivalue con la stessa coppia `{X,Y}`; celle di colori opposti determinano eliminazioni di X/Y sui target che vedono entrambi. | A, chain | 5.0 `pseudo_se` | C | 0 |
+| 850 `chain.x` | **X-Chain** | Catena a cifra singola con alternanza strong/weak; gli endpoint producono una eliminazione o un placement secondo la polarità. | A, chain | 6.5 `pseudo_se` | C | 0 |
+| 860 `chain.xy` | **XY-Chain**, Y-Chain | Sequenza di celle bivalue nella quale il candidato di uscita di una cella è quello d’ingresso della successiva; endpoint con stessa cifra eliminano dai peer comuni. | A, chain | 6.0 `pseudo_se` | C | 0 |
+| 870 `loop.dnl` | **Discontinuous Nice Loop**, DNL | Il loop si chiude con due weak link o due strong link sul discontinuity candidate, rispettivamente eliminandolo o piazzandolo. | A, chain | 6.8 `pseudo_se` | C | 0 |
+| 880 `chain.aic.type1` | **AIC Type 1**, Alternating Inference Chain Type 1 | Gli endpoint della AIC rappresentano lo stesso candidato con polarità incompatibili; ne segue placement o eliminazione. | A, chain | 7.0 `pseudo_se` | C | 0 |
+| 890 `chain.aic.type2` | **AIC Type 2** | Endpoint distinti implicano che almeno uno sia vero; eliminare un candidato che vede entrambi o una cifra comune secondo la forma. | A, chain | 7.1 `pseudo_se` | C | 0 |
+| 900 `loop.cnl` | **Continuous Nice Loop**, AIC Loop | Loop perfettamente alternato. Tutte le weak link della chiusura possono produrre eliminazioni esterne. | A, chain | 7.2 `pseudo_se` | C | 0 |
+| 910 `chain.grouped.x` | **Grouped X-Chain** | X-Chain con uno o più nodi rappresentanti gruppi di candidati equivalenti confinati in segmenti di casa. | A, group | 6.9 `pseudo_se` | G | 0 |
+| 920 `chain.grouped.aic` | **Grouped AIC**, Grouped Nice Loop | AIC con CandidateNode e GroupNode, alternanza verificata a livello di gruppi. | A, group | 7.4 `pseudo_se` | G | 0 |
+| 930 `loop.grouped.cnl` | **Grouped Continuous Nice Loop** | Continuous loop contenente group nodes. | A, group | 7.6 `pseudo_se` | G | 0 |
+| 940 `chain.als_aic` | **ALS-AIC**, AIC with ALS Nodes | AIC nella quale uno o più nodi sono ALS collegati tramite RCC. | A, ALS | 7.7 `pseudo_se` | A, G | 0 |
+
+HoDoKu definisce Remote Pair, X-Chain, XY-Chain, Nice Loop, AIC Type 1 e 2, Continuous Nice Loop, group nodes e ALS in chains. La distinzione fondamentale è strutturale: una catena ordinaria ha dipendenze lineari, mentre una net contiene dipendenze multiple, biforcazioni o riconvergenze. citeturn0search0 ALS-XZ, ALS-XY-Wing, ALS Chain e Death Blossom seguono il modello ufficiale ALS/RCC di HoDoKu. citeturn7search2
+
+| Priorità e ID | Tecnica canonica, alias | Condizione formale e conclusione | Tier, engine | Base, kind | Metriche | Fallback |
+|---|---|---|---|---:|---|---:|
+| 960 `se.bidirectional_x_cycle` | **Bidirectional X-Cycle**, X-Cycle, Fishy Cycle, Bilocation Cycle | Parent SE astratto per cicli bidirezionali a cifra singola. Usarlo come nome solo se non è riconosciuto un sottotipo più specifico. | A, chain | 6.5 `se` | C | 0 |
+| 970 `se.bidirectional_y_cycle` | **Bidirectional Y-Cycle**, Y-Cycle, Bivalue Cycle, Forcing Loop | Parent SE astratto per cicli basati sulle relazioni bivalue. | A, chain | 6.5 `se` | C | 0 |
+| 980 `se.forcing_x_chain` | **Forcing X-Chain**, discontiguous X-Cycle, Turbot Chain | Assumere uno stato di un candidato a cifra singola implica il suo opposto. | A, chain | 6.6 `se` | C, B | 0 |
+| 990 `se.forcing_chain` | **Forcing Chain**, Forward Implication Chain | Catena X/Y generale nella quale un’assunzione implica il proprio opposto o una conclusione comune. | A, chain | 7.0 `se` | C, B | 0 |
+| 1000 `se.bidirectional_cycle` | **Bidirectional Cycle**, Nice Loop | Ciclo generale X/Y reversibile. Parent compatibile SE per AIC loop non classificata più specificamente. | A, chain | 7.0 `se` | C | 0 |
+| 1010 `forcing.nishio` | **Nishio** | Assumere una posizione per una singola cifra esaurisce tutte le posizioni della cifra in una casa o crea duplicazione. | A, chain | 7.5 `se` | B, C | 0 |
+| 1020 `forcing.cell` | **Cell Forcing Chain**, Multiple Cell Forcing Chain | Propagare separatamente ogni candidato di una cella con almeno tre candidati; intersecare le conclusioni non contraddittorie. | A, group | 8.0 `se` | B, G | 0 |
+| 1030 `forcing.region` | **Region Forcing Chain**, Unit Forcing Chain | Propagare ogni posizione di una cifra in una casa; conservare la conclusione comune. | A, group | 8.0 `se` | B, G | 0 |
+| 1040 `forcing.dynamic.contradiction` | **Dynamic Contradiction Forcing Chain** | Un’ipotesi, propagata mediante singles dinamici, produce contraddizione. Negare l’ipotesi. | A, chain | 8.5 `se` | B | 0 |
+| 1050 `forcing.dynamic.double` | **Dynamic Double Forcing Chain** | Gli stati ON e OFF dello stesso candidato producono la stessa conclusione. | A, group | 8.6 `pseudo_se` | B, G | 0 |
+| 1060 `forcing.dynamic.cell` | **Dynamic Cell Forcing Chain** | Tutti i candidati di una cella producono la stessa conclusione dinamica. | A, group | 8.8 `pseudo_se` | B, G | 0 |
+| 1070 `forcing.dynamic.region` | **Dynamic Region Forcing Chain** | Tutte le posizioni di una cifra nella casa producono la stessa conclusione dinamica. | A, group | 8.8 `pseudo_se` | B, G | 0 |
+| 1080 `forcing.plus.contradiction` | **Dynamic Contradiction Forcing Chain Plus** | Come la forma dinamica, ma le inferenze interne possono usare tecniche avanzate ammesse dal profilo Plus. | A, group | 9.0 `se` | B, G | 0 |
+| 1090 `forcing.plus.double` | **Dynamic Double Forcing Chain Plus** | Due rami binari Plus producono una conclusione comune. | A, group | 9.1 `pseudo_se` | B, G | 0 |
+| 1100 `forcing.plus.cell` | **Dynamic Cell Forcing Chain Plus** | Tutti i candidati della cella, con regole Plus, producono la stessa conclusione. | A, group | 9.3 `pseudo_se` | B, G | 0 |
+| 1110 `forcing.plus.region` | **Dynamic Region Forcing Chain Plus** | Tutte le posizioni di casa producono la stessa conclusione mediante regole Plus. | A, group | 9.3 `pseudo_se` | B, G | 0 |
+| 1120 `forcing.net.contradiction` | **Contradiction Forcing Net** | DAG non lineare da un’assunzione a una contraddizione; almeno un nodo ha più parent o il grafo biforca e riconverge. | A, group | 8.8 `pseudo_se` | B, G | 0 |
+| 1130 `forcing.net.double` | **Double Forcing Net** | Due ipotesi complementari producono la stessa conclusione attraverso net. | A, group | 9.0 `pseudo_se` | B, G | 0 |
+| 1140 `forcing.net.cell` | **Cell Forcing Net** | Ogni candidato di una cella produce la stessa conclusione attraverso DAG non lineari. | A, group | 9.2 `pseudo_se` | B, G | 0 |
+| 1150 `forcing.net.region` | **Region Forcing Net** | Ogni posizione di casa produce la stessa conclusione tramite net. | A, group | 9.2 `pseudo_se` | B, G | 0 |
+| 1160 `template.single_digit` | **Templates**, Pattern Overlay Method | Enumerare tutte le configurazioni valide di una cifra compatibili con lo stato. Eliminare candidati assenti da ogni template; piazzare quelli presenti in tutti. | A, group | 7.8 `pseudo_se` | B, L | 0 |
+| 1170 `kraken.fish.type1` | **Kraken Fish Type 1** | Ogni fin del fish implica, tramite una catena, la falsità dello stesso target. | A, fish | 8.2 `pseudo_se` | F, B, C | 0 |
+| 1180 `kraken.fish.type2` | **Kraken Fish Type 2** | Tutte le possibilità rilevanti in un cover set, incluse le fins, implicano la stessa eliminazione. | A, fish | 8.4 `pseudo_se` | F, B, C | 0 |
+
+Le equivalenze tra nomi SE e nomi Nice Loop/AIC sono documentate dallo stesso Sudoku Explainer. Bidirectional X-Cycles corrispondono a X-Cycles o coloring, Bidirectional Y-Cycles a Y-Cycles o bivalue cycles, Forcing X-Chains a X-Chains discontinui, mentre Forcing Chains e Bidirectional Cycles sono spesso classificati come Nice Loops. citeturn12view1 Templates, forcing nets e Kraken Fish appartengono ai metodi di ultima risorsa di HoDoKu, ma possono restare nel tier ordinario avanzato perché producono ancora una prova logica finita e non richiedono l’esplorazione completa di tutte le soluzioni. citeturn1search0
+
+| Priorità e ID | Tecnica canonica, alias | Condizione formale e conclusione | Tier, engine | Base, kind | Metriche | Fallback |
+|---|---|---|---|---:|---|---:|
+| 1200 `nested.contradiction` | **Nested Contradiction Forcing Chain** | Una catena principale usa almeno una inferenza giustificata da una sottocatena; l’assunzione principale conduce a contraddizione. | N, nested | 9.6 `pseudo_se` | N | 1 |
+| 1210 `nested.double` | **Nested Double Forcing Chain** | Gli stati ON e OFF producono la stessa conclusione e almeno uno dei rami contiene una vera sottoprova Nested. | N, nested | 9.8 `pseudo_se` | N | 1 |
+| 1220 `nested.cell` | **Nested Cell Forcing Chain** | Tutti i candidati della cella producono una conclusione comune; almeno una inferenza dipende da una sottocatena. | N, nested | 10.0 `pseudo_se` | N | 1 |
+| 1230 `nested.region` | **Nested Region Forcing Chain** | Tutte le posizioni di una cifra nella casa producono la conclusione comune, usando almeno una sottocatena. | N, nested | 10.0 `pseudo_se` | N | 1 |
+| 1240 `forcing.complete_tree` | **Complete Forcing Tree**, Exhaustive Contradiction Tree | Sotto un’ipotesi, una ricerca completa dimostra che ogni assegnazione residua termina in contraddizione. Eliminare l’ipotesi. | L, complete_tree | 13.0 `project` | T | 2 |
+| 1250 `search.backtracking` | **Backtracking**, Brute Force, Trial and Error | Cerca una soluzione assegnando candidati e tornando indietro sulle contraddizioni. Non deve produrre un hint umano né entrare nel rating ordinario. | L, complete_tree | 99.0 `project` | T | 2 |
+
+Per essere classificata Nested, una prova deve soddisfare:
+
+```python
+metrics["nested_depth"] >= 1
+metrics["nested_subproof_count"] >= 1
+```
+
+Una catena lunga, una forcing net o una propagazione dinamica con molti rami non è automaticamente Nested. La documentazione SE descrive le Nested come forcing chains usate all’interno di forcing chains; SukakuExplainer conserva esplicitamente le sottocatene nei potenziali e ne somma la complessità. citeturn13view2turn12view0
+
+## Algoritmi di rilevamento e pseudocodice
+
+Ogni detector deve restituire conclusioni indipendenti dalla soluzione completa:
+
+```python
+@dataclass(frozen=True)
+class Deduction:
+    technique_id: str
+    placements: tuple[Candidate, ...]
+    eliminations: tuple[Candidate, ...]
+    proof: ProofDAG
+    metrics: Mapping[str, int | float]
+    pattern: Mapping[str, object]
+
+    def validate_nonempty(self) -> None:
+        if not self.placements and not self.eliminations:
+            raise ValueError("Una deduzione deve modificare lo stato.")
+```
+
+Il motore può usare la soluzione completa soltanto nei test di soundness o in strumenti separati, mai per costruire la prova logica.
+
+**Subsets e intersezioni**
+
+```python
+def find_naked_subset(state, size):
+    for house in state.houses:
+        eligible = [
+            cell for cell in house.unsolved_cells
+            if 2 <= len(state.candidates[cell]) <= size
+        ]
+
+        for cells in combinations(eligible, size):
+            digits = union(state.candidates[cell] for cell in cells)
+
+            if len(digits) != size:
+                continue
+
+            eliminations = {
+                (cell, digit)
+                for cell in house.unsolved_cells - set(cells)
+                for digit in digits & state.candidates[cell]
+            }
+
+            if eliminations:
+                yield build_local_deduction(
+                    technique_id=f"subset.naked.{size}",
+                    support=cells,
+                    eliminations=eliminations,
+                )
+```
+
+Per evitare duplicati e tecniche ridondanti, il detector deve canonicalizzare `(house_id, cells, digits)` e rifiutare le forme che hanno un equivalente obbligatoriamente più semplice nella stessa casa.
+
+**Fish generalizzato**
+
+```python
+def find_fish(state, digit, size, allowed_base_types, allowed_cover_types):
+    base_sets = candidate_houses(
+        state,
+        digit,
+        house_types=allowed_base_types,
+    )
+
+    for selected_bases in combinations(base_sets, size):
+        candidate_nodes = occurrences(selected_bases, digit)
+
+        for selected_covers in choose_cover_sets(
+            candidate_nodes,
+            allowed_types=allowed_cover_types,
+            target_size=size,
+        ):
+            body = candidate_nodes_inside(selected_covers)
+            fins = candidate_nodes - body
+
+            if not fish_rank_condition(selected_bases, selected_covers, body):
+                continue
+
+            targets = cover_candidates_outside_bases(
+                state,
+                digit,
+                selected_bases,
+                selected_covers,
+            )
+
+            if fins:
+                targets = {
+                    target for target in targets
+                    if sees_all(target, fins)
+                }
+
+            classification = classify_fish(
+                selected_bases,
+                selected_covers,
+                fins,
+                body,
+            )
+
+            if targets:
+                yield fish_deduction(
+                    classification=classification,
+                    digit=digit,
+                    bases=selected_bases,
+                    covers=selected_covers,
+                    fins=fins,
+                    eliminations=targets,
+                )
+```
+
+`classify_fish()` deve derivare separatamente:
+
+```text
+size
+basic / franken / mutant
+finned / sashimi
+endo_finned
+cannibalistic
+siamese_component_id
+```
+
+Il nome non deve essere dedotto soltanto dal numero di nodi.
+
+**Coloring**
+
+```python
+def find_simple_colors(state, digit):
+    graph = conjugate_pair_graph(state, digit)
+
+    for component in graph.connected_components():
+        colors = bipartite_color(component)
+
+        if colors is None:
+            continue
+
+        for color in (0, 1):
+            conflicting = same_color_nodes_that_see_each_other(
+                component,
+                colors,
+                color,
+            )
+
+            if conflicting:
+                yield eliminate_all_nodes_of_color(
+                    component,
+                    colors,
+                    color,
+                    technique_id="color.simple.wrap",
+                )
+
+        for target in uncolored_candidates(state, digit, component):
+            if sees_color(target, 0, component, colors) and \
+               sees_color(target, 1, component, colors):
+                yield eliminate(
+                    target,
+                    technique_id="color.simple.trap",
+                )
+```
+
+**AIC, Nice Loops e group nodes**
+
+Il grafo di implicazione non dovrebbe contenere soltanto archi genericamente etichettati `x`, `y` o `peer`. Ogni arco deve dichiarare polarità, forza e supporto:
+
+```python
+@dataclass(frozen=True)
+class ImplicationEdge:
+    source_id: int
+    target_id: int
+    link_strength: str       # "strong" oppure "weak"
+    reason: str              # "peer", "bivalue", "conjugate", "group", "rcc"
+    support_candidates: tuple[Candidate, ...]
+```
+
+Pseudocodice:
+
+```python
+def enumerate_aic(graph, limits):
+    for start in graph.nodes:
+        stack = [(start, [], None)]
+
+        while stack:
+            current, path, expected_strength = stack.pop()
+
+            if len(path) >= limits.max_edges:
+                continue
+
+            for edge in graph.outgoing(current):
+                if expected_strength and edge.link_strength != expected_strength:
+                    continue
+
+                if violates_simple_path(path, edge):
+                    continue
+
+                new_path = path + [edge]
+
+                conclusion = classify_aic_closure(start, edge.target_id, new_path)
+
+                if conclusion:
+                    yield conclusion.with_proof(path_to_dag(new_path))
+
+                stack.append((
+                    edge.target_id,
+                    new_path,
+                    opposite_strength(edge.link_strength),
+                ))
+```
+
+La classificazione deve avvenire dopo la validazione della struttura:
+
+```text
+tutti i nodi stessa cifra                    X-Chain
+tutte le celle bivalue con transizioni XY   XY-Chain
+loop con discontinuità                       Discontinuous Nice Loop
+endpoint che producono eliminazione          AIC Type 2
+endpoint che forzano un candidato            AIC Type 1
+loop perfettamente alternato                 Continuous Nice Loop
+presenza di GroupNode                        Grouped ...
+presenza di ALS node                         ALS-AIC
+```
+
+**ALS e grafo RCC**
+
+```python
+def enumerate_als(state, max_cells=6):
+    seen = set()
+
+    for house in state.houses:
+        cells = house.unsolved_cells
+
+        for size in range(1, min(max_cells, len(cells)) + 1):
+            for subset in combinations(cells, size):
+                digits = union(state.candidates[cell] for cell in subset)
+
+                if len(digits) != size + 1:
+                    continue
+
+                signature = canonical_als_signature(subset, digits)
+
+                if signature in seen:
+                    continue
+
+                seen.add(signature)
+                yield ALS(
+                    id=stable_id(signature),
+                    house_id=house.id,
+                    cells=frozenset(subset),
+                    candidates=frozenset(digits),
+                )
+
+
+def restricted_common_candidates(left, right, state):
+    for digit in left.candidates & right.candidates:
+        left_cells = occurrences_in_als(left, digit)
+        right_cells = occurrences_in_als(right, digit)
+
+        if all(sees(a, b) for a in left_cells for b in right_cells):
+            yield RCC(
+                digit=digit,
+                left_als_id=left.id,
+                right_als_id=right.id,
+                left_occurrences=frozenset(left_cells),
+                right_occurrences=frozenset(right_cells),
+            )
+```
+
+Per ALS-XZ è sufficiente una coppia di ALS. Per ALS Chain si cerca un cammino nel grafo ALS-RCC, vietando RCC adiacenti uguali e controllando esplicitamente gli overlap. HoDoKu ammette overlap ALS in alcune costruzioni, incluso Death Blossom, purché la logica degli RCC rimanga valida. citeturn7search2
+
+**Forcing chain e forcing net**
+
+```python
+def propagate_assumption(state, assumption, rule_profile):
+    dag = ProofDAG(...)
+    queue = [assumption]
+
+    while queue:
+        literal = queue.pop()
+
+        for inference in rule_profile.inferences(state, literal, dag):
+            if dag.contains_opposite(inference.conclusion):
+                return Contradiction(dag, inference)
+
+            if dag.add_if_new(inference):
+                queue.append(inference.conclusion)
+
+    return Propagation(dag)
+```
+
+La differenza tra chain e net non deve dipendere dal nome del runner:
+
+```python
+def classify_dependency_shape(proof):
+    if any(len(node.parents) > 1 for node in proof.nodes.values()):
+        return "net"
+
+    if proof_has_fork_and_merge(proof):
+        return "net"
+
+    return "chain"
+```
+
+**Vera Nested Forcing Chain**
+
+```python
+@dataclass(frozen=True)
+class NestedBudget:
+    max_depth: int = 2
+    max_nodes: int = 512
+    max_branches: int = 64
+    max_subproofs: int = 32
+    max_results: int = 2
+
+
+def prove_nested_inference(
+    state,
+    context_assumptions,
+    target,
+    *,
+    remaining_depth,
+    budget,
+    memo,
+    active,
+):
+    direct = prove_with_current_profile(
+        state,
+        context_assumptions,
+        target,
+        budget=budget,
+    )
+
+    if direct:
+        return direct
+
+    if remaining_depth <= 0:
+        return None
+
+    key = nested_cache_key(
+        state,
+        context_assumptions,
+        target,
+        remaining_depth,
+    )
+
+    if key in memo:
+        return memo[key]
+
+    if key in active:
+        return None
+
+    active.add(key)
+
+    for split in bounded_logical_splits(state):
+        branch_proofs = []
+
+        for assumption in split.assumptions:
+            child = prove_nested_inference(
+                state,
+                context_assumptions + (assumption,),
+                target,
+                remaining_depth=remaining_depth - 1,
+                budget=budget,
+                memo=memo,
+                active=active,
+            )
+
+            if child is None:
+                break
+
+            branch_proofs.append(child)
+        else:
+            proof = attach_nested_subproofs(
+                split,
+                branch_proofs,
+                target,
+            )
+            memo[key] = proof
+            active.remove(key)
+            return proof
+
+    active.remove(key)
+    memo[key] = None
+    return None
+```
+
+La sottoprova deve dimostrare una singola inferenza utilizzata dalla catena contenitore. Non deve continuare arbitrariamente fino alla soluzione completa.
+
+**Complete Forcing Tree**
+
+```python
+def complete_forcing_tree(state, root_assumption, limits):
+    root_state = apply_assumption(state, root_assumption)
+
+    result = prove_unsatisfiable_exhaustively(
+        root_state,
+        choose_branch="minimum_remaining_values",
+        memoize=True,
+        limits=limits,
+    )
+
+    if result.status == "unsatisfiable":
+        return eliminate_opposite_of(root_assumption, proof=result.tree)
+
+    return None
+```
+
+Per preservare il comportamento attuale si possono inizialmente mantenere limiti molto alti o configurabili. Il nome e il rating devono però dichiarare che si tratta di ricerca completa, non di una Nested canonica.
+
+## Corrispondenza dei nomi e schema del catalogo
+
+La tabella seguente normalizza le principali differenze terminologiche. Le corrispondenze avanzate non sono sempre biunivoche: Sudoku Explainer usa categorie generiche che HoDoKu scompone in AIC, Nice Loops e pattern geometrici. SE stesso avverte che le definizioni possono variare leggermente tra solver. citeturn12view1
+
+| Nome canonico proposto | HoDoKu | Sudoku Explainer 1.2.1 | SukakuExplainer | gsf / serate |
+|---|---|---|---|---|
+| Last Value | Full House o singolo finale, a seconda della vista | Last value | Last value | Etichetta SE |
+| Hidden Single in Box | Hidden Single | Hidden Single in block | Identico | Etichetta SE |
+| Hidden Single in Row/Column | Hidden Single | Hidden Single in row/column | Identico | Etichetta SE |
+| Pointing | Locked Candidates, Pointing | Pointing | Identico | Etichetta SE |
+| Claiming | Locked Candidates, Claiming | Claiming | Identico | Etichetta SE |
+| XY-Wing | XY-Wing | XY-Wing | XY-Wing | Etichetta SE |
+| Y-Wing | Alias non preferito | Non preferito | Generalmente XY-Wing | Non distinto |
+| Skyscraper | Skyscraper | Di norma Forcing X-Chain | Skyscraper | Etichetta moderna se supportata, altrimenti parent SE |
+| Two-String Kite | Two-String Kite | Di norma Forcing X-Chain | 2-String Kite | Come sopra |
+| Empty Rectangle | Empty Rectangle | Forcing X-Chain equivalente | Empty Rectangle o chain equivalente | Parent SE |
+| Turbot Fish | Turbot Fish, X-Chain corta | Forcing X-Chain | Turbot Crane | Forcing X-Chain |
+| Simple Colors | Color Trap, Color Wrap | Spesso coperto da X-Cycle/X-Chain | Coloring o chain equivalente | Categoria SE equivalente |
+| Multi Colors | Multi Colors Type 1/2 | X-Chain equivalente | Chain/coloring | Parent SE |
+| Remote Pair | Remote Pair | Caso di Bidirectional Y-Cycle | Remote Pair o Y-Cycle | Bidirectional Y-Cycle |
+| X-Chain | X-Chain | Forcing X-Chain o Bidirectional X-Cycle secondo la chiusura | X-Chain/X-Cycle | Nome SE del risultato |
+| XY-Chain | XY-Chain | Y-Chain non sempre separata; può apparire come Forcing Chain o Y-Cycle | XY-Chain/Y-Cycle | Nome SE |
+| DNL | Discontinuous Nice Loop | Forcing Chain o Forcing X-Chain | Nice Loop/chain | Nome SE |
+| AIC Type 1/2 | AIC Type 1/2 | Forcing Chain | AIC o Forcing Chain | Forcing Chain |
+| Continuous Nice Loop | Continuous Nice Loop | Bidirectional Cycle | Bidirectional Cycle/Nice Loop | Bidirectional Cycle |
+| Grouped AIC | Grouped Nice Loop/AIC | Non distinto nell’SE classico | Dipende dalla versione | Nessuna categoria indipendente stabile |
+| ALS-XZ | ALS-XZ | Non implementato nell’SE classico | Non parte della tassonomia SE tradizionale | Nessuna etichetta SE |
+| ALS Chain | ALS Chain | Non implementato | Non standard SE | Nessuna etichetta |
+| Bidirectional X-Cycle | X-Cycle, coloring, bilocation cycle | Bidirectional X-Cycle | Identico | Identico al formato SE |
+| Bidirectional Y-Cycle | Y-Cycle, bivalue cycle | Bidirectional Y-Cycle | Identico | Identico al formato SE |
+| Forcing X-Chain | X-Chain discontinua | Forcing X-Chain | Identico | Identico |
+| Forcing Chain | AIC, DNL, Nice Loop aperto | Forcing Chain | Identico | Identico |
+| Cell Forcing Chain | Cell Forcing Chain | Cell Forcing Chain | Identico | Identico |
+| Region Forcing Chain | Unit/Region Forcing Chain | Region Forcing Chain | Identico | Identico |
+| Dynamic Forcing Chain | Dynamic Chain | Dynamic Forcing Chain | Identico | Identico |
+| Dynamic Forcing Chain Plus | Advanced Dynamic Chain | Dynamic Forcing Chain (+) | Identico | Identico |
+| Nested Forcing Chain | Catena con sottocatena | Nested Forcing Chain | Nested/Dynamic FC con livello | Identico al rating SE |
+| Forcing Net | Forcing Net | Dichiarata non implementata | Non parte del core SE classico | Nessuna categoria autonoma |
+| Templates | Templates | Non implementata come hint | Non standard | Nessuna |
+| Kraken Fish Type 1/2 | Kraken Fish Type 1/2 | Non implementato | Non standard SE | Nessuna |
+| Complete Forcing Tree | Nessun nome umano canonico | Backtracking escluso dagli hint | Non è una Nested | Nessuno |
+| Backtracking | Brute Force | Brute force, non hint | Solver rapido separato | Solver, non tecnica umana |
+
+SukakuExplainer dichiara di derivare dalla modifica `serate` di Sudoku Explainer e attribuisce a gsf la modifica serate. Di conseguenza, per il mapping progettuale è corretto trattare gsf/serate come formato e sistema di rating SE, non come una tassonomia umana indipendente. Questa è un’inferenza architetturale supportata dalla genealogia dichiarata del progetto. citeturn13view3
+
+Lo schema del catalogo dovrebbe essere versionato indipendentemente dal modello di difficoltà e dal formato delle prove:
+
+```python
+from dataclasses import dataclass
+from typing import Literal
+
+
+StrategyTier = Literal[
+    "elementary",
+    "intermediate",
+    "advanced",
+    "nested",
+    "last-resort",
+]
+
+EngineType = Literal[
+    "local",
+    "chain",
+    "group",
+    "als",
+    "fish",
+    "coloring",
+    "nested",
+    "complete_tree",
+]
+
+RatingKind = Literal[
+    "se",
+    "pseudo_se",
+    "project",
+]
+
+ImplementationStatus = Literal[
+    "abstract",
+    "planned",
+    "implemented",
+    "deprecated",
+    "disabled",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class TechniqueAlias:
+    name: str
+    namespace: str
+    # Esempi: "hodoku", "se121", "sukaku", "common", "legacy-project"
+    deprecated: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class TechniqueDefinition:
+    catalog_version: str
+    id: str
+    canonical_name: str
+    display_name_it: str
+    aliases: tuple[TechniqueAlias, ...]
+
+    family_id: str
+    strategy_tier: StrategyTier
+    engine_type: EngineType
+
+    parent_id: str | None
+    se_equivalent_parent_id: str | None
+
+    base_difficulty: float
+    rating_kind: RatingKind
+    rating_source_version: str | None
+
+    priority: int
+    fallback_tier: int
+
+    detector_id: str | None
+    implementation_status: ImplementationStatus
+    abstract: bool
+
+    requires_unique_solution: bool
+    supports_placements: bool
+    supports_eliminations: bool
+
+    proof_metric_profile: tuple[str, ...]
+    parameters: dict[str, object]
+    source_keys: tuple[str, ...]
+    introduced_in: str
+    deprecated_in: str | None = None
+```
+
+Esempio serializzato:
+
+```json
+{
+  "catalog_version": "1.0.0",
+  "id": "sdp.skyscraper",
+  "canonical_name": "Skyscraper",
+  "display_name_it": "Skyscraper",
+  "aliases": [
+    {
+      "name": "Forcing X-Chain geometric subtype",
+      "namespace": "se121",
+      "deprecated": false
+    }
+  ],
+  "family_id": "single_digit_patterns",
+  "strategy_tier": "intermediate",
+  "engine_type": "chain",
+  "parent_id": "chain.x",
+  "se_equivalent_parent_id": "se.forcing_x_chain",
+  "base_difficulty": 4.0,
+  "rating_kind": "se",
+  "rating_source_version": "SukakuExplainer-1.17.8",
+  "priority": 370,
+  "fallback_tier": 0,
+  "detector_id": "detect_skyscraper",
+  "implementation_status": "implemented",
+  "abstract": false,
+  "requires_unique_solution": false,
+  "supports_placements": false,
+  "supports_eliminations": true,
+  "proof_metric_profile": [
+    "node_count",
+    "edge_count",
+    "chain_length",
+    "strong_link_count",
+    "weak_link_count"
+  ],
+  "parameters": {
+    "digit_count": 1,
+    "strong_link_count": 2
+  },
+  "source_keys": [
+    "sukaku-1.17.8",
+    "hodoku-chains"
+  ],
+  "introduced_in": "solver-3.0.0",
+  "deprecated_in": null
+}
+```
+
+Le validazioni obbligatorie sono:
+
+| Vincolo | Controllo |
+|---|---|
+| Identità | `id` e `canonical_name` univoci |
+| Alias | Nessuna collisione normalizzata tra alias di tecniche diverse, salvo namespace esplicito |
+| Parent | Tutti i parent esistono e il grafo dei parent è aciclico |
+| Detector | Ogni entry non astratta e implementata ha un `detector_id` registrato |
+| Registro inverso | Ogni detector registrato dichiara almeno una tecnica del catalogo |
+| Rating `se` | Richiede `rating_source_version` e source key ufficiale |
+| Rating pseudo | Non può essere esportato come “SE ufficiale” |
+| Unicità | `requires_unique_solution=True` per UR, UL, AR e BUG |
+| Nested | `engine_type=nested`, `fallback_tier=1`, `nested_depth>=1` nelle prove |
+| Complete tree | `engine_type=complete_tree`, `fallback_tier=2` |
+| Parent generico | Un parent astratto non deve produrre mosse direttamente, salvo fallback esplicito |
+| Esito | Ogni mossa contiene almeno un placement o una eliminazione reale |
+| Metriche | Tutti i nomi delle metriche appartengono a uno schema versionato |
+| Stabilità | ID persistenti tra versioni; i rename modificano alias, non ID |
+| Monotonicità | I rating delle famiglie parametriche non diminuiscono all’aumentare della complessità |
+| Simmetria | Il detector deve essere invariante sotto permutazioni di cifre, bande, stack, riflessioni e trasposizione |
+
+Le versioni da salvare in ogni analisi sono:
+
+```python
+TECHNIQUE_CATALOG_VERSION = "1.0.0"
+PROOF_SCHEMA_VERSION = "2.0.0"
+PROOF_METRICS_VERSION = "2.0.0"
+DIFFICULTY_MODEL_VERSION = "3.0.0"
+```
+
+## Scala pseudo-SE e procedura di calibrazione
+
+La scala proposta conserva come punti fissi i valori ufficiali SE e SukakuExplainer. I valori moderni non ufficiali vengono collocati per interpolazione tra tecniche di struttura comparabile. SE stesso dichiara che il proprio rating non è perfetto e adotta una strategia greedy basata sulla tecnica disponibile più semplice. citeturn13view0
+
+| Fascia | Interpretazione progettuale |
+|---:|---|
+| 1.0-2.5 | Tecniche elementari e direct |
+| 2.6-4.4 | Intersezioni, subsets, basic fish, pattern intermedi |
+| 4.5-6.4 | Uniqueness, coloring, complex fish, generalized wings, ALS locali |
+| 6.5-7.9 | AIC, Nice Loops, grouped chains, exclusion avanzata |
+| 8.0-8.7 | Multiple forcing, templates, Kraken |
+| 8.8-9.4 | Dynamic forcing, Plus iniziali, forcing nets |
+| 9.5-12.9 | Nested Forcing Chains e livelli annidati crescenti |
+| 13.0+ | Complete Forcing Tree |
+| 99.0 | Ricerca non spiegabile, esclusa dal rating umano |
+
+Il record pubblico deve sempre separare:
+
+```python
+{
+    "base_difficulty": 9.6,
+    "proof_complexity_extra": 0.4,
+    "technical_difficulty": 10.0,
+    "rating_kind": "pseudo_se",
+    "difficulty_model_version": "3.0.0"
+}
+```
+
+Per catene e Nested, si può adottare una crescita a soglie ispirata al codice SE. `ChainingHint.getLengthDifficulty()` aumenta il rating di 0.1 quando la complessità supera soglie geometriche approssimativamente pari a 4, 6, 8, 12, 16, 24 e così via; la complessità totale comprende anche le sottocatene. citeturn12view0
+
+Una formula implementabile è:
+
+```python
+CHAIN_THRESHOLDS = (
+    4, 6, 8, 12, 16, 24, 32, 48,
+    64, 96, 128, 192, 256, 384, 512,
+)
+
+
+def chain_length_extra(complexity: int) -> float:
+    return 0.1 * sum(
+        complexity > threshold
+        for threshold in CHAIN_THRESHOLDS
+    )
+
+
+def nested_extra(metrics: dict[str, float]) -> float:
+    depth = max(int(metrics.get("nested_depth", 0)), 0)
+    subproofs = max(int(metrics.get("nested_subproof_count", 0)), 0)
+    branches = max(int(metrics.get("branch_count", 0)), 0)
+
+    return (
+        0.20 * max(depth - 1, 0)
+        + 0.10 * math.log2(1 + subproofs)
+        + 0.08 * math.log2(1 + branches)
+    )
+```
+
+Per i fish:
+
+```python
+def fish_extra(metrics):
+    return (
+        0.10 * max(metrics["fish_size"] - 2, 0)
+        + 0.05 * metrics["fin_count"]
+        + 0.10 * metrics["endo_fin_count"]
+        + 0.10 * metrics["cannibalistic_count"]
+    )
+```
+
+Questi extra non devono modificare la categoria canonica. Un Finned Swordfish resta un Finned Swordfish anche se la sua prova concreta è più costosa di un Franken Fish semplice.
+
+La ricalibrazione deve essere corpus-based:
+
+| Fase | Procedura |
+|---|---|
+| Raccolta | Creare un corpus di stati con tecnica bersaglio certificata da HoDoKu, SE/SukakuExplainer e test manuali |
+| Normalizzazione | Applicare tutte le isomorfie Sudoku per ridurre bias di coordinate e cifre |
+| Verifica | Confrontare conclusioni, non soltanto nomi, tra i solver |
+| Etichettatura | Registrare tecnica specifica, parent SE, rating esterno e complessità della prova |
+| Separazione | Dividere per puzzle, non per singola mossa, in training, validation e holdout |
+| Ordinamento | Raccogliere confronti pairwise: “questa prova è più difficile di quella” |
+| Stima | Usare regressione isotona o ottimizzazione robusta con ancore SE fisse |
+| Regolarizzazione | Penalizzare inversioni tra sottotipi parametrici, per esempio Swordfish più facile di X-Wing |
+| Validazione | Misurare agreement sui nomi, errore assoluto del rating e stabilità sotto simmetrie |
+| Benchmark | Registrare tempo, nodi espansi, cache hit e timeout per tecnica |
+| Revisione | Ispezionare gli outlier, soprattutto uniqueness, ALS, nets e Nested |
+| Versionamento | Pubblicare una nuova `DIFFICULTY_MODEL_VERSION` quando cambia un valore o una formula |
+
+Una funzione obiettivo possibile è:
+
+```text
+loss =
+    errore assoluto rispetto alle ancore esterne
+  + penalità per inversioni pairwise
+  + penalità di non monotonicità familiare
+  + penalità per instabilità sotto isomorfie
+```
+
+Non bisogna addestrare il rating sul tempo di esecuzione puro. Il costo computazionale dipende dall’implementazione, mentre la difficoltà tecnica dovrebbe riflettere soprattutto la struttura della prova.
+
+## Puzzle di riferimento e strategia di test
+
+Il test più affidabile per un detector non è un puzzle intero, ma uno **stato di candidati minimo**. Un puzzle può contenere contemporaneamente molte tecniche più semplici, può cambiare percorso dopo una mossa e può essere classificato diversamente da solver differenti. Ogni entry del catalogo dovrebbe quindi avere almeno:
+
+```python
+@dataclass(frozen=True)
+class CandidateFixture:
+    name: str
+    technique_id: str
+    candidates: dict[tuple[int, int], frozenset[int]]
+    solved_values: dict[tuple[int, int], int]
+    expected_placements: frozenset[Candidate]
+    expected_eliminations: frozenset[Candidate]
+    forbidden_technique_ids: frozenset[str]
+    requires_unique_solution: bool = False
+```
+
+La matrice dei fixture deve coprire tutti i sottotipi:
+
+| Famiglia | Fixture minimo parametrico | Assert principali |
+|---|---|---|
+| Singles | Una casa/cella con una sola possibilità | Un solo placement, nessuna eliminazione falsa |
+| Direct | Pattern base più Hidden Single immediato | Nome Direct, non nome generale |
+| Subsets | `N` celle con unione di `N` cifre o duale hidden | Eliminazioni solo nella stessa casa |
+| Basic fish | Generatore `(digit, size, orientation)` | Base/cover esatte, target fuori dalle basi |
+| Finned fish | Basic fish più fin in box | Ogni target vede tutte le fins |
+| Sashimi | Fish residuo incompleto senza fin | Nome Sashimi, non semplice Finned |
+| Franken/Mutant | Base/cover con box e house types miste | Classificazione del tipo di fish |
+| Siamese | Due fish con struttura condivisa | Un risultato aggregato, componenti conservati |
+| Skyscraper | Due conjugate pairs parallele con una base allineata | Target vede entrambi i roofs |
+| Two-String Kite | Strong link riga e colonna, bridge nello stesso box | Quattro nodi distinti |
+| Empty Rectangle | ERI vuota, due bracci nel box, strong link esterna | Target all’incrocio corretto |
+| Turbot Fish | X-Chain minima che non è gli altri tre pattern | Classificazione generica Turbot |
+| Coloring | Grafo con trap o wrap controllato | Componente bipartita e colore eliminato corretto |
+| XY/XYZ/W-Wing | Pivot e pincers generati da cifre simboliche | Visibilità e cardinalità esatte |
+| Generalized wings | ALS generato per dimensione e link count | Nome e rating parametrico |
+| UR | Generatore di rettangolo 2×2 su due box con configurazione Type 1-6 | Richiede flag di unicità |
+| Hidden/avoidable rectangle | Extra o placements controllati | Nessun given dentro il tratto evitabile |
+| Unique Loop | Ciclo alternato pari di lunghezza 6, 8, 10, 14 | Canonicalizzazione di rotazioni e verso |
+| BUG | Stato quasi BUG con extras controllati | Validazione globale 0/2 per casa |
+| Sue de Coq | Intersezione, set di linea e box | Conteggio candidato-cella formale |
+| APE/ATE | Due o tre base cells e common excluders | Enumerazione delle combinazioni completa |
+| ALS-XZ | Due ALS e uno o due RCC | Target vede tutte le occorrenze di Z |
+| ALS-XY | Tre ALS e RCC distinti | Orientamento reversibile |
+| ALS Chain | Cammino di ALS generato | RCC adiacenti distinti |
+| Death Blossom | Stem con un petal per candidato | Un petal mancante invalida il pattern |
+| X/XY/AIC | Grafo sintetico con sequenza strong/weak | Alternanza, endpoint e conclusione |
+| Grouped AIC | Stesso grafo con GroupNode | Nessuna espansione non valida del gruppo |
+| Forcing | Rami sintetici con conclusione comune | Assumption count e branch count esatti |
+| Net | Nodo con più parent o fork-merge | Non classificata come chain |
+| Nested | Inferenza impossibile al livello 0 ma provabile al livello 1 | `nested_subproof_count >= 1` |
+| Complete tree | Ipotesi insoddisfacibile solo dopo branching completo | Nome Complete Forcing Tree, mai Nested |
+
+Esempio minimo di X-Wing su candidato 5:
+
+```python
+fixture = CandidateFixture(
+    name="x_wing_rows_digit_5",
+    technique_id="fish.basic.2",
+    candidates={
+        (1, 4): frozenset({2, 5}),
+        (1, 7): frozenset({3, 5}),
+        (4, 4): frozenset({1, 5}),
+        (4, 7): frozenset({5, 8}),
+        (6, 4): frozenset({5, 9}),  # target
+    },
+    solved_values={},
+    expected_placements=frozenset(),
+    expected_eliminations=frozenset({
+        (6, 4, 5),
+    }),
+    forbidden_technique_ids=frozenset({
+        "fish.finned.2",
+        "sdp.skyscraper",
+    }),
+)
+```
+
+Esempio minimo di ALS-XZ:
+
+```text
+ALS A: r1c6 {6,7}, r1c7 {7,9}       candidati {6,7,9}
+ALS B: r3c2 {6,8}, r3c8 {7,8},
+       r3c9 {8,9}                    candidati {6,7,8,9}
+
+RCC X = 6
+Z = 7
+Target: una cella che vede tutte le occorrenze di 7 in A e B
+Conclusione: target <> 7
+```
+
+HoDoKu usa una struttura equivalente nella propria spiegazione di ALS-XZ. citeturn7search2
+
+Per i test end-to-end possono essere usati puzzle pubblicati nella raccolta di Sudoku Explainer. Un esempio che richiede tecniche oltre le forcing chain ordinarie è:
+
+```text
+.6.9....3
+5....4.2.
+....8.4..
+8......5.
+..3...7..
+.9......1
+..1.5....
+.7.3....9
+9....2.4.
+```
+
+La raccolta SE lo include tra i puzzle risolvibili con Nested Forcing Chains ma non con le tecniche precedenti. citeturn13view2
+
+Un caso complesso con più Turbot Fish, un long unique loop e un BUG è:
+
+```text
+...9..45.
+6..5.....
+.1..8.2.7
+...7.....
+.3..927..
+..8.4....
+5.6....49
+...6...7.
+.....4...
+```
+
+citeturn13view2
+
+Per testare il livello Plus, la documentazione SE propone, tra gli altri:
+
+```text
+7.8...3..
+...2.1...
+5........
+.4.....26
+3...8....
+...1...9.
+.9.6....4
+....7.5..
+.........
+```
+
+SE descrive le Advanced Forcing Chains come catene che possono utilizzare al loro interno Pointing, pairs, X-Wing e altre tecniche superiori ai soli single. citeturn13view2
+
+La suite automatica deve includere:
+
+| Tipo di test | Controllo |
+|---|---|
+| Soundness | Nessun placement differisce dalla soluzione unica; nessuna eliminazione rimuove il valore della soluzione |
+| Local validity | Ogni conclusione segue dal pattern senza consultare la soluzione |
+| Near miss | Rimuovendo un strong link, un RCC o una condizione di visibilità, il detector non restituisce il pattern |
+| Minimality | Nessun supporto superfluo nella prova canonica |
+| Specificity | Skyscraper non viene chiamato Turbot; AIC non viene chiamata XY-Chain senza celle bivalue valide |
+| Parent mapping | Ogni sottotipo conserva `parent_id` e `se_equivalent_parent_id` corretti |
+| Metrics | Conteggio esatto su DAG sintetici noti |
+| Deduplication | Stesso esito e stessa tecnica conservano la prova meno complessa |
+| Cross-technique | Una conclusione più semplice esclude la duplicazione della tecnica generica |
+| Metamorphic | Invarianza sotto permutazioni delle cifre, trasposizione, riflessione, bande e stack |
+| Fuzzing | Stati di candidati casuali validi confrontati con un SAT/backtracking oracle |
+| Uniqueness gate | UR, UL, AR e BUG disabilitati su puzzle non verificati univoci |
+| Budget | Nested e Complete Tree rispettano nodi, rami, profondità, timeout e cancellazione |
+| Serialization | Round trip del ProofDAG senza perdita di parent, metriche o nested proofs |
+| Regression | Identico esito logico sul corpus congelato, salvo cambi documentati di classificazione |
+| Performance | Budget distinto per local, chain, ALS, nested e complete tree |
+
+## Piano incrementale di migrazione
+
+La migrazione consigliata comprende sedici patch piccole, ciascuna integrabile e reversibile.
+
+| Patch | Obiettivo | Modifiche principali | Test e safety check |
+|---|---|---|---|
+| P00 | Congelare il comportamento | Salvare corpus, sequenze di mosse, risultati, tempi e metriche attuali | Snapshot test; soundness contro soluzione; nessun cambiamento funzionale |
+| P01 | Introdurre il catalogo | Creare `technique_catalog.py`; esportare temporaneamente le vecchie mappe da esso | ID, nomi, parent e alias univoci; tutti i runner coperti |
+| P02 | Versionare prove e metriche | Aggiungere `PROOF_SCHEMA_VERSION` e `normalize_proof_metrics()` | Test sintetici su chain, branch, nested depth e DAG |
+| P03 | Correggere la pipeline Nested | Preservare `logic["metrics"]`; usare `nested_depth`; derivare metriche solo come fallback | Le metriche del motore non vengono sovrascritte; test di regressione dell’errore attuale |
+| P04 | Rinominare la ricerca esistente | `_CompleteNestedSearch` diventa `CompleteForcingTreeSearch`; tecnica `Complete Forcing Tree` | Nessun risultato nuovo etichettato Nested; alias legacy solo in lettura |
+| P05 | Separare i fallback | Sostituire il riconoscimento per nome con `fallback_tier`; flusso ordinary, nested, complete tree | Complete Tree mai eseguito se esiste una mossa ordinary o Nested |
+| P06 | Introdurre ProofDAG | Convertire propagazioni e catene esistenti in DAG; mantenere renderer legacy | Round trip, dedup dei nodi, parent aciclici, rendering invariato |
+| P07 | Correggere tassonomia esistente | Validare Turbot, XY-Chain, Remote Pair, AIC e Continuous Nice Loop strutturalmente | Near-miss fixture per ogni classificazione; nessun nome basato sulla sola lunghezza |
+| P08 | Completare tecniche locali | UR6, Hidden Rectangle, AR1/2, Unique Loop, Sue de Coq, ATE opzionale | Uniqueness gate; fixture positivi e negativi; confronto HoDoKu |
+| P09 | Generalizzare fish e coloring | Fish engine parametrico; finned, sashimi, Franken, Mutant, Siamese; Simple/Multi Colors | Simmetrie, fin visibility, classificazione del fish, no duplicati |
+| P10 | Introdurre GroupNode | Costruire grouped links e classificatore AIC/Nice Loop | Test di alternanza, group visibility e canonicalizzazione |
+| P11 | Introdurre ALS engine | Enumerazione ALS, RCC graph, ALS-XZ, ALS-XY-Wing, ALS Chain, Death Blossom | Validazione `N+1`; overlap; RCC; benchmark sull’esplosione combinatoria |
+| P12 | Forcing avanzato | ProofDAG non lineari, Forcing Net, Templates, Kraken Fish | Chain versus net; template intersection; tutte le fins implicano il target |
+| P13 | Implementare vere Nested | Nested inference come sottoprova, memoizzazione, cycle guard, budget depth 1-2 | `nested_subproof_count >= 1`; nessuna ricerca fino alla soluzione completa |
+| P14 | Arricchire il profilo Plus/Nested | Rendere configurabili le regole interne: locking, subsets, fish, grouped, ALS | Ogni inferenza avanzata conserva il detector e il proprio subproof |
+| P15 | Calibrare e pubblicare | Ricalibrare pseudo-SE, migrare archivi, rimuovere mappe legacy e congelare v1 | Holdout corpus, benchmark, compatibility report, schema migration test |
+
+Le correzioni concrete da applicare subito nella pipeline sono:
+
+```python
+def normalize_proof_metrics(logic: dict) -> dict:
+    explicit = dict(logic.get("metrics") or {})
+    derived = derive_metrics_from_proof(logic)
+
+    # Compatibilità con vecchi record.
+    if "nested_depth" not in explicit:
+        explicit["nested_depth"] = max(
+            number(explicit.get("nesting_depth")),
+            number(explicit.get("max_depth")),
+        )
+
+    metrics = dict(derived)
+
+    # Le metriche esplicite del motore hanno precedenza.
+    for key, value in explicit.items():
+        if key in metrics and isinstance(value, (int, float)):
+            metrics[key] = max(metrics[key], value)
+        else:
+            metrics[key] = value
+
+    metrics["metrics_version"] = "2.0.0"
+    return metrics
+```
+
+`techniques.py` non deve più eseguire:
+
+```python
+proof["metrics"] = _proof_metrics(deduction)
+```
+
+se `_proof_metrics()` considera soltanto le catene visualizzate. Deve invece fare:
+
+```python
+proof["metrics"] = normalize_proof_metrics(proof)
+```
+
+Il solver deve poi leggere unicamente le metriche normalizzate:
+
+```python
+metrics = move["logic"]["metrics"]
+
+node_count = metrics["node_count"]
+branch_count = metrics["branch_count"]
+nested_depth = metrics["nested_depth"]
+nested_subproof_count = metrics["nested_subproof_count"]
+```
+
+L’attuale codice distingue già difficoltà base ed extra strutturale, ma lega il comportamento Nested al nome della tecnica e considera l’attuale ricerca completa come Nested. fileciteturn0file0 Il logic engine dichiara esplicitamente che la ricerca Nested corrente è ricorsiva completa e non limitata internamente, confermando che la rinomina in Complete Forcing Tree è una correzione semantica, non soltanto estetica. fileciteturn0file1 La libreria delle tecniche, infine, possiede già parent, family e strategy, ma tali mappe devono confluire nel catalogo unico e la classificazione deve essere prodotta dai detector strutturali anziché da conversioni nominali. fileciteturn0file2
+
+La migrazione è completa quando nessuna tecnica è identificata cercando sottostringhe nel nome, nessuna metrica autorevole viene ricostruita da una vista parziale, ogni mossa possiede un ID stabile del catalogo, le vere Nested contengono almeno una sottoprova e il Complete Forcing Tree viene invocato esclusivamente dopo il fallimento di tutti i livelli logici precedenti.

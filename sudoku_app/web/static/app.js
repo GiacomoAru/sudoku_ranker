@@ -164,6 +164,15 @@ function optionalText(selector) {
 }
 
 function collectPuzzleMetadata() {
+  const acquisitionMetadata = currentPhotoId
+    ? {
+        input_method: "photo",
+        photo_id: currentPhotoId,
+      }
+    : {
+        input_method: "manual",
+      };
+
   const metadata = {
     title: optionalText("#puzzle-title"),
     source: optionalText("#puzzle-source"),
@@ -173,8 +182,7 @@ function collectPuzzleMetadata() {
     published_at: optionalText("#puzzle-published-at"),
     notes: optionalText("#puzzle-notes"),
     entry_channel: "web",
-    input_method: currentPhotoId ? "photo" : "manual",
-    photo_id: currentPhotoId,
+    ...acquisitionMetadata,
   };
 
   return Object.fromEntries(
@@ -182,6 +190,19 @@ function collectPuzzleMetadata() {
       value !== null && value !== ""
     ))
   );
+}
+
+function buildAnalysisRequest(grid) {
+  const metadata = collectPuzzleMetadata();
+
+  return {
+    grid,
+    name: metadata.title || null,
+    metadata,
+    analysis_mode: "profile",
+    profile_difficulty_window: 3.0,
+    photo_id: metadata.photo_id || null,
+  };
 }
 
 function updateMetadataCount() {
@@ -681,24 +702,7 @@ formElement.addEventListener("submit", async (event) => {
     const response = await fetch("/api/v1/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify((() => {
-        const metadata = collectPuzzleMetadata();
-
-        return {
-          grid,
-          name: metadata.title || null,
-          metadata,
-
-          // Compatibilità temporanea con la vecchia API.
-          provenience: metadata.source || "web",
-          tag: metadata.source_reference || "nessun_riferimento",
-          difficulty: metadata.stated_difficulty || "non_indicata",
-
-          analysis_mode: "profile",
-          profile_difficulty_window: 3.0,
-          photo_id: currentPhotoId,
-        };
-      })()),
+      body: JSON.stringify(buildAnalysisRequest(grid)),
     });
     const payload = await response.json();
 

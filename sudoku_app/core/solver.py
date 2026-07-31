@@ -1,50 +1,30 @@
-'''
-## 3. Motore risolutivo
+"""Motore risolutivo e analisi logica dei Sudoku.
 
-Ad ogni step il motore interroga le tecniche in ordine di difficoltà.
-L'analisi `profile`, predefinita con finestra 1.5, si limita a una fascia
-configurabile sopra la difficoltà minima; `deep` costruisce invece
-l'inventario completo;
-`superficial` conserva soltanto la frontiera minima. In ogni modalità la
-mossa scelta è la più semplice; il tie-break usa `_TECHNIQUE_ORDER` e,
-fra conclusioni equivalenti, le coordinate della forma canonica MinLex.
-Anche Sudoku isomorfi seguono così la stessa catena logica nel riferimento
-canonico.
+A ogni passaggio il solver interroga le tecniche in ordine di difficolta'.
+La modalita' ``profile`` esplora una finestra configurabile sopra la mossa
+piu' semplice trovata, ``deep`` interroga tutte le tecniche ordinarie e
+``superficial`` conserva soltanto la frontiera minima.
 
-`solve_and_log` applica una mossa alla volta e registra ogni step nella
-catena, fino a soluzione completa, blocco (nessuna tecnica implementata
-trova più nulla) o contraddizione (un candidato azzerato, non dovrebbe mai
-succedere su un puzzle valido con solo eliminazioni logicamente corrette).
+Le Nested Forcing Chain sono escluse da ogni inventario ordinario, incluso
+``deep``. Vengono cercate soltanto come ultima risorsa, quando nessun'altra
+tecnica produce una mossa. Le tecniche ordinarie possono restituire fino a
+16 conclusioni, quelle del Logic Engine fino a 8 e la Nested una sola. Questi
+limiti riguardano i risultati, non la profondita' interna della ricerca.
 
-`grade_difficulty` mantiene separate tre letture: Difficoltà Tecnica (rating
-SE invariato), Difficoltà
-percepita sulla stessa scala numerica SE. La label usa soltanto il massimo
-rating SE; carico cumulativo e scarsità delle mosse restano metriche
-indipendenti per il confronto e l'ordinamento.
-'''
-
-
-"""
-Solver engine with configurable analysis depth. The default profile mode
-scans 1.5 SE points above the minimum difficulty; deep collects the complete
-logical inventory and superficial keeps only the minimum frontier. Proofs are
-retained as diagnostics, while availability is measured through unique
-logical conclusions.
+Ogni mossa possiede una difficolta' base determinata dalla tecnica e una
+difficolta' tecnica effettiva. Quest'ultima aggiunge alla base la complessita'
+concreta della prova, quando la mossa espone catene, assunzioni, rami o
+metriche strutturali. La crescita e' logaritmica e non ha un limite massimo.
 """
 
-import inspect
 import math
 
 from . import canonicalization as sc
 from . import data_structure as sds
 from . import difficulty as difficulty_model
 from . import techniques as st
-
-
-_TECHNIQUE_RANK = {
-    technique: index
-    for index, technique in enumerate(st._TECHNIQUE_ORDER)
-}
+from . import technique_catalog
+from . import technique_registry
 
 
 ANALYSIS_MODES = {
@@ -55,7 +35,6 @@ ANALYSIS_MODES = {
 
 ANALYSIS_MODE_ALIASES = {
     "full": "deep",
-    "complete": "deep",
     "profilo": "profile",
     "standard": "superficial",
     "shallow": "superficial",
@@ -65,106 +44,307 @@ ANALYSIS_MODE_ALIASES = {
 DEFAULT_PROFILE_DIFFICULTY_WINDOW = 1.5
 DEFAULT_ANALYSIS_MODE = "profile"
 MAX_MOVES_PER_TECHNIQUE = 16
+MAX_LOGIC_ENGINE_MOVES_PER_TECHNIQUE = max(MAX_MOVES_PER_TECHNIQUE // 2, 1) # minore del limite massimo in logic_engine
+MAX_NESTED_MOVES_PER_STEP = max(MAX_MOVES_PER_TECHNIQUE // 16, 1) # minore del limite massimo in logic_engine
 
-def _difficulty_score(move):
-    """Rating canonico usato per scegliere e ordinare le mosse."""
-    technique = str(move.get("technique", ""))
-
-    canonical_difficulty = (
-        difficulty_model.TECHNIQUE_DIFFICULTY.get(technique)
+if not (
+    1
+    <= MAX_NESTED_MOVES_PER_STEP
+    <= MAX_LOGIC_ENGINE_MOVES_PER_TECHNIQUE
+    <= MAX_MOVES_PER_TECHNIQUE
+):
+    raise ValueError(
+        "I limiti devono rispettare: Nested <= Logic Engine <= generale."
     )
 
-    if canonical_difficulty is not None:
-        return float(canonical_difficulty)
 
-    return float(move.get("difficulty", 99.0))
+_TECHNIQUE_RANK_BY_ID = {
+    definition.id: index
+    for index, definition in enumerate(sorted(
+        technique_catalog.TECHNIQUE_DEFINITIONS,
+        key=lambda item: (item.base_difficulty, item.priority),
+    ))
+}
+
+# Pesi della crescita dinamica. Sono applicati alla prova concreta e non
+# introducono alcun tetto massimo alla difficolta'.
+_CHAIN_LENGTH_WEIGHT = 0.10
+_CHAIN_COUNT_WEIGHT = 0.06
+_ASSUMPTION_WEIGHT = 0.05
+_SECONDARY_NODE_WEIGHT = 0.03
+_BRANCH_WEIGHT = 0.06
+_NESTED_DEPTH_WEIGHT = 0.08
+
+
+# ---------------------------------------------------------------------------
+# Difficolta' e ordinamento
+# ---------------------------------------------------------------------------
+
+
+def _move_definition(move):
+    """Restituisce i metadata strutturali dichiarati dalla mossa."""
+    technique_id = move.get("technique_id")
+    if not technique_id:
+        raise ValueError("La mossa non dichiara technique_id.")
+    try:
+        return technique_catalog.technique_definition(technique_id)
+    except KeyError as error:
+        raise ValueError(
+            f"La mossa dichiara un technique_id sconosciuto: "
+            f"{technique_id!r}."
+        ) from error
+
+
+def _base_difficulty(move):
+    """Difficolta' minima associata alla tecnica della mossa."""
+    return float(_move_definition(move).base_difficulty)
+
+
+def _literal_signature(literal):
+    """Firma stabile di un letterale conservato nella prova."""
+    if isinstance(literal, dict):
+        return (
+            literal.get("row"),
+            literal.get("column"),
+            literal.get("value"),
+            literal.get("state"),
+        )
+
+    if isinstance(literal, (tuple, list)):
+        return tuple(literal)
+
+    return repr(literal)
+
+
+def _nonnegative_number(value, default=0.0):
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+    if not math.isfinite(result):
+        return float(default)
+
+    return max(0.0, result)
+
+
+def _proof_metrics(move):
+    """Estrae metriche uniformi dalla prova disponibile nella mossa."""
+    logic = move.get("logic", {}) or {}
+    explicit = logic.get("metrics", {}) or {}
+    chains = [
+        list(chain)
+        for chain in (logic.get("chains", ()) or ())
+        if chain
+    ]
+    assumptions = list(logic.get("assumptions", ()) or ())
+
+    chain_lengths = [len(chain) for chain in chains]
+    proof_literals = {
+        _literal_signature(literal)
+        for chain in chains
+        for literal in chain
+    }
+    proof_literals.update(
+        _literal_signature(literal)
+        for literal in assumptions
+    )
+
+    chain_count = max(
+        _nonnegative_number(explicit.get("chain_count")),
+        float(len(chains)),
+    )
+    max_chain_length = max(
+        _nonnegative_number(explicit.get("max_chain_length")),
+        float(max(chain_lengths, default=0)),
+    )
+    total_chain_length = max(
+        _nonnegative_number(explicit.get("total_chain_length")),
+        float(sum(chain_lengths)),
+    )
+    assumption_count = max(
+        _nonnegative_number(explicit.get("assumption_count")),
+        float(len(assumptions)),
+    )
+    node_count = max(
+        _nonnegative_number(explicit.get("node_count")),
+        _nonnegative_number(explicit.get("proof_node_count")),
+        float(len(proof_literals)),
+        total_chain_length,
+    )
+    branch_count = max(
+        _nonnegative_number(explicit.get("branch_count")),
+        _nonnegative_number(explicit.get("branches")),
+    )
+    nested_depth = max(
+        _nonnegative_number(explicit.get("nested_depth")),
+        _nonnegative_number(explicit.get("max_depth")),
+    )
+
+    return {
+        "chain_count": chain_count,
+        "max_chain_length": max_chain_length,
+        "total_chain_length": total_chain_length,
+        "assumption_count": assumption_count,
+        "node_count": node_count,
+        "branch_count": branch_count,
+        "nested_depth": nested_depth,
+    }
+
+
+def _proof_complexity_extra(move):
+    """Incremento illimitato basato sulla complessita' della prova."""
+    definition = _move_definition(move)
+    metric_profile = set(definition.proof_metric_profile)
+    metrics = _proof_metrics(move)
+
+    has_proof_structure = any(
+        metrics[name] > 0
+        for name in (
+            "chain_count",
+            "max_chain_length",
+            "assumption_count",
+            "branch_count",
+            "nested_depth",
+        )
+    )
+    proof_technique = bool(metric_profile & {
+        "proof_node_count",
+        "proof_edge_count",
+        "chain_count",
+        "max_chain_length",
+        "assumption_count",
+        "branch_count",
+        "nested_depth",
+        "nested_subproof_count",
+    })
+
+    if not has_proof_structure and not proof_technique:
+        return 0.0
+
+    max_chain_length = metrics["max_chain_length"]
+    chain_count = max(metrics["chain_count"], 1.0)
+    assumption_count = max(metrics["assumption_count"], 1.0)
+    secondary_nodes = max(
+        0.0,
+        metrics["node_count"] - max_chain_length,
+    )
+
+    length_extra = (
+        _CHAIN_LENGTH_WEIGHT
+        * math.log2(
+            1.0 + max(0.0, max_chain_length - 4.0) / 4.0
+        )
+    )
+    chain_extra = (
+        _CHAIN_COUNT_WEIGHT
+        * math.log2(chain_count)
+    )
+    assumption_extra = (
+        _ASSUMPTION_WEIGHT
+        * math.log2(assumption_count)
+    )
+    node_extra = (
+        _SECONDARY_NODE_WEIGHT
+        * math.log2(1.0 + secondary_nodes / 8.0)
+    )
+    branch_extra = (
+        _BRANCH_WEIGHT
+        * math.log2(1.0 + metrics["branch_count"] / 4.0)
+    )
+    depth_extra = (
+        _NESTED_DEPTH_WEIGHT
+        * math.log2(max(metrics["nested_depth"], 1.0))
+    )
+
+    raw_extra = (
+        length_extra
+        + chain_extra
+        + assumption_extra
+        + node_extra
+        + branch_extra
+        + depth_extra
+    )
+
+    if definition.fallback_tier > 0:
+        family_scale = 1.0
+    elif metric_profile & {"assumption_count", "branch_count", "leaf_count"}:
+        family_scale = 0.85
+    elif metric_profile & {
+        "proof_edge_count",
+        "chain_count",
+        "max_chain_length",
+    }:
+        family_scale = 0.70
+    else:
+        family_scale = 0.50
+
+    return family_scale * raw_extra
 
 
 def _technical_difficulty_score(move):
-    """
-    Restituisce il rating tecnico effettivo mostrato nell'analisi.
-
-    Il rating canonico della mossa resta invariato e continua a governare
-    ordinamento, frontiera, pruning e scelta della tecnica. Soltanto le
-    Nested Forcing Chain ricevono un incremento moderato basato sulla prova
-    concreta conservata in ``logic.metrics``.
-
-    L'incremento cresce in modo logaritmico ed e limitato a un massimo di
-    1.0 punti SE, quindi una Nested parte da 9.5 e non supera 10.5.
-    """
-    base_difficulty = _difficulty_score(move)
-    technique = str(move.get("technique", ""))
-
-    if not technique.startswith("Nested "):
-        return base_difficulty
-
-    logic = move.get("logic", {}) or {}
-    metrics = logic.get("metrics", {}) or {}
-
-    chain_count = max(
-        int(metrics.get("chain_count", 0)),
-        1,
-    )
-    node_count = max(
-        int(metrics.get("node_count", 0)),
-        0,
-    )
-    max_chain_length = max(
-        int(metrics.get("max_chain_length", 0)),
-        0,
-    )
-
-    secondary_nodes = max(
-        0,
-        node_count - max_chain_length,
-    )
-
-    # Fino a sei nodi la Nested conserva il rating minimo della famiglia.
-    length_extra = (
-        0.12
-        * math.log2(
-            1
-            + max(0, max_chain_length - 6) / 6
-        )
-    )
-
-    # I nodi esterni alla catena principale rappresentano rami e sotto-prove.
-    branching_extra = (
-        0.06
-        * math.log2(
-            1 + secondary_nodes / 8
-        )
-    )
-
-    # Più catene indipendenti aumentano ulteriormente la complessità.
-    multiple_chain_extra = (
-        0.08
-        * math.log2(chain_count)
-    )
-
-    total_extra = (
-        length_extra
-        + branching_extra
-        + multiple_chain_extra
-    )
+    """Difficolta' base piu' la complessita' concreta della prova."""
+    stored = move.get("technical_difficulty")
+    if stored is not None:
+        try:
+            return float(stored)
+        except (TypeError, ValueError):
+            pass
 
     return round(
-        base_difficulty + total_extra,
+        _base_difficulty(move) + _proof_complexity_extra(move),
         1,
     )
+
+
+def _prepare_move(move):
+    """Normalizza una mossa e materializza le sue difficolta'."""
+    definition = _move_definition(move)
+    move.setdefault("technique", definition.canonical_name)
+    move.setdefault(
+        "family",
+        technique_catalog.TECHNIQUE_FAMILY[definition.canonical_name],
+    )
+    move.setdefault(
+        "strategy",
+        technique_catalog.TECHNIQUE_STRATEGY[definition.canonical_name],
+    )
+    move["parent_id"] = definition.parent_id
+    move["se_equivalent_parent_id"] = (
+        definition.se_equivalent_parent_id
+    )
+    move["rating_kind"] = definition.rating_kind
+    metrics = _proof_metrics(move)
+    extra = _proof_complexity_extra(move)
+    move["base_difficulty"] = _base_difficulty(move)
+    move["difficulty_extra"] = round(extra, 3)
+    move["difficulty_metrics"] = metrics
+    move["technical_difficulty"] = round(
+        move["base_difficulty"] + extra,
+        1,
+    )
+    return move
+
+
+def _difficulty_score(move):
+    """Difficolta' effettiva usata da scelta, profilo e inventario."""
+    return _technical_difficulty_score(move)
 
 
 def _tie_rank(move):
-    return _TECHNIQUE_RANK.get(
-        move["technique"],
-        len(_TECHNIQUE_RANK),
+    return _TECHNIQUE_RANK_BY_ID.get(
+        _move_definition(move).id,
+        len(_TECHNIQUE_RANK_BY_ID),
     )
 
 
 def _move_sort_key(move, canonical_transform=None):
+    metrics = _proof_metrics(move)
     key = (
         _difficulty_score(move),
         _tie_rank(move),
+        metrics["node_count"],
+        metrics["max_chain_length"],
     )
 
     if canonical_transform is None:
@@ -182,11 +362,15 @@ def _move_sort_key(move, canonical_transform=None):
     return key + (placements, eliminations)
 
 
+# ---------------------------------------------------------------------------
+# Raccolta delle mosse
+# ---------------------------------------------------------------------------
+
 
 def _normalise_analysis_mode(mode):
-    """Valida e normalizza il livello di profondita dell inventario."""
+    """Valida e normalizza il livello di profondita' dell'inventario."""
     if mode is None:
-        return "deep"
+        return DEFAULT_ANALYSIS_MODE
 
     normalised = str(mode).strip().lower()
     normalised = ANALYSIS_MODE_ALIASES.get(normalised, normalised)
@@ -194,7 +378,7 @@ def _normalise_analysis_mode(mode):
     if normalised not in ANALYSIS_MODES:
         allowed = ", ".join(sorted(ANALYSIS_MODES))
         raise ValueError(
-            f"Modalita di analisi non valida: {mode!r}. "
+            f"Modalita' di analisi non valida: {mode!r}. "
             f"Valori ammessi: {allowed}."
         )
 
@@ -202,7 +386,7 @@ def _normalise_analysis_mode(mode):
 
 
 def _move_outcome_signature(move):
-    """Firma dell intero risultato della mossa, indipendente dalla prova."""
+    """Firma dell'intero risultato della mossa, indipendente dalla prova."""
     return (
         tuple(sorted(
             (int(r), int(c), int(value))
@@ -215,31 +399,261 @@ def _move_outcome_signature(move):
     )
 
 
-
-def _call_technique_with_limit(
-    function,
-    state,
-    max_results,
+def _result_limit_for_classification(
+    engine_type,
+    fallback_tier,
+    general_limit,
 ):
-    """Passa il limite dentro la tecnica quando il runner lo supporta."""
-    try:
-        parameters = inspect.signature(function).parameters.values()
-    except (TypeError, ValueError):
-        return function(state)
+    if fallback_tier > 0:
+        return min(general_limit, MAX_NESTED_MOVES_PER_STEP)
+    if engine_type != "local":
+        return min(
+            general_limit,
+            MAX_LOGIC_ENGINE_MOVES_PER_TECHNIQUE,
+        )
+    return general_limit
 
-    supports_keyword = any(
-        parameter.kind == inspect.Parameter.VAR_KEYWORD
-        or parameter.name == "max_results"
-        for parameter in parameters
+
+def _result_limit_for_move(move, general_limit):
+    definition = _move_definition(move)
+    return _result_limit_for_classification(
+        definition.engine_type,
+        definition.fallback_tier,
+        general_limit,
     )
 
-    if supports_keyword:
-        return function(
-            state,
-            max_results=max_results,
+
+def _result_limit_for_runner(runner, general_limit):
+    return _result_limit_for_classification(
+        runner.engine_type,
+        runner.fallback_tier,
+        general_limit,
+    )
+
+
+def _validate_runner_move(runner, move):
+    definition = _move_definition(move)
+    if (
+        definition.id not in runner.technique_ids
+        or definition.detector_id != runner.detector_id
+    ):
+        raise ValueError(
+            f"Il detector {runner.detector_id!r} ha prodotto la tecnica "
+            f"non dichiarata {definition.id!r}."
+        )
+    move["detector_id"] = runner.detector_id
+    move["engine_type"] = runner.engine_type
+    move["fallback_tier"] = runner.fallback_tier
+    return move
+
+
+def _call_registered_runner(runner, state):
+    return runner.collect(state)
+
+
+def _deduplicate_moves(moves, canonical_transform=None):
+    """Conserva la prova meno costosa per ogni esito della tecnica."""
+    unique = {}
+
+    for move in moves:
+        signature = (
+            _move_definition(move).id,
+            _move_outcome_signature(move),
+        )
+        previous = unique.get(signature)
+
+        if previous is None or _move_sort_key(
+            move,
+            canonical_transform,
+        ) < _move_sort_key(
+            previous,
+            canonical_transform,
+        ):
+            unique[signature] = move
+
+    return list(unique.values())
+
+
+def _limit_moves_per_technique(
+    moves,
+    max_moves_per_technique,
+    canonical_transform=None,
+):
+    ordered = sorted(
+        moves,
+        key=lambda move: _move_sort_key(
+            move,
+            canonical_transform,
+        ),
+    )
+    counts = {}
+    limited = []
+    capped = set()
+
+    for move in ordered:
+        definition = _move_definition(move)
+        technique_id = definition.id
+        display_name = move.get("technique", definition.canonical_name)
+        technique_limit = _result_limit_for_move(
+            move,
+            max_moves_per_technique,
+        )
+        count = counts.get(technique_id, 0)
+
+        if count >= technique_limit:
+            capped.add(display_name)
+            continue
+
+        counts[technique_id] = count + 1
+        limited.append(move)
+
+    return limited, capped
+
+
+def _collect_from_runners(
+    state,
+    runners,
+    *,
+    mode,
+    profile_difficulty_window,
+    canonical_transform,
+    max_results,
+):
+    moves = []
+    best_difficulty = None
+    scanned_runner_count = 0
+    stopped_early = False
+    stop_before_min_difficulty = None
+    capped_techniques = set()
+    result_limit_reached = False
+
+    for runner in runners:
+        minimum_difficulty = runner.minimum_difficulty
+        if best_difficulty is not None:
+            if mode == "superficial":
+                difficulty_limit = best_difficulty
+            elif mode == "profile":
+                difficulty_limit = (
+                    best_difficulty
+                    + profile_difficulty_window
+                )
+            else:
+                difficulty_limit = None
+
+            if (
+                difficulty_limit is not None
+                and float(minimum_difficulty) > difficulty_limit
+            ):
+                stopped_early = True
+                stop_before_min_difficulty = float(minimum_difficulty)
+                break
+
+        scanned_runner_count += 1
+        runner_limit = _result_limit_for_runner(
+            runner,
+            max_results,
+        )
+        found = list(
+            _call_registered_runner(runner, state) or []
+        )
+        if len(found) >= runner_limit:
+            result_limit_reached = True
+
+        prepared = [
+            _prepare_move(_validate_runner_move(runner, move))
+            for move in found
+        ]
+        prepared = _deduplicate_moves(
+            prepared,
+            canonical_transform,
         )
 
-    return function(state)
+        raw_counts = {}
+        representative_moves = {}
+        for move in prepared:
+            technique_id = _move_definition(move).id
+            raw_counts[technique_id] = (
+                raw_counts.get(technique_id, 0) + 1
+            )
+            representative_moves.setdefault(technique_id, move)
+        if any(
+            count >= _result_limit_for_move(
+                representative_moves[technique_id],
+                max_results,
+            )
+            for technique_id, count in raw_counts.items()
+        ):
+            result_limit_reached = True
+
+        prepared, local_capped = _limit_moves_per_technique(
+            prepared,
+            max_results,
+            canonical_transform,
+        )
+        capped_techniques.update(local_capped)
+
+        if not prepared:
+            continue
+
+        moves.extend(prepared)
+        local_minimum = min(
+            _difficulty_score(move)
+            for move in prepared
+        )
+        best_difficulty = (
+            local_minimum
+            if best_difficulty is None
+            else min(best_difficulty, local_minimum)
+        )
+
+    moves = _deduplicate_moves(
+        moves,
+        canonical_transform,
+    )
+    moves, final_capped = _limit_moves_per_technique(
+        moves,
+        max_results,
+        canonical_transform,
+    )
+    capped_techniques.update(final_capped)
+
+    if moves:
+        best_difficulty = min(
+            _difficulty_score(move)
+            for move in moves
+        )
+
+        if mode == "superficial":
+            moves = [
+                move
+                for move in moves
+                if math.isclose(
+                    _difficulty_score(move),
+                    best_difficulty,
+                    rel_tol=0.0,
+                    abs_tol=1e-9,
+                )
+            ]
+        elif mode == "profile":
+            difficulty_limit = (
+                best_difficulty
+                + profile_difficulty_window
+            )
+            moves = [
+                move
+                for move in moves
+                if _difficulty_score(move) <= difficulty_limit
+            ]
+
+    return moves, {
+        "best_difficulty": best_difficulty,
+        "scanned_runner_count": scanned_runner_count,
+        "stopped_early": stopped_early,
+        "stop_before_min_difficulty": stop_before_min_difficulty,
+        "capped_techniques": sorted(capped_techniques),
+        "result_limit_reached": result_limit_reached,
+    }
+
 
 def collect_moves_for_analysis(
     state,
@@ -248,22 +662,14 @@ def collect_moves_for_analysis(
     canonical_transform=None,
     max_moves_per_technique=MAX_MOVES_PER_TECHNIQUE,
 ):
-    """
-    Raccoglie le mosse secondo la granularita richiesta.
+    """Raccoglie mosse ordinarie e usa le Nested soltanto come fallback.
 
-    ``deep``
-        Interroga tutte le tecniche e produce un inventario completo.
+    ``deep`` interroga tutte le tecniche ordinarie. ``profile`` esplora la
+    finestra configurata sopra la difficolta' effettiva minima.
+    ``superficial`` conserva esclusivamente la frontiera minima.
 
-    ``profile``
-        Dopo aver trovato la difficolta minima D, continua a interrogare le
-        tecniche che possono produrre mosse fino a D + window.
-
-    ``superficial``
-        Cerca soltanto la frontiera minima: si ferma appena le tecniche
-        rimanenti non possono piu eguagliare la mossa migliore trovata.
-
-    La modalita cambia soltanto l inventario registrato. La mossa scelta resta
-    sempre la piu semplice tra quelle applicabili.
+    Se nessuna tecnica ordinaria trova una conclusione, viene eseguito il
+    runner Nested e viene restituita al massimo una deduzione.
     """
     mode = _normalise_analysis_mode(mode)
 
@@ -276,86 +682,60 @@ def collect_moves_for_analysis(
         raise ValueError(
             "profile_difficulty_window deve essere maggiore o uguale a 0."
         )
+
     if (
         isinstance(max_moves_per_technique, bool)
         or int(max_moves_per_technique) < 1
     ):
-        raise ValueError("max_moves_per_technique deve essere positivo.")
+        raise ValueError(
+            "max_moves_per_technique deve essere positivo."
+        )
+
     max_moves_per_technique = int(max_moves_per_technique)
+    ordinary_runners = technique_registry.ORDINARY_RUNNERS
+    nested_runners = technique_registry.NESTED_RUNNERS
 
-    moves = []
-    best_diff = None
-    scanned_function_count = 0
-    stopped_early = False
-    stop_before_min_difficulty = None
-    capped_techniques = set()
+    moves, ordinary_metadata = _collect_from_runners(
+        state,
+        ordinary_runners,
+        mode=mode,
+        profile_difficulty_window=profile_difficulty_window,
+        canonical_transform=canonical_transform,
+        max_results=max_moves_per_technique,
+    )
 
-    for min_d, fn in st.TECHNIQUE_FUNCS:
-        if best_diff is not None:
-            if mode == "superficial":
-                difficulty_limit = best_diff
-            elif mode == "profile":
-                difficulty_limit = (
-                    best_diff + profile_difficulty_window
-                )
-            else:
-                difficulty_limit = None
+    nested_fallback_used = False
+    inventory_censored = ordinary_metadata["result_limit_reached"]
+    nested_metadata = {
+        "best_difficulty": None,
+        "scanned_runner_count": 0,
+        "stopped_early": False,
+        "stop_before_min_difficulty": None,
+        "capped_techniques": [],
+        "result_limit_reached": False,
+    }
 
-            if (
-                difficulty_limit is not None
-                and float(min_d) > difficulty_limit
-            ):
-                stopped_early = True
-                stop_before_min_difficulty = float(min_d)
-                break
-
-        scanned_function_count += 1
-        found = _call_technique_with_limit(
-            fn,
+    if not moves and nested_runners:
+        nested_fallback_used = True
+        inventory_censored = True
+        moves, nested_metadata = _collect_from_runners(
             state,
-            max_results=max_moves_per_technique,
+            nested_runners,
+            mode="deep",
+            profile_difficulty_window=profile_difficulty_window,
+            canonical_transform=canonical_transform,
+            max_results=MAX_NESTED_MOVES_PER_STEP,
         )
 
-        if not found:
-            continue
-
-        unique = {}
-        for move in found:
-            signature = (
-                move.get("technique"),
-                _move_outcome_signature(move),
-            )
-            unique.setdefault(signature, move)
-
-        ordered = sorted(
-            unique.values(),
-            key=lambda move: _move_sort_key(
-                move,
-                canonical_transform,
-            ),
-        )
-        counts = {}
-        limited = []
-        for move in ordered:
-            technique = move.get("technique", "Sconosciuta")
-            count = counts.get(technique, 0)
-            if count >= max_moves_per_technique:
-                capped_techniques.add(technique)
-                continue
-            counts[technique] = count + 1
-            limited.append(move)
-
-        found = limited
-        moves.extend(found)
-        local_min = min(
-            _difficulty_score(move)
-            for move in found
-        )
-        best_diff = (
-            local_min
-            if best_diff is None
-            else min(best_diff, local_min)
-        )
+    active_metadata = (
+        nested_metadata
+        if nested_fallback_used
+        else ordinary_metadata
+    )
+    capped_techniques = sorted(set(
+        ordinary_metadata["capped_techniques"]
+        + nested_metadata["capped_techniques"]
+    ))
 
     metadata = {
         "mode": mode,
@@ -364,36 +744,69 @@ def collect_moves_for_analysis(
             if mode == "profile"
             else None
         ),
-        "best_difficulty": best_diff,
-        "scanned_function_count": scanned_function_count,
-        "total_function_count": len(st.TECHNIQUE_FUNCS),
-        "stopped_early": stopped_early,
-        "complete_inventory": not stopped_early,
-        "stop_before_min_difficulty": stop_before_min_difficulty,
+        "best_difficulty": active_metadata["best_difficulty"],
+        "scanned_runner_count": (
+            ordinary_metadata["scanned_runner_count"]
+            + nested_metadata["scanned_runner_count"]
+        ),
+        "total_runner_count": len(
+            technique_registry.TECHNIQUE_RUNNERS
+        ),
+        "ordinary_runner_count": len(ordinary_runners),
+        "nested_runner_count": len(nested_runners),
+        "complete_tree_runner_count": len(
+            technique_registry.COMPLETE_TREE_RUNNERS
+        ),
+        "stopped_early": ordinary_metadata["stopped_early"],
+        "stop_before_min_difficulty": ordinary_metadata[
+            "stop_before_min_difficulty"
+        ],
+        "all_ordinary_runners_scanned": (
+            not ordinary_metadata["stopped_early"]
+        ),
+        "complete_inventory": (
+            not ordinary_metadata["stopped_early"]
+            and not capped_techniques
+            and not inventory_censored
+        ),
+        "inventory_censored": inventory_censored,
+        "result_limit_reached": (
+            ordinary_metadata["result_limit_reached"]
+            or nested_metadata["result_limit_reached"]
+        ),
+        "nested_fallback_used": nested_fallback_used,
+        "fallback_reason": (
+            "no_ordinary_move"
+            if nested_fallback_used
+            else None
+        ),
         "max_moves_per_technique": max_moves_per_technique,
-        "capped_techniques": sorted(capped_techniques),
+        "max_logic_engine_moves_per_technique": (
+            MAX_LOGIC_ENGINE_MOVES_PER_TECHNIQUE
+        ),
+        "max_nested_moves_per_step": MAX_NESTED_MOVES_PER_STEP,
+        "capped_techniques": capped_techniques,
     }
 
     return moves, metadata
 
 
 def collect_all_moves(state, early_stop=True):
-    """
-    Interfaccia storica mantenuta per compatibilita.
-
-    ``early_stop=True`` equivale a ``superficial``;
-    ``early_stop=False`` equivale a ``deep``.
-    """
+    """Interfaccia compatibile per la raccolta delle mosse."""
     mode = "superficial" if early_stop else "deep"
     moves, _ = collect_moves_for_analysis(state, mode=mode)
     return moves
 
 
 def collect_all_moves_full(state):
-    """Restituisce l inventario completo di tutte le tecniche applicabili."""
+    """Interroga tutte le tecniche ordinarie, con Nested di fallback."""
     moves, _ = collect_moves_for_analysis(state, mode="deep")
     return moves
 
+
+# ---------------------------------------------------------------------------
+# Inventario e applicazione
+# ---------------------------------------------------------------------------
 
 
 def _effective_nearby_move_count(
@@ -401,28 +814,14 @@ def _effective_nearby_move_count(
     best_difficulty,
     max_moves=MAX_MOVES_PER_TECHNIQUE,
 ):
-    """
-    Calcola il numero effettivo di mosse accessibili.
-
-    Ogni tecnica ha già prodotto al massimo max_moves esiti.
-
-    Gli esiti distinti vengono ordinati per difficoltà SE.
-    Le prime max_moves mosse hanno peso di posizione pieno.
-    Le successive continuano a contribuire, ma con peso
-    rapidamente decrescente.
-
-    Il contributo dipende anche dalla distanza SE rispetto
-    alla mossa più semplice disponibile.
-    """
+    """Calcola il numero pesato di conclusioni vicine alla migliore."""
     best_difficulty = float(best_difficulty)
     max_moves = max(int(max_moves), 1)
-
     outcome_difficulties = {}
 
     for move in moves:
         outcome = _move_outcome_signature(move)
         difficulty = _difficulty_score(move)
-
         previous = outcome_difficulties.get(outcome)
 
         if previous is None or difficulty < previous:
@@ -431,7 +830,6 @@ def _effective_nearby_move_count(
     ordered_difficulties = sorted(
         outcome_difficulties.values()
     )
-
     contributions = []
 
     for position, difficulty in enumerate(
@@ -442,7 +840,6 @@ def _effective_nearby_move_count(
             0.0,
             difficulty - best_difficulty,
         )
-
         se_weight = 2.0 ** (
             -se_distance
             / difficulty_model.MOVE_DISCOVERY_SE_HALF_LIFE
@@ -452,7 +849,6 @@ def _effective_nearby_move_count(
             position_weight = 1.0
         else:
             extra_position = position - max_moves
-
             position_weight = (
                 difficulty_model
                 .MOVE_DISCOVERY_EXTRA_MOVE_DECAY
@@ -467,17 +863,26 @@ def _effective_nearby_move_count(
         1.0,
         math.fsum(contributions),
     )
-       
-       
+
+
 def _build_move_inventory(moves, best_difficulty):
-    """Riassume soltanto gli esiti distinti utili a rating e heatmap."""
+    """Riassume gli esiti distinti utili a rating e heatmap."""
     all_outcomes = set()
     frontier_outcomes = set()
     by_technique = {}
     frontier_by_technique = {}
+    technique_ranks = {}
 
     for move in moves:
-        technique = move.get("technique", "Sconosciuta")
+        definition = _move_definition(move)
+        technique = move.get("technique", definition.canonical_name)
+        technique_ranks.setdefault(
+            technique,
+            _TECHNIQUE_RANK_BY_ID.get(
+                definition.id,
+                len(_TECHNIQUE_RANK_BY_ID),
+            ),
+        )
         outcome = _move_outcome_signature(move)
         all_outcomes.add(outcome)
         by_technique.setdefault(technique, set()).add(outcome)
@@ -501,30 +906,25 @@ def _build_move_inventory(moves, best_difficulty):
             technique: len(outcomes)
             for technique, outcomes in sorted(
                 by_technique.items(),
-                key=lambda item: _TECHNIQUE_RANK.get(
-                    item[0],
-                    len(_TECHNIQUE_RANK),
-                ),
+                key=lambda item: technique_ranks[item[0]],
             )
         },
         "frontier_by_technique": {
             technique: len(outcomes)
             for technique, outcomes in sorted(
                 frontier_by_technique.items(),
-                key=lambda item: _TECHNIQUE_RANK.get(
-                    item[0],
-                    len(_TECHNIQUE_RANK),
-                ),
+                key=lambda item: technique_ranks[item[0]],
             )
         },
     }
 
-def apply_move(state, move):
-    for r, c, v in move["placements"]:
-        state.place(r, c, v)
 
-    for r, c, v in move["eliminations"]:
-        state.eliminate(r, c, v)
+def apply_move(state, move):
+    for row, column, value in move.get("placements", ()):
+        state.place(row, column, value)
+
+    for row, column, value in move.get("eliminations", ()):
+        state.eliminate(row, column, value)
 
 
 def solve_and_log(
@@ -534,25 +934,15 @@ def solve_and_log(
     analysis_mode=DEFAULT_ANALYSIS_MODE,
     profile_difficulty_window=DEFAULT_PROFILE_DIFFICULTY_WINDOW,
 ):
-    """
-    Risolve il Sudoku e registra l inventario logico di ogni stato.
-
-    ``analysis_mode`` controlla la profondita dell inventario:
-    ``profile`` e il default ed esplora una fascia configurabile sopra la
-    difficolta minima; ``deep`` interroga tutte le tecniche; ``superficial``
-    registra soltanto la frontiera minima.
-
-    Lo stato finale, la mossa scelta e il grading non dipendono dalla modalita:
-    cambia solo la quantita di informazione analitica raccolta.
-    """
+    """Risolve il Sudoku e registra l'inventario logico di ogni stato."""
     analysis_mode = _normalise_analysis_mode(analysis_mode)
-
     state = sds.SudokuState(grid)
     canonical_transform = sc.canonicalize_details(
         state.grid
     ).transform
     chain = []
     step_no = 0
+
     while not state.is_solved() and step_no < max_steps:
         if state.is_stuck():
             return state, chain, "contradiction"
@@ -573,20 +963,14 @@ def solve_and_log(
                 canonical_transform,
             )
         )
-
         chosen = moves[0]
-
-        # Il rating canonico governa esclusivamente il comportamento del
-        # solver. Il rating tecnico effettivo serve soltanto a grading,
-        # visualizzazione e carico risolutivo.
-        chosen_score = _difficulty_score(chosen)
-        technical_score = _technical_difficulty_score(chosen)
+        base_score = _base_difficulty(chosen)
+        technical_score = _difficulty_score(chosen)
 
         inventory = _build_move_inventory(
             moves,
-            best_difficulty=chosen_score,
+            best_difficulty=technical_score,
         )
-        
         available_move_count = max(
             int(inventory["available_move_count"]),
             1,
@@ -597,22 +981,21 @@ def solve_and_log(
         )
         effective_move_count = _effective_nearby_move_count(
             moves=moves,
-            best_difficulty=chosen_score,
+            best_difficulty=technical_score,
             max_moves=MAX_MOVES_PER_TECHNIQUE,
         )
-        
         move_discovery_difficulty = (
             difficulty_model.step_move_discovery_difficulty(
                 effective_move_count=effective_move_count,
                 max_moves=MAX_MOVES_PER_TECHNIQUE,
             )
         )
+        discovery_is_upper_bound = bool(
+            collection_metadata["inventory_censored"]
+        )
         effective_move_count = round(effective_move_count, 2)
-        
-        resolution_load = (
-            difficulty_model.step_resolution_load(
-                technical_score
-            )
+        resolution_load = difficulty_model.step_resolution_load(
+            technical_score
         )
 
         apply_move(state, chosen)
@@ -621,22 +1004,36 @@ def solve_and_log(
         record = {
             key: chosen[key]
             for key in (
+                "technique_id",
                 "technique",
                 "family",
+                "strategy",
+                "parent_id",
+                "se_equivalent_parent_id",
+                "rating_kind",
+                "detector_id",
+                "engine_type",
+                "fallback_tier",
                 "description",
                 "placements",
                 "eliminations",
                 "highlight",
                 "logic",
+                "difficulty_extra",
+                "difficulty_metrics",
+                "proof_count",
+                "conclusion_count",
             )
             if key in chosen
         }
         record["step"] = step_no
         record["grid_after"] = state.grid.copy()
-        record["base_difficulty"] = chosen_score
+        record["base_difficulty"] = base_score
         record["technical_difficulty"] = technical_score
         record["resolution_load"] = resolution_load
-        record["move_discovery_difficulty"] = move_discovery_difficulty
+        record["move_discovery_difficulty"] = (
+            move_discovery_difficulty
+        )
         record["available_move_count"] = available_move_count
         record["frontier_move_count"] = frontier_move_count
         record["effective_move_count"] = effective_move_count
@@ -646,6 +1043,19 @@ def solve_and_log(
         record["frontier_by_technique"] = inventory[
             "frontier_by_technique"
         ]
+        record["nested_fallback_used"] = collection_metadata[
+            "nested_fallback_used"
+        ]
+        record["move_inventory_censored"] = collection_metadata[
+            "inventory_censored"
+        ]
+        record["effective_move_count_is_lower_bound"] = (
+            discovery_is_upper_bound
+        )
+        record["move_discovery_difficulty_is_upper_bound"] = (
+            discovery_is_upper_bound
+        )
+
         if collection_metadata.get("capped_techniques"):
             record["capped_techniques"] = collection_metadata[
                 "capped_techniques"
@@ -654,15 +1064,20 @@ def solve_and_log(
         chain.append(record)
 
         if verbose:
+            fallback = (
+                ", fallback Nested"
+                if collection_metadata["nested_fallback_used"]
+                else ""
+            )
             print(
                 f"[{step_no:03d}] "
-                f"{chosen['technique']:<30} "
+                f"{chosen['technique']:<36} "
                 f"(SE {technical_score:.1f}"
                 + (
-                    f", base {chosen_score:.1f}"
+                    f", base {base_score:.1f}"
                     if not math.isclose(
                         technical_score,
-                        chosen_score,
+                        base_score,
                         rel_tol=0.0,
                         abs_tol=1e-9,
                     )
@@ -673,13 +1088,16 @@ def solve_and_log(
                 f"{move_discovery_difficulty:.2f}, "
                 f"mosse effettive {effective_move_count:.2f}, "
                 f"mosse minime {frontier_move_count}, "
-                f"modo {analysis_mode}) "
+                f"modo {analysis_mode}{fallback}) "
                 f"{chosen['description']}"
             )
 
-    status = "solved" if state.is_solved() else "stuck"
+    status = (
+        "solved"
+        if state.is_solved()
+        else "step_limit"
+    )
     return state, chain, status
-
 
 
 def solve_with_naked_singles(grid, max_steps=81):
@@ -1199,17 +1617,16 @@ def grade_difficulty(chain, status):
             "resolution_load_label": "N/A",
             "move_discovery_difficulty": 0.0,
             "move_discovery_difficulty_label": "N/A",
+            "move_discovery_difficulty_is_upper_bound": False,
             "step_count": 0,
+            "nested_step_count": 0,
         }
 
     difficulty_scores = [
         float(
             move.get(
                 "technical_difficulty",
-                difficulty_model.TECHNIQUE_DIFFICULTY.get(
-                    move["technique"],
-                    99.0,
-                ),
+                _base_difficulty(move),
             )
         )
         for move in chain
@@ -1220,7 +1637,6 @@ def grade_difficulty(chain, status):
             technical_difficulty
         )
     )
-    
     resolution_load = (
         difficulty_model.aggregate_resolution_load(
             difficulty_scores
@@ -1244,10 +1660,7 @@ def grade_difficulty(chain, status):
                 difficulty_model.step_move_discovery_difficulty(
                     effective_move_count=move.get(
                         "effective_move_count",
-                        move.get(
-                            "frontier_move_count",
-                            1,
-                        ),
+                        move.get("frontier_move_count", 1),
                     ),
                     max_moves=MAX_MOVES_PER_TECHNIQUE,
                 ),
@@ -1265,6 +1678,14 @@ def grade_difficulty(chain, status):
         difficulty_model.move_discovery_label(
             move_discovery_difficulty
         )
+    )
+    nested_step_count = sum(
+        bool(move.get("nested_fallback_used"))
+        for move in chain
+    )
+    move_discovery_is_upper_bound = any(
+        bool(move.get("move_discovery_difficulty_is_upper_bound"))
+        for move in chain
     )
 
     return {
@@ -1286,9 +1707,13 @@ def grade_difficulty(chain, status):
         "move_discovery_difficulty_label": (
             move_discovery_difficulty_label
         ),
+        "move_discovery_difficulty_is_upper_bound": (
+            move_discovery_is_upper_bound
+        ),
         "step_count": len(chain),
+        "nested_step_count": nested_step_count,
     }
-    
+
 
 def analyse_puzzle(
     grid,
@@ -1298,25 +1723,21 @@ def analyse_puzzle(
     max_steps=10000,
     verbose=False,
 ):
-    """
-    Risolve, valuta e confeziona l analisi completa del puzzle.
-
-    La modalita predefinita e ``profile`` con finestra 1.5. ``deep`` produce
-    l'inventario totale e ``superficial`` conserva soltanto la frontiera,
-    senza cambiare la strategia di scelta delle mosse.
-    """
+    """Valida, risolve, valuta e confeziona l'analisi del puzzle."""
     analysis_mode = _normalise_analysis_mode(analysis_mode)
     original = sds.SudokuState(grid).grid.copy()
     solution_count = sds.count_solutions(original, limit=2)
+
     if solution_count == 0:
         raise ValueError("Il Sudoku non ha alcuna soluzione.")
+
     if solution_count > 1:
         raise ValueError(
-            "Il Sudoku deve avere una soluzione unica; ne esiste più di una."
+            "Il Sudoku deve avere una soluzione unica; "
+            "ne esiste piu' di una."
         )
 
     solved_grid = sds.backtracking_solve(original)
-
     state, chain, status = solve_and_log(
         grid,
         max_steps=max_steps,

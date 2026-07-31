@@ -2,15 +2,17 @@
 
 Il modulo lavora sui *letterali candidato* ``(riga, colonna, valore, stato)``:
 ``stato=True`` significa che il candidato e' assunto vero, ``False`` che e'
-assunto falso.  Le implicazioni statiche sono di due tipi:
+assunto falso. Le implicazioni statiche sono di due tipi:
 
 * X: stesso valore in celle che si vedono;
 * Y: valori diversi nella stessa cella.
 
 Le propagazioni dinamiche applicano le esclusioni a una copia locale dei
-candidati e scoprono quindi nuovi single.  I livelli Plus aggiungono locking,
-coppie e X-Wing; il livello nested puo' usare una catena statica come
-sotto-prova.  Nessuna funzione modifica il ``SudokuState`` ricevuto.
+candidati e scoprono nuovi single. I livelli Plus aggiungono locking, coppie
+e X-Wing. La Nested Forcing Chain usa invece una ricerca ricorsiva completa
+per casi, senza limiti interni di profondita', nodi o rami. Il limite riguarda
+soltanto quante deduzioni distinte vengono restituite. Nessuna funzione
+modifica lo ``SudokuState`` ricevuto.
 
 L'API pubblica e' intenzionalmente piccola: ``find_logic_deductions``
 restituisce deduzioni neutrali. ``sudoku_app.core.techniques`` le converte nel
@@ -30,9 +32,27 @@ from .data_structure import UNITS, UNIT_KINDS, peers
 
 Candidate = tuple[int, int, int]
 Literal = tuple[int, int, int, bool]
-DEFAULT_MAX_DEDUCTIONS_PER_TECHNIQUE = 15
-# Alias storico mantenuto per compatibilità con eventuali import esterni.
-MAX_DEDUCTIONS_PER_TECHNIQUE = DEFAULT_MAX_DEDUCTIONS_PER_TECHNIQUE
+
+# Limiti sul numero di deduzioni restituite. Non limitano mai la
+# profondita', i nodi o i rami della ricerca Nested completa.
+MAX_DEDUCTIONS_PER_TECHNIQUE = 16 # limite massimo non valicabile
+MAX_NESTED_DEDUCTIONS = 4 # limite massimo non valicabile
+MAX_STATIC_CYCLE_EDGES = 50
+STORE_COMPLETE_NESTED_PROOF = False
+
+if not 1 <= MAX_NESTED_DEDUCTIONS <= MAX_DEDUCTIONS_PER_TECHNIQUE:
+    raise ValueError(
+        "MAX_NESTED_DEDUCTIONS deve essere compreso tra 1 e "
+        "MAX_DEDUCTIONS_PER_TECHNIQUE."
+    )
+
+DEFAULT_MAX_DEDUCTIONS_PER_TECHNIQUE = MAX_DEDUCTIONS_PER_TECHNIQUE
+
+# Alias mantenuti per compatibilita' con eventuali import esistenti.
+MAX_TECHNIQUES = MAX_DEDUCTIONS_PER_TECHNIQUE
+MAX_NESTED_TECHNIQUES = MAX_NESTED_DEDUCTIONS
+
+_NESTED_TECHNIQUE = "Nested Forcing Chain"
 
 
 # Le tecniche restano raggruppate per le preparazioni esplicite di batch.
@@ -78,6 +98,31 @@ for _unit_index, _unit in enumerate(UNITS):
 _UNITS_BY_CELL = {
     cell: tuple(indexes) for cell, indexes in _UNITS_BY_CELL.items()
 }
+
+_UNIT_INDEXES = tuple(
+    tuple(row * 9 + column for row, column in unit)
+    for unit in UNITS
+)
+_PEER_INDEXES = tuple(
+    tuple(sorted(
+        peer_row * 9 + peer_column
+        for peer_row, peer_column in peers(row, column)
+    ))
+    for row in range(9)
+    for column in range(9)
+)
+_DIGIT_BITS = tuple(1 << value for value in range(1, 10))
+
+
+def _visible_unit_reference(unit_index):
+    """Restituisce nome italiano e indice 1-9 della casa Sudoku."""
+    kind = UNIT_KINDS[unit_index]
+
+    if kind == "row":
+        return "riga", unit_index + 1
+    if kind == "col":
+        return "colonna", unit_index - 8
+    return "box", unit_index - 17
 
 
 def _literal(candidate: Candidate, is_on: bool) -> Literal:
@@ -272,7 +317,7 @@ class StaticImplicationGraph:
         allowed: frozenset[str],
         required: frozenset[str] = frozenset(),
         minimum_edges: int = 1,
-        maximum_edges: int = 16,
+        maximum_edges: int | None = None,
     ):
         """Cammino minimo che rispetta i tipi di collegamento richiesti."""
         start_state = source, frozenset()
@@ -299,7 +344,7 @@ class StaticImplicationGraph:
                 ]
                 return literals, reasons
 
-            if depth >= maximum_edges:
+            if maximum_edges is not None and depth >= maximum_edges:
                 continue
 
             for edge in self.edges(current, allowed):
@@ -332,7 +377,7 @@ class StaticImplicationGraph:
         *,
         allowed: frozenset[str],
         required: frozenset[str],
-        maximum_edges: int = 14,
+        maximum_edges: int | None = MAX_STATIC_CYCLE_EDGES,
     ):
         """Enumera cicli semplici alternati, in ordine deterministico.
 
@@ -347,7 +392,10 @@ class StaticImplicationGraph:
             visited = {start}
 
             def visit(current: Literal):
-                if len(path_reasons) >= maximum_edges:
+                if (
+                    maximum_edges is not None
+                    and len(path_reasons) >= maximum_edges
+                ):
                     return
                 for edge in self.edges(current, allowed):
                     target = edge.target
@@ -614,10 +662,6 @@ class DynamicPropagator:
                 break
 
             advanced = self._advanced_eliminations(work)
-            nested = []
-            if advanced_level >= 2 and not advanced:
-                nested = self._nested_implications(work)
-
             pending = []
             for candidate, rule, support in advanced:
                 # Una regola già applicabile prima dell'assunzione non è una
@@ -650,16 +694,6 @@ class DynamicPropagator:
                         rule,
                         frozenset(parent_features | {"advanced"}),
                     ))
-            for literal, path in nested:
-                candidate = _candidate(literal)
-                if literal[3] or candidate[2] in work.get(candidate[:2], ()):
-                    pending.append((
-                        literal,
-                        (source,),
-                        "nested-chain",
-                        frozenset({"nested"}),
-                    ))
-
             if not pending:
                 break
             queue.extend(pending)
@@ -794,40 +828,508 @@ class DynamicPropagator:
             for candidate, (rule, support) in sorted(found.items())
         ]
 
-    def _nested_implications(self, work):
-        """Trova sotto-catene statiche nel ramo dinamico corrente."""
-        graph = StaticImplicationGraph(work)
-        result = []
-        for candidate in graph.all_candidates:
-            for source_state in (True, False):
-                source = _literal(candidate, source_state)
-                target = _opposite(source)
-                path_data = graph.shortest_path(
-                    source,
-                    target,
-                    allowed=frozenset({"peer", "x", "y"}),
-                    required=frozenset({"x", "y"}),
-                    minimum_edges=3,
-                    maximum_edges=12,
+
+@dataclass(frozen=True)
+class _CompleteNestedProofNode:
+    """Nodo del DAG di prova prodotto dalla ricerca nested completa."""
+
+    assumption: Literal | None = None
+    propagations: tuple[Literal, ...] = ()
+    contradiction: bool = False
+    contradiction_reason: str | None = None
+    branch_cell: tuple[int, int] | None = None
+    children: tuple["_CompleteNestedProofNode", ...] = ()
+
+
+def _mask_values(mask: int):
+    for value in range(1, 10):
+        if mask & (1 << value):
+            yield value
+
+
+def _single_mask_value(mask: int) -> int | None:
+    if mask <= 0 or mask & (mask - 1):
+        return None
+    return mask.bit_length() - 1
+
+
+def _nested_state_masks(grid, candidates) -> tuple[int, ...]:
+    masks = []
+
+    for row in range(9):
+        for column in range(9):
+            solved_value = int(grid[row, column])
+
+            if solved_value:
+                masks.append(1 << solved_value)
+                continue
+
+            mask = 0
+            for value in candidates.get((row, column), ()):
+                mask |= 1 << int(value)
+            masks.append(mask)
+
+    return tuple(masks)
+
+
+def _technique_result_limit(technique, max_results):
+    """Applica i limiti di output senza limitare la ricerca interna."""
+    requested = _normalise_max_results(max_results)
+    hard_limit = (
+        MAX_NESTED_DEDUCTIONS
+        if technique == _NESTED_TECHNIQUE
+        else MAX_DEDUCTIONS_PER_TECHNIQUE
+    )
+
+    if requested is None:
+        return hard_limit
+
+    return min(requested, hard_limit)
+
+
+class _CompleteNestedSearch:
+    """Ricerca completa per contraddizione sui vincoli Sudoku.
+
+    La ricerca non impone limiti di profondita', nodi, rami o propagazioni.
+    Termina perche' ogni ramo assegna almeno una cella e lo spazio degli stati
+    Sudoku e' finito. Le cache memorizzano stati soddisfacibili e prove
+    contraddittorie gia' calcolate.
+    """
+
+    def __init__(self, grid, candidates):
+        self.initial_masks = _nested_state_masks(grid, candidates)
+        self._solution_cache: dict[tuple[int, ...], tuple[int, ...] | None] = {}
+        self._proof_cache: dict[
+            tuple[int, ...],
+            _CompleteNestedProofNode | None,
+        ] = {}
+
+    @staticmethod
+    def _choose_branch_cell(masks: tuple[int, ...]) -> int | None:
+        choices = (
+            (mask.bit_count(), index)
+            for index, mask in enumerate(masks)
+            if mask.bit_count() > 1
+        )
+        return min(choices, default=(0, None))[1]
+
+    @staticmethod
+    def _apply_assumption(work, assumption, note, queue):
+        row, column, value, is_on = assumption
+        index = row * 9 + column
+        bit = 1 << value
+        old_mask = work[index]
+
+        if is_on:
+            if not old_mask & bit:
+                return (
+                    f"R{row + 1}C{column + 1} non ammette il valore {value}."
                 )
-                if path_data:
-                    path, _ = path_data
-                    baseline = self.initial_graph.shortest_path(
-                        source,
-                        target,
-                        allowed=frozenset({"peer", "x", "y"}),
-                        required=frozenset({"x", "y"}),
-                        minimum_edges=3,
-                        maximum_edges=12,
-                    )
-                    if baseline:
+            new_mask = bit
+        else:
+            if not old_mask & bit:
+                return None
+            new_mask = old_mask & ~bit
+
+        if new_mask == old_mask:
+            return None
+
+        for removed_value in _mask_values(old_mask & ~new_mask):
+            note((row, column, removed_value, False))
+
+        work[index] = new_mask
+
+        if not new_mask:
+            return (
+                f"R{row + 1}C{column + 1} resta senza candidati."
+            )
+
+        if _single_mask_value(new_mask) is not None:
+            queue.append(index)
+            note((row, column, _single_mask_value(new_mask), True))
+
+        return None
+
+    def _propagate(self, masks, assumption=None, *, record_trace=True):
+        work = list(masks)
+        trace = []
+        seen_trace = set()
+        queue = deque()
+        processed_singletons = set()
+
+        def note(literal):
+            if not record_trace or literal == assumption or literal in seen_trace:
+                return
+            seen_trace.add(literal)
+            trace.append(literal)
+
+        for index, mask in enumerate(work):
+            if _single_mask_value(mask) is not None:
+                queue.append(index)
+
+        if assumption is not None:
+            contradiction = self._apply_assumption(
+                work,
+                assumption,
+                note,
+                queue,
+            )
+            if contradiction is not None:
+                return None, tuple(trace), contradiction
+
+        while True:
+            while queue:
+                index = queue.popleft()
+                mask = work[index]
+                value = _single_mask_value(mask)
+
+                if value is None:
+                    continue
+
+                singleton_key = index, mask
+                if singleton_key in processed_singletons:
+                    continue
+                processed_singletons.add(singleton_key)
+
+                row, column = divmod(index, 9)
+                bit = 1 << value
+
+                for peer_index in _PEER_INDEXES[index]:
+                    peer_mask = work[peer_index]
+                    if not peer_mask & bit:
                         continue
-                    result.append((target, path))
-            if result:
-                # Una sotto-prova per ciclo e' sufficiente a proseguire la
-                # propagazione; le iterazioni successive possono trovarne altre.
+
+                    peer_row, peer_column = divmod(peer_index, 9)
+                    new_mask = peer_mask & ~bit
+                    work[peer_index] = new_mask
+                    note((peer_row, peer_column, value, False))
+
+                    if not new_mask:
+                        return (
+                            None,
+                            tuple(trace),
+                            f"R{peer_row + 1}C{peer_column + 1} resta "
+                            "senza candidati.",
+                        )
+
+                    remaining = _single_mask_value(new_mask)
+                    if remaining is not None:
+                        note((peer_row, peer_column, remaining, True))
+                        queue.append(peer_index)
+
+            hidden_single_found = False
+
+            for unit_index, unit in enumerate(_UNIT_INDEXES):
+                for value, bit in zip(range(1, 10), _DIGIT_BITS):
+                    positions = [
+                        index for index in unit
+                        if work[index] & bit
+                    ]
+
+                    if not positions:
+                        unit_name, visible_index = _visible_unit_reference(
+                            unit_index
+                        )
+                        return (
+                            None,
+                            tuple(trace),
+                            f"Il valore {value} non ha posizioni nella "
+                            f"{unit_name} {visible_index}.",
+                        )
+
+                    if len(positions) != 1:
+                        continue
+
+                    index = positions[0]
+                    if work[index] == bit:
+                        continue
+
+                    old_mask = work[index]
+                    row, column = divmod(index, 9)
+
+                    for removed_value in _mask_values(old_mask & ~bit):
+                        note((row, column, removed_value, False))
+
+                    work[index] = bit
+                    note((row, column, value, True))
+                    queue.append(index)
+                    hidden_single_found = True
+
+            if not hidden_single_found:
                 break
-        return result
+
+        return tuple(work), tuple(trace), None
+
+    def _find_solution(self, masks):
+        propagated, _, contradiction = self._propagate(
+            masks,
+            record_trace=False,
+        )
+
+        if contradiction is not None:
+            return None
+
+        cached = self._solution_cache.get(propagated, ...)
+        if cached is not ...:
+            return cached
+
+        branch_index = self._choose_branch_cell(propagated)
+
+        if branch_index is None:
+            self._solution_cache[propagated] = propagated
+            return propagated
+
+        for value in _mask_values(propagated[branch_index]):
+            child = list(propagated)
+            child[branch_index] = 1 << value
+            solution = self._find_solution(tuple(child))
+
+            if solution is not None:
+                self._solution_cache[propagated] = solution
+                return solution
+
+        self._solution_cache[propagated] = None
+        return None
+
+    @staticmethod
+    def _attach_context(core, assumption, propagations):
+        return _CompleteNestedProofNode(
+            assumption=assumption,
+            propagations=propagations,
+            contradiction=core.contradiction,
+            contradiction_reason=core.contradiction_reason,
+            branch_cell=core.branch_cell,
+            children=core.children,
+        )
+
+    def _prove_unsatisfiable(self, masks, assumption=None):
+        propagated, trace, contradiction = self._propagate(
+            masks,
+            assumption=assumption,
+            record_trace=True,
+        )
+
+        if contradiction is not None:
+            return _CompleteNestedProofNode(
+                assumption=assumption,
+                propagations=trace,
+                contradiction=True,
+                contradiction_reason=contradiction,
+            )
+
+        cached = self._proof_cache.get(propagated, ...)
+        if cached is not ...:
+            if cached is None:
+                return None
+            return self._attach_context(cached, assumption, trace)
+
+        branch_index = self._choose_branch_cell(propagated)
+
+        if branch_index is None:
+            self._proof_cache[propagated] = None
+            return None
+
+        row, column = divmod(branch_index, 9)
+        children = []
+
+        for value in _mask_values(propagated[branch_index]):
+            child_assumption = (row, column, value, True)
+            child_proof = self._prove_unsatisfiable(
+                propagated,
+                assumption=child_assumption,
+            )
+
+            if child_proof is None:
+                self._proof_cache[propagated] = None
+                return None
+
+            children.append(child_proof)
+
+        core = _CompleteNestedProofNode(
+            branch_cell=(row, column),
+            children=tuple(children),
+        )
+        self._proof_cache[propagated] = core
+        return self._attach_context(core, assumption, trace)
+
+    @staticmethod
+    def _longest_chain(node):
+        local = []
+
+        if node.assumption is not None:
+            local.append(node.assumption)
+        local.extend(node.propagations)
+
+        if node.contradiction or not node.children:
+            return local
+
+        child_chain = max(
+            (
+                _CompleteNestedSearch._longest_chain(child)
+                for child in node.children
+            ),
+            key=len,
+            default=[],
+        )
+        return local + child_chain
+
+    @staticmethod
+    def _proof_metrics(node):
+        def visit(current):
+            local_length = len(current.propagations)
+            local_depth = 0
+
+            if current.assumption is not None:
+                local_length += 1
+                local_depth = 1
+
+            if current.contradiction or not current.children:
+                return {
+                    "chain_count": 1,
+                    "node_count": max(local_length, 1),
+                    "max_chain_length": local_length,
+                    "nested_depth": local_depth,
+                    "branch_count": 0,
+                }
+
+            child_metrics = [visit(child) for child in current.children]
+
+            return {
+                "chain_count": sum(
+                    item["chain_count"] for item in child_metrics
+                ),
+                "node_count": local_length + 1 + sum(
+                    item["node_count"] for item in child_metrics
+                ),
+                "max_chain_length": local_length + max(
+                    item["max_chain_length"] for item in child_metrics
+                ),
+                "nested_depth": local_depth + max(
+                    item["nested_depth"] for item in child_metrics
+                ),
+                "branch_count": len(current.children) + sum(
+                    item["branch_count"] for item in child_metrics
+                ),
+            }
+
+        return visit(node)
+
+    @staticmethod
+    def _serialize_proof(root):
+        nodes = []
+        node_ids = {}
+
+        def visit(node):
+            identity = id(node)
+            if identity in node_ids:
+                return node_ids[identity]
+
+            node_id = len(nodes)
+            node_ids[identity] = node_id
+            nodes.append(None)
+            child_ids = [visit(child) for child in node.children]
+
+            record = {
+                "id": node_id,
+                "assumption": (
+                    _literal_record(node.assumption)
+                    if node.assumption is not None
+                    else None
+                ),
+                "propagations": [
+                    _literal_record(literal)
+                    for literal in node.propagations
+                ],
+                "contradiction": node.contradiction,
+                "contradiction_reason": node.contradiction_reason,
+                "branch_cell": (
+                    {
+                        "row": node.branch_cell[0],
+                        "column": node.branch_cell[1],
+                    }
+                    if node.branch_cell is not None
+                    else None
+                ),
+                "children": child_ids,
+            }
+            nodes[node_id] = record
+            return node_id
+
+        root_id = visit(root)
+        return {
+            "kind": "complete-nested-proof-dag",
+            "root": root_id,
+            "nodes": nodes,
+        }
+
+    def find_deductions(self, max_results):
+        collector = _DeductionCollector(max_results)
+        solution = self._find_solution(self.initial_masks)
+
+        if solution is None:
+            return collector.results
+
+        branch_cells = sorted(
+            (
+                (mask.bit_count(), index)
+                for index, mask in enumerate(self.initial_masks)
+                if mask.bit_count() > 1
+            )
+        )
+
+        for _, index in branch_cells:
+            if collector.full:
+                break
+
+            row, column = divmod(index, 9)
+            solution_value = _single_mask_value(solution[index])
+
+            for value in _mask_values(self.initial_masks[index]):
+                if collector.full:
+                    break
+                if value == solution_value:
+                    continue
+
+                candidate = (row, column, value)
+                assumption = _literal(candidate, True)
+                proof = self._prove_unsatisfiable(
+                    self.initial_masks,
+                    assumption=assumption,
+                )
+
+                if proof is None:
+                    # Il ramo e' soddisfacibile: il puzzle potrebbe avere piu'
+                    # soluzioni oppure questa non e' una deduzione valida.
+                    continue
+
+                representative_chain = self._longest_chain(proof)
+                deduction = _deduction(
+                    description=(
+                        f"Assumere R{row + 1}C{column + 1}={value} "
+                        "richiede l'esplorazione completa di tutte le "
+                        "alternative residue e conduce sempre a "
+                        "contraddizione: il candidato e' eliminato."
+                    ),
+                    eliminations=(candidate,),
+                    assumptions=(assumption,),
+                    chains=(representative_chain,),
+                    reasons=("dynamic", "nested", "complete-search"),
+                    kind="nested-complete-contradiction",
+                )
+                if STORE_COMPLETE_NESTED_PROOF:
+                    deduction["logic"]["proof_tree"] = (
+                        self._serialize_proof(proof)
+                    )
+                deduction["logic"]["metrics"] = self._proof_metrics(proof)
+                deduction["logic"]["complete"] = True
+                deduction["logic"]["proof_tree_stored"] = bool(
+                    STORE_COMPLETE_NESTED_PROOF
+                )
+
+                if collector.add(deduction):
+                    break
+
+        return collector.results
 
 
 class _DeductionCollector:
@@ -860,7 +1362,7 @@ class _DeductionCollector:
 
 
 def _normalise_max_results(max_results):
-    """Valida il limite; ``None`` richiede l'inventario completo."""
+    """Valida la richiesta; ``None`` usa il massimo configurato."""
     if max_results is None:
         return None
 
@@ -885,7 +1387,8 @@ class LogicEngine:
         self.propagator = DynamicPropagator(self.grid, self.candidates)
 
         # Per ogni tecnica conserva il risultato più ampio già calcolato.
-        # ``None`` in _result_limits significa inventario completo.
+        # ``None`` in _result_limits indica che l'enumerazione si e'
+        # esaurita naturalmente prima del limite configurato.
         self._results = {}
         self._result_limits = {}
         self._prepared_batches = set()
@@ -895,6 +1398,7 @@ class LogicEngine:
         # chiave distinta e viene calcolato solo quando serve davvero.
         self._propagation_cache = {}
         self._closure_cache = {}
+        self._complete_nested_search = None
         self._lock = RLock()
 
     def _propagate(self, source, *, mode="dynamic", advanced_level=0):
@@ -987,7 +1491,7 @@ class LogicEngine:
             self._result_limits[technique] = stored_limit
 
     def _compute(self, technique, max_results):
-        max_results = _normalise_max_results(max_results)
+        max_results = _technique_result_limit(technique, max_results)
 
         if self._cache_covers(technique, max_results):
             return
@@ -1052,7 +1556,7 @@ class LogicEngine:
         technique,
         max_results=DEFAULT_MAX_DEDUCTIONS_PER_TECHNIQUE,
     ):
-        max_results = _normalise_max_results(max_results)
+        max_results = _technique_result_limit(technique, max_results)
 
         if not self._cache_covers(technique, max_results):
             raise KeyError(
@@ -1098,6 +1602,7 @@ class LogicEngine:
         for literals, reasons in self.graph.cycles(
             allowed=frozenset(allowed),
             required=frozenset(required),
+            maximum_edges=MAX_STATIC_CYCLE_EDGES,
         ):
             body = literals[:-1]
             chain_cells = {(item[0], item[1]) for item in body}
@@ -1341,15 +1846,11 @@ class LogicEngine:
                         (),
                     )
                 ]
-                visible_index = (
-                    unit_index + 1
-                    if kind == "row"
-                    else unit_index - 8
-                    if kind == "col"
-                    else unit_index - 17
+                unit_name, visible_index = _visible_unit_reference(
+                    unit_index
                 )
                 yield (
-                    f"{kind} {visible_index} per il valore {value}",
+                    f"{unit_name} {visible_index} per il valore {value}",
                     candidates,
                 )
 
@@ -1657,10 +2158,18 @@ class LogicEngine:
         )
 
     def _find_nested_forcing_chain(self, *, max_results):
-        return self._dynamic_tier(
-            "Nested Forcing Chain",
-            required_feature="nested",
-            advanced_level=2,
+        max_results = _technique_result_limit(
+            _NESTED_TECHNIQUE,
+            max_results,
+        )
+
+        if self._complete_nested_search is None:
+            self._complete_nested_search = _CompleteNestedSearch(
+                self.grid,
+                self.candidates,
+            )
+
+        return self._complete_nested_search.find_deductions(
             max_results=max_results,
         )
 
@@ -1705,9 +2214,10 @@ def prepare_logic_cache(
 ):
     """Prepara soltanto la tecnica o il batch richiesto.
 
-    ``max_results`` viene applicato durante la ricerca. Le strutture comuni
-    già calcolate per lo stesso stato vengono riutilizzate, senza promuovere
-    implicitamente una richiesta Dynamic a Plus o Nested.
+    ``max_results`` viene applicato durante la ricerca e resta soggetto ai
+    limiti globali del Logic Engine. Le strutture comuni già calcolate per lo
+    stesso stato vengono riutilizzate, senza promuovere implicitamente una
+    richiesta Dynamic a Plus o Nested.
     """
     if technique is not None and batch is not None:
         raise ValueError("Usa technique oppure batch, non entrambi.")
@@ -1785,6 +2295,11 @@ __all__ = [
     "DEFAULT_MAX_DEDUCTIONS_PER_TECHNIQUE",
     "LOGIC_TECHNIQUE_BATCHES",
     "MAX_DEDUCTIONS_PER_TECHNIQUE",
+    "MAX_NESTED_DEDUCTIONS",
+    "MAX_NESTED_TECHNIQUES",
+    "MAX_STATIC_CYCLE_EDGES",
+    "MAX_TECHNIQUES",
+    "STORE_COMPLETE_NESTED_PROOF",
     "LogicEngine",
     "StaticImplicationGraph",
     "clear_logic_cache",
