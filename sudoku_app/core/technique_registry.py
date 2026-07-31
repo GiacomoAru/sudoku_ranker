@@ -411,6 +411,11 @@ _DECLARED_RUNNERS = (
         ),
         techniques.nested_forcing_chain,
     ),
+    _logic(
+        "complete_forcing_tree",
+        ("forcing.complete_tree",),
+        techniques.complete_forcing_tree,
+    ),
 )
 
 

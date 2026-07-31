@@ -84,6 +84,7 @@ class SERatingTests(unittest.TestCase):
             "Dynamic Forcing Chain": 8.5,
             "Dynamic Forcing Chain Plus": 9.0,
             "Nested Forcing Chain": 9.5,
+            "Complete Forcing Tree": 13.0,
         }
         for name, rating in expected.items():
             with self.subTest(name=name):
@@ -447,6 +448,7 @@ class LogicEngineTests(unittest.TestCase):
             "Dynamic Forcing Chain",
             "Dynamic Forcing Chain Plus",
             "Nested Forcing Chain",
+            "Complete Forcing Tree",
         }
         registered = {
             technique_catalog.technique_definition(

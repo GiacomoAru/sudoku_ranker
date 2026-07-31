@@ -13,6 +13,7 @@ from ..core import canonicalization as sc
 from ..core import data_structure as sds
 from ..core import difficulty as difficulty_model
 from ..core import solver as ss
+from ..core import technique_catalog
 
 # ---------------------------------------------------------------------------
 # Configurazione archivio
@@ -37,8 +38,8 @@ CANONICAL_CLASS_SCHEMA_VERSION = 1
 
 # Incrementare questo numero quando cambia il funzionamento del solver
 # o il formato dell'analisi. Le vecchie analisi verranno ricalcolate.
-ANALYSIS_VERSION = 19
-ANALYSIS_SCHEMA_VERSION = 8
+ANALYSIS_VERSION = 20
+ANALYSIS_SCHEMA_VERSION = 9
 
 # Evita anche letture ripetute dal disco durante la stessa esecuzione.
 # La chiave è (puzzle_id, analysis_variant), non soltanto puzzle_id.
@@ -671,9 +672,43 @@ def _restore_candidates(candidates):
     ]
 
 
+def _migrate_legacy_complete_tree_move(move):
+    """Rinomina solo le prove esaustive prodotte prima di P04."""
+    migrated = dict(move)
+    logic = dict(migrated.get("logic", {}) or {})
+
+    if logic.get("kind") != "nested-complete-contradiction":
+        return migrated
+
+    definition = technique_catalog.resolve_legacy_technique(
+        migrated.get("technique", "Nested Forcing Chain")
+    )
+    migrated.update({
+        "technique_id": definition.id,
+        "technique": definition.canonical_name,
+        "family": technique_catalog.TECHNIQUE_FAMILY[
+            definition.canonical_name
+        ],
+        "strategy": technique_catalog.TECHNIQUE_STRATEGY[
+            definition.canonical_name
+        ],
+        "parent_id": definition.parent_id,
+        "se_equivalent_parent_id": definition.se_equivalent_parent_id,
+        "rating_kind": definition.rating_kind,
+        "detector_id": definition.detector_id,
+        "engine_type": definition.engine_type,
+        "fallback_tier": definition.fallback_tier,
+        "base_difficulty": definition.base_difficulty,
+    })
+    logic["kind"] = "complete-forcing-tree-contradiction"
+    logic["exhaustive"] = True
+    migrated["logic"] = logic
+    return migrated
+
+
 def _restore_move(move):
     """Ripristina i tipi usati dalle funzioni di visualizzazione."""
-    restored = dict(move)
+    restored = _migrate_legacy_complete_tree_move(move)
 
     restored["placements"] = [
         tuple(int(value) for value in placement)
@@ -759,7 +794,13 @@ _STORED_MOVE_FIELDS = (
     "effective_move_count",
     "available_by_technique",
     "frontier_by_technique",
+    "fallback_tier_used",
+    "fallback_stage",
+    "fallback_reason",
+    "nested_fallback_attempted",
     "nested_fallback_used",
+    "complete_tree_fallback_attempted",
+    "complete_tree_fallback_used",
     "move_inventory_censored",
     "effective_move_count_is_lower_bound",
     "move_discovery_difficulty_is_upper_bound",
@@ -794,7 +835,7 @@ def _compact_analysis_for_storage(analysis):
 
     migrated_chain = []
     for source_move in compact.get("chain", []):
-        move = dict(source_move)
+        move = _migrate_legacy_complete_tree_move(source_move)
         if "technical_difficulty" in move:
             technical_difficulty = float(
                 move["technical_difficulty"]

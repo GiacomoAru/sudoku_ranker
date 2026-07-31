@@ -39,6 +39,7 @@ class TechniqueCatalogStructureTests(unittest.TestCase):
             "Unique Rectangle Type 1": "unique.ur.1",
             "Forcing Chain": "se.forcing_chain",
             "Nested Forcing Chain": "nested.forcing_chain",
+            "Complete Forcing Tree": "forcing.complete_tree",
         }
         self.assertEqual(
             {
@@ -99,6 +100,30 @@ class TechniqueCatalogStructureTests(unittest.TestCase):
         self.assertEqual(
             catalog.resolve_technique("ur1").id,
             "unique.ur.1",
+        )
+
+    def test_complete_tree_has_its_own_taxonomy_and_legacy_aliases(self):
+        definition = catalog.technique_definition("forcing.complete_tree")
+        self.assertEqual(definition.canonical_name, "Complete Forcing Tree")
+        self.assertEqual(definition.family_id, "exhaustive_forcing")
+        self.assertEqual(definition.strategy_id, "last_resort")
+        self.assertEqual(definition.rating_kind, "project")
+        self.assertEqual(definition.base_difficulty, 13.0)
+        self.assertEqual(definition.engine_type, "complete_tree")
+        self.assertEqual(definition.fallback_tier, 2)
+        self.assertEqual(
+            catalog.resolve_legacy_technique("Nested Forcing Chain").id,
+            "forcing.complete_tree",
+        )
+        self.assertEqual(
+            catalog.resolve_legacy_technique(
+                "Nested Contradiction Forcing Chain"
+            ).id,
+            "forcing.complete_tree",
+        )
+        self.assertEqual(
+            catalog.resolve_technique("Nested Forcing Chain").id,
+            "nested.forcing_chain",
         )
 
     def test_alias_collision_requires_different_namespaces(self):

@@ -222,7 +222,7 @@ class ProofPipelineTests(unittest.TestCase):
         )
 
     def test_branched_proof_has_deterministic_structural_counts(self):
-        node = logic_engine._CompleteNestedProofNode
+        node = logic_engine._CompleteForcingTreeProofNode
         first_leaf = node(
             assumption=(1, 0, 1, True),
             propagations=((1, 1, 1, False),),
@@ -243,7 +243,7 @@ class ProofPipelineTests(unittest.TestCase):
             children=(first_leaf, second_leaf),
         )
 
-        metrics = logic_engine._CompleteNestedSearch._proof_metrics(root)
+        metrics = logic_engine.CompleteForcingTreeSearch._proof_metrics(root)
 
         self.assertEqual(metrics, {
             "metrics_version": proof_schema.PROOF_METRICS_VERSION,
@@ -256,7 +256,7 @@ class ProofPipelineTests(unittest.TestCase):
             "total_chain_length": 9,
             "branch_count": 2,
             "leaf_count": 2,
-            "nested_depth": 2,
+            "nested_depth": 0,
             "nested_subproof_count": 0,
         })
 

@@ -5,10 +5,11 @@ La modalita' ``profile`` esplora una finestra configurabile sopra la mossa
 piu' semplice trovata, ``deep`` interroga tutte le tecniche ordinarie e
 ``superficial`` conserva soltanto la frontiera minima.
 
-Le Nested Forcing Chain sono escluse da ogni inventario ordinario, incluso
-``deep``. Vengono cercate soltanto come ultima risorsa, quando nessun'altra
-tecnica produce una mossa. Le tecniche ordinarie possono restituire fino a
-16 conclusioni, quelle del Logic Engine fino a 8 e la Nested una sola. Questi
+Le tecniche di fallback sono escluse da ogni inventario ordinario, incluso
+``deep``. Il solver prova nell'ordine tecniche ordinarie, Nested Forcing Chain
+e Complete Forcing Tree, fermandosi al primo livello che produce mosse. Le
+tecniche ordinarie possono restituire fino a 16 conclusioni, quelle del Logic
+Engine fino a 8, le Nested fino a 2 e l'albero completo una sola. Questi
 limiti riguardano i risultati, non la profondita' interna della ricerca.
 
 Ogni mossa possiede una difficolta' base determinata dalla tecnica e una
@@ -45,17 +46,20 @@ ANALYSIS_MODE_ALIASES = {
 DEFAULT_PROFILE_DIFFICULTY_WINDOW = 1.5
 DEFAULT_ANALYSIS_MODE = "profile"
 MAX_MOVES_PER_TECHNIQUE = 16
-MAX_LOGIC_ENGINE_MOVES_PER_TECHNIQUE = max(MAX_MOVES_PER_TECHNIQUE // 2, 1) # minore del limite massimo in logic_engine
-MAX_NESTED_MOVES_PER_STEP = max(MAX_MOVES_PER_TECHNIQUE // 16, 1) # minore del limite massimo in logic_engine
+MAX_LOGIC_ENGINE_MOVES_PER_TECHNIQUE = 8
+MAX_NESTED_MOVES_PER_STEP = 2
+MAX_COMPLETE_TREE_MOVES_PER_STEP = 1
 
 if not (
     1
+    <= MAX_COMPLETE_TREE_MOVES_PER_STEP
     <= MAX_NESTED_MOVES_PER_STEP
     <= MAX_LOGIC_ENGINE_MOVES_PER_TECHNIQUE
     <= MAX_MOVES_PER_TECHNIQUE
 ):
     raise ValueError(
-        "I limiti devono rispettare: Nested <= Logic Engine <= generale."
+        "I limiti devono rispettare: Complete Tree <= Nested <= "
+        "Logic Engine <= generale."
     )
 
 
@@ -322,8 +326,12 @@ def _result_limit_for_classification(
     fallback_tier,
     general_limit,
 ):
-    if fallback_tier > 0:
+    if fallback_tier == 2:
+        return min(general_limit, MAX_COMPLETE_TREE_MOVES_PER_STEP)
+    if fallback_tier == 1:
         return min(general_limit, MAX_NESTED_MOVES_PER_STEP)
+    if fallback_tier != 0:
+        raise ValueError(f"Fallback tier sconosciuto: {fallback_tier!r}.")
     if engine_type != "local":
         return min(
             general_limit,
@@ -580,14 +588,15 @@ def collect_moves_for_analysis(
     canonical_transform=None,
     max_moves_per_technique=MAX_MOVES_PER_TECHNIQUE,
 ):
-    """Raccoglie mosse ordinarie e usa le Nested soltanto come fallback.
+    """Raccoglie mosse secondo i tre livelli di fallback del solver.
 
     ``deep`` interroga tutte le tecniche ordinarie. ``profile`` esplora la
     finestra configurata sopra la difficolta' effettiva minima.
     ``superficial`` conserva esclusivamente la frontiera minima.
 
-    Se nessuna tecnica ordinaria trova una conclusione, viene eseguito il
-    runner Nested e viene restituita al massimo una deduzione.
+    Nested viene interrogato solo senza mosse ordinarie; Complete Forcing Tree
+    solo senza mosse ordinarie e Nested. Il primo livello con risultati chiude
+    la raccolta.
     """
     mode = _normalise_analysis_mode(mode)
 
@@ -612,6 +621,7 @@ def collect_moves_for_analysis(
     max_moves_per_technique = int(max_moves_per_technique)
     ordinary_runners = technique_registry.ORDINARY_RUNNERS
     nested_runners = technique_registry.NESTED_RUNNERS
+    complete_tree_runners = technique_registry.COMPLETE_TREE_RUNNERS
 
     moves, ordinary_metadata = _collect_from_runners(
         state,
@@ -622,20 +632,26 @@ def collect_moves_for_analysis(
         max_results=max_moves_per_technique,
     )
 
+    def empty_metadata():
+        return {
+            "best_difficulty": None,
+            "scanned_runner_count": 0,
+            "stopped_early": False,
+            "stop_before_min_difficulty": None,
+            "capped_techniques": [],
+            "result_limit_reached": False,
+        }
+
+    ordinary_moves_found = bool(moves)
+    nested_fallback_attempted = False
     nested_fallback_used = False
-    inventory_censored = ordinary_metadata["result_limit_reached"]
-    nested_metadata = {
-        "best_difficulty": None,
-        "scanned_runner_count": 0,
-        "stopped_early": False,
-        "stop_before_min_difficulty": None,
-        "capped_techniques": [],
-        "result_limit_reached": False,
-    }
+    complete_tree_fallback_attempted = False
+    complete_tree_fallback_used = False
+    nested_metadata = empty_metadata()
+    complete_tree_metadata = empty_metadata()
 
     if not moves and nested_runners:
-        nested_fallback_used = True
-        inventory_censored = True
+        nested_fallback_attempted = True
         moves, nested_metadata = _collect_from_runners(
             state,
             nested_runners,
@@ -644,15 +660,57 @@ def collect_moves_for_analysis(
             canonical_transform=canonical_transform,
             max_results=MAX_NESTED_MOVES_PER_STEP,
         )
+        nested_fallback_used = bool(moves)
 
-    active_metadata = (
-        nested_metadata
-        if nested_fallback_used
-        else ordinary_metadata
+    if not moves and complete_tree_runners:
+        complete_tree_fallback_attempted = True
+        moves, complete_tree_metadata = _collect_from_runners(
+            state,
+            complete_tree_runners,
+            mode="deep",
+            profile_difficulty_window=profile_difficulty_window,
+            canonical_transform=canonical_transform,
+            max_results=MAX_COMPLETE_TREE_MOVES_PER_STEP,
+        )
+        complete_tree_fallback_used = bool(moves)
+
+    inventory_censored = (
+        ordinary_metadata["result_limit_reached"]
+        or nested_fallback_attempted
+        or complete_tree_fallback_attempted
     )
+
+    if complete_tree_fallback_used:
+        fallback_tier_used = 2
+        fallback_stage = "complete_tree"
+        fallback_reason = "no_ordinary_or_nested_move"
+        active_metadata = complete_tree_metadata
+    elif nested_fallback_used:
+        fallback_tier_used = 1
+        fallback_stage = "nested"
+        fallback_reason = "no_ordinary_move"
+        active_metadata = nested_metadata
+    elif ordinary_moves_found:
+        fallback_tier_used = 0
+        fallback_stage = "ordinary"
+        fallback_reason = None
+        active_metadata = ordinary_metadata
+    else:
+        fallback_tier_used = None
+        fallback_stage = None
+        fallback_reason = "no_available_move"
+        active_metadata = (
+            complete_tree_metadata
+            if complete_tree_fallback_attempted
+            else nested_metadata
+            if nested_fallback_attempted
+            else ordinary_metadata
+        )
+
     capped_techniques = sorted(set(
         ordinary_metadata["capped_techniques"]
         + nested_metadata["capped_techniques"]
+        + complete_tree_metadata["capped_techniques"]
     ))
 
     metadata = {
@@ -666,6 +724,7 @@ def collect_moves_for_analysis(
         "scanned_runner_count": (
             ordinary_metadata["scanned_runner_count"]
             + nested_metadata["scanned_runner_count"]
+            + complete_tree_metadata["scanned_runner_count"]
         ),
         "total_runner_count": len(
             technique_registry.TECHNIQUE_RUNNERS
@@ -673,7 +732,7 @@ def collect_moves_for_analysis(
         "ordinary_runner_count": len(ordinary_runners),
         "nested_runner_count": len(nested_runners),
         "complete_tree_runner_count": len(
-            technique_registry.COMPLETE_TREE_RUNNERS
+            complete_tree_runners
         ),
         "stopped_early": ordinary_metadata["stopped_early"],
         "stop_before_min_difficulty": ordinary_metadata[
@@ -691,18 +750,25 @@ def collect_moves_for_analysis(
         "result_limit_reached": (
             ordinary_metadata["result_limit_reached"]
             or nested_metadata["result_limit_reached"]
+            or complete_tree_metadata["result_limit_reached"]
         ),
+        "fallback_tier_used": fallback_tier_used,
+        "fallback_stage": fallback_stage,
+        "nested_fallback_attempted": nested_fallback_attempted,
         "nested_fallback_used": nested_fallback_used,
-        "fallback_reason": (
-            "no_ordinary_move"
-            if nested_fallback_used
-            else None
+        "complete_tree_fallback_attempted": (
+            complete_tree_fallback_attempted
         ),
+        "complete_tree_fallback_used": complete_tree_fallback_used,
+        "fallback_reason": fallback_reason,
         "max_moves_per_technique": max_moves_per_technique,
         "max_logic_engine_moves_per_technique": (
             MAX_LOGIC_ENGINE_MOVES_PER_TECHNIQUE
         ),
         "max_nested_moves_per_step": MAX_NESTED_MOVES_PER_STEP,
+        "max_complete_tree_moves_per_step": (
+            MAX_COMPLETE_TREE_MOVES_PER_STEP
+        ),
         "capped_techniques": capped_techniques,
     }
 
@@ -964,6 +1030,24 @@ def solve_and_log(
         record["nested_fallback_used"] = collection_metadata[
             "nested_fallback_used"
         ]
+        record["nested_fallback_attempted"] = collection_metadata[
+            "nested_fallback_attempted"
+        ]
+        record["complete_tree_fallback_used"] = collection_metadata[
+            "complete_tree_fallback_used"
+        ]
+        record["complete_tree_fallback_attempted"] = collection_metadata[
+            "complete_tree_fallback_attempted"
+        ]
+        record["fallback_tier_used"] = collection_metadata[
+            "fallback_tier_used"
+        ]
+        record["fallback_stage"] = collection_metadata[
+            "fallback_stage"
+        ]
+        record["fallback_reason"] = collection_metadata[
+            "fallback_reason"
+        ]
         record["move_inventory_censored"] = collection_metadata[
             "inventory_censored"
         ]
@@ -982,9 +1066,10 @@ def solve_and_log(
         chain.append(record)
 
         if verbose:
+            fallback_stage = collection_metadata.get("fallback_stage")
             fallback = (
-                ", fallback Nested"
-                if collection_metadata["nested_fallback_used"]
+                f", fallback {fallback_stage}"
+                if fallback_stage in {"nested", "complete_tree"}
                 else ""
             )
             print(
@@ -1538,6 +1623,7 @@ def grade_difficulty(chain, status):
             "move_discovery_difficulty_is_upper_bound": False,
             "step_count": 0,
             "nested_step_count": 0,
+            "complete_tree_step_count": 0,
         }
 
     difficulty_scores = [
@@ -1598,7 +1684,11 @@ def grade_difficulty(chain, status):
         )
     )
     nested_step_count = sum(
-        bool(move.get("nested_fallback_used"))
+        move.get("fallback_tier_used", move.get("fallback_tier")) == 1
+        for move in chain
+    )
+    complete_tree_step_count = sum(
+        move.get("fallback_tier_used", move.get("fallback_tier")) == 2
         for move in chain
     )
     move_discovery_is_upper_bound = any(
@@ -1630,6 +1720,7 @@ def grade_difficulty(chain, status):
         ),
         "step_count": len(chain),
         "nested_step_count": nested_step_count,
+        "complete_tree_step_count": complete_tree_step_count,
     }
 
 

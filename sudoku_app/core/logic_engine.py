@@ -9,7 +9,7 @@ assunto falso. Le implicazioni statiche sono di due tipi:
 
 Le propagazioni dinamiche applicano le esclusioni a una copia locale dei
 candidati e scoprono nuovi single. I livelli Plus aggiungono locking, coppie
-e X-Wing. La Nested Forcing Chain usa invece una ricerca ricorsiva completa
+e X-Wing. Il Complete Forcing Tree usa invece una ricerca ricorsiva completa
 per casi, senza limiti interni di profondita', nodi o rami. Il limite riguarda
 soltanto quante deduzioni distinte vengono restituite. Nessuna funzione
 modifica lo ``SudokuState`` ricevuto.
@@ -35,16 +35,21 @@ Candidate = tuple[int, int, int]
 Literal = tuple[int, int, int, bool]
 
 # Limiti sul numero di deduzioni restituite. Non limitano mai la
-# profondita', i nodi o i rami della ricerca Nested completa.
+# profondita', i nodi o i rami della ricerca completa.
 MAX_DEDUCTIONS_PER_TECHNIQUE = 16 # limite massimo non valicabile
-MAX_NESTED_DEDUCTIONS = 4 # limite massimo non valicabile
+MAX_NESTED_DEDUCTIONS = 2 # limite massimo non valicabile
+MAX_COMPLETE_TREE_DEDUCTIONS = 1 # limite massimo non valicabile
 MAX_STATIC_CYCLE_EDGES = 50
-STORE_COMPLETE_NESTED_PROOF = False
+STORE_COMPLETE_FORCING_TREE_PROOF = False
 
-if not 1 <= MAX_NESTED_DEDUCTIONS <= MAX_DEDUCTIONS_PER_TECHNIQUE:
+if not (
+    1
+    <= MAX_COMPLETE_TREE_DEDUCTIONS
+    <= MAX_NESTED_DEDUCTIONS
+    <= MAX_DEDUCTIONS_PER_TECHNIQUE
+):
     raise ValueError(
-        "MAX_NESTED_DEDUCTIONS deve essere compreso tra 1 e "
-        "MAX_DEDUCTIONS_PER_TECHNIQUE."
+        "I limiti devono rispettare: Complete Tree <= Nested <= generale."
     )
 
 DEFAULT_MAX_DEDUCTIONS_PER_TECHNIQUE = MAX_DEDUCTIONS_PER_TECHNIQUE
@@ -52,8 +57,10 @@ DEFAULT_MAX_DEDUCTIONS_PER_TECHNIQUE = MAX_DEDUCTIONS_PER_TECHNIQUE
 # Alias mantenuti per compatibilita' con eventuali import esistenti.
 MAX_TECHNIQUES = MAX_DEDUCTIONS_PER_TECHNIQUE
 MAX_NESTED_TECHNIQUES = MAX_NESTED_DEDUCTIONS
+MAX_COMPLETE_TREE_TECHNIQUES = MAX_COMPLETE_TREE_DEDUCTIONS
 
 _NESTED_TECHNIQUE = "Nested Forcing Chain"
+_COMPLETE_TREE_TECHNIQUE = "Complete Forcing Tree"
 
 
 # Le tecniche restano raggruppate per le preparazioni esplicite di batch.
@@ -76,7 +83,12 @@ LOGIC_TECHNIQUE_BATCHES = {
     "dynamic": (
         "Dynamic Forcing Chain",
         "Dynamic Forcing Chain Plus",
+    ),
+    "nested": (
         "Nested Forcing Chain",
+    ),
+    "complete_tree": (
+        "Complete Forcing Tree",
     ),
 }
 
@@ -834,15 +846,15 @@ class DynamicPropagator:
 
 
 @dataclass(frozen=True)
-class _CompleteNestedProofNode:
-    """Nodo del DAG di prova prodotto dalla ricerca nested completa."""
+class _CompleteForcingTreeProofNode:
+    """Nodo del DAG di prova prodotto dal Complete Forcing Tree."""
 
     assumption: Literal | None = None
     propagations: tuple[Literal, ...] = ()
     contradiction: bool = False
     contradiction_reason: str | None = None
     branch_cell: tuple[int, int] | None = None
-    children: tuple["_CompleteNestedProofNode", ...] = ()
+    children: tuple["_CompleteForcingTreeProofNode", ...] = ()
 
 
 def _mask_values(mask: int):
@@ -879,11 +891,12 @@ def _nested_state_masks(grid, candidates) -> tuple[int, ...]:
 def _technique_result_limit(technique, max_results):
     """Applica i limiti di output senza limitare la ricerca interna."""
     requested = _normalise_max_results(max_results)
-    hard_limit = (
-        MAX_NESTED_DEDUCTIONS
-        if technique == _NESTED_TECHNIQUE
-        else MAX_DEDUCTIONS_PER_TECHNIQUE
-    )
+    if technique == _COMPLETE_TREE_TECHNIQUE:
+        hard_limit = MAX_COMPLETE_TREE_DEDUCTIONS
+    elif technique == _NESTED_TECHNIQUE:
+        hard_limit = MAX_NESTED_DEDUCTIONS
+    else:
+        hard_limit = MAX_DEDUCTIONS_PER_TECHNIQUE
 
     if requested is None:
         return hard_limit
@@ -891,7 +904,7 @@ def _technique_result_limit(technique, max_results):
     return min(requested, hard_limit)
 
 
-class _CompleteNestedSearch:
+class CompleteForcingTreeSearch:
     """Ricerca completa per contraddizione sui vincoli Sudoku.
 
     La ricerca non impone limiti di profondita', nodi, rami o propagazioni.
@@ -905,7 +918,7 @@ class _CompleteNestedSearch:
         self._solution_cache: dict[tuple[int, ...], tuple[int, ...] | None] = {}
         self._proof_cache: dict[
             tuple[int, ...],
-            _CompleteNestedProofNode | None,
+            _CompleteForcingTreeProofNode | None,
         ] = {}
 
     @staticmethod
@@ -1097,7 +1110,7 @@ class _CompleteNestedSearch:
 
     @staticmethod
     def _attach_context(core, assumption, propagations):
-        return _CompleteNestedProofNode(
+        return _CompleteForcingTreeProofNode(
             assumption=assumption,
             propagations=propagations,
             contradiction=core.contradiction,
@@ -1114,7 +1127,7 @@ class _CompleteNestedSearch:
         )
 
         if contradiction is not None:
-            return _CompleteNestedProofNode(
+            return _CompleteForcingTreeProofNode(
                 assumption=assumption,
                 propagations=trace,
                 contradiction=True,
@@ -1149,7 +1162,7 @@ class _CompleteNestedSearch:
 
             children.append(child_proof)
 
-        core = _CompleteNestedProofNode(
+        core = _CompleteForcingTreeProofNode(
             branch_cell=(row, column),
             children=tuple(children),
         )
@@ -1169,7 +1182,7 @@ class _CompleteNestedSearch:
 
         child_chain = max(
             (
-                _CompleteNestedSearch._longest_chain(child)
+                CompleteForcingTreeSearch._longest_chain(child)
                 for child in node.children
             ),
             key=len,
@@ -1182,12 +1195,9 @@ class _CompleteNestedSearch:
         def visit(current):
             local_length = len(current.propagations)
             local_assumption_count = 0
-            local_depth = 0
-
             if current.assumption is not None:
                 local_length += 1
                 local_assumption_count = 1
-                local_depth = 1
 
             if current.contradiction or not current.children:
                 return {
@@ -1196,7 +1206,7 @@ class _CompleteNestedSearch:
                     "assumption_count": local_assumption_count,
                     "max_chain_length": local_length,
                     "total_chain_length": local_length,
-                    "nested_depth": local_depth,
+                    "nested_depth": 0,
                     "branch_count": 0,
                     "leaf_count": 1,
                     "nested_subproof_count": 0,
@@ -1229,9 +1239,7 @@ class _CompleteNestedSearch:
                         for item in child_metrics
                     )
                 ),
-                "nested_depth": local_depth + max(
-                    item["nested_depth"] for item in child_metrics
-                ),
+                "nested_depth": 0,
                 "branch_count": len(current.children) + sum(
                     item["branch_count"] for item in child_metrics
                 ),
@@ -1253,7 +1261,7 @@ class _CompleteNestedSearch:
                 else ()
             ),
             "chains": (
-                _CompleteNestedSearch._longest_chain(node),
+                CompleteForcingTreeSearch._longest_chain(node),
             ),
             "metrics": structural,
         })
@@ -1301,7 +1309,7 @@ class _CompleteNestedSearch:
 
         root_id = visit(root)
         return {
-            "kind": "complete-nested-proof-dag",
+            "kind": "complete-forcing-tree-proof-dag",
             "root": root_id,
             "nodes": nodes,
         }
@@ -1357,17 +1365,18 @@ class _CompleteNestedSearch:
                     eliminations=(candidate,),
                     assumptions=(assumption,),
                     chains=(representative_chain,),
-                    reasons=("dynamic", "nested", "complete-search"),
-                    kind="nested-complete-contradiction",
+                    reasons=("dynamic", "complete-tree", "complete-search"),
+                    kind="complete-forcing-tree-contradiction",
                 )
-                if STORE_COMPLETE_NESTED_PROOF:
+                if STORE_COMPLETE_FORCING_TREE_PROOF:
                     deduction["logic"]["proof_tree"] = (
                         self._serialize_proof(proof)
                     )
                 deduction["logic"]["metrics"] = self._proof_metrics(proof)
                 deduction["logic"]["complete"] = True
+                deduction["logic"]["exhaustive"] = True
                 deduction["logic"]["proof_tree_stored"] = bool(
-                    STORE_COMPLETE_NESTED_PROOF
+                    STORE_COMPLETE_FORCING_TREE_PROOF
                 )
 
                 if collector.add(deduction):
@@ -1442,7 +1451,7 @@ class LogicEngine:
         # chiave distinta e viene calcolato solo quando serve davvero.
         self._propagation_cache = {}
         self._closure_cache = {}
-        self._complete_nested_search = None
+        self._complete_forcing_tree_search = None
         self._lock = RLock()
 
     def _propagate(self, source, *, mode="dynamic", advanced_level=0):
@@ -2202,18 +2211,23 @@ class LogicEngine:
         )
 
     def _find_nested_forcing_chain(self, *, max_results):
+        # Il vero nested riutilizzabile verra' introdotto dalla relativa
+        # patch. Non deve mai delegare alla ricerca esaustiva completa.
+        return []
+
+    def _find_complete_forcing_tree(self, *, max_results):
         max_results = _technique_result_limit(
-            _NESTED_TECHNIQUE,
+            _COMPLETE_TREE_TECHNIQUE,
             max_results,
         )
 
-        if self._complete_nested_search is None:
-            self._complete_nested_search = _CompleteNestedSearch(
+        if self._complete_forcing_tree_search is None:
+            self._complete_forcing_tree_search = CompleteForcingTreeSearch(
                 self.grid,
                 self.candidates,
             )
 
-        return self._complete_nested_search.find_deductions(
+        return self._complete_forcing_tree_search.find_deductions(
             max_results=max_results,
         )
 
@@ -2335,15 +2349,18 @@ def logic_cache_info():
 
 __all__ = [
     "Candidate",
+    "CompleteForcingTreeSearch",
     "Literal",
     "DEFAULT_MAX_DEDUCTIONS_PER_TECHNIQUE",
     "LOGIC_TECHNIQUE_BATCHES",
     "MAX_DEDUCTIONS_PER_TECHNIQUE",
+    "MAX_COMPLETE_TREE_DEDUCTIONS",
+    "MAX_COMPLETE_TREE_TECHNIQUES",
     "MAX_NESTED_DEDUCTIONS",
     "MAX_NESTED_TECHNIQUES",
     "MAX_STATIC_CYCLE_EDGES",
     "MAX_TECHNIQUES",
-    "STORE_COMPLETE_NESTED_PROOF",
+    "STORE_COMPLETE_FORCING_TREE_PROOF",
     "LogicEngine",
     "StaticImplicationGraph",
     "clear_logic_cache",

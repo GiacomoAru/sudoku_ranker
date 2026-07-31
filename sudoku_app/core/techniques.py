@@ -1896,7 +1896,6 @@ def _specific_logic_technique(state, parent, deduction):
         "dynamic-reduction": "Double",
         "dynamic-cell-reduction": "Cell",
         "dynamic-region-reduction": "Region",
-        "nested-complete-contradiction": "Contradiction",
     }
     subtype = forcing_subtypes.get(kind)
     if subtype and parent == "Dynamic Forcing Chain":
@@ -2258,22 +2257,13 @@ def dynamic_forcing_chain_plus(state):
 
 def nested_forcing_chain(state):
     def produce():
-        excluded = _effects_from_functions(
-            state,
-            (
-                bidirectional_x_cycle,
-                xy_chain,
-                bidirectional_y_cycle,
-                forcing_x_chain,
-                forcing_chain,
-                bidirectional_cycle,
-                nishio,
-                cell_forcing_chain,
-                region_forcing_chain,
-                dynamic_forcing_chain,
-                dynamic_forcing_chain_plus,
-            ),
-        )
-        return _logic_moves(state, "Nested Forcing Chain", excluded)
+        return _logic_moves(state, "Nested Forcing Chain")
 
     return _cached_moves(state, "logic:Nested Forcing Chain", produce)
+
+
+def complete_forcing_tree(state):
+    def produce():
+        return _logic_moves(state, "Complete Forcing Tree")
+
+    return _cached_moves(state, "logic:Complete Forcing Tree", produce)

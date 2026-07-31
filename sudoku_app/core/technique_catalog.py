@@ -16,7 +16,12 @@ from dataclasses import dataclass
 import math
 
 
-TECHNIQUE_CATALOG_VERSION = "1.0.0"
+TECHNIQUE_CATALOG_VERSION = "1.1.0"
+
+LEGACY_TECHNIQUE_ALIASES = {
+    "Nested Forcing Chain": "Complete Forcing Tree",
+    "Nested Contradiction Forcing Chain": "Complete Forcing Tree",
+}
 
 RATING_KINDS = frozenset({"se", "pseudo_se", "project"})
 ENGINE_TYPES = frozenset({"local", "logic", "nested", "complete_tree"})
@@ -86,6 +91,7 @@ FAMILY_DISPLAY_NAMES_IT = {
     "multiple_forcing": "Forcing multipli",
     "dynamic_forcing": "Forcing dinamici",
     "nested_forcing": "Forcing annidati",
+    "exhaustive_forcing": "Exhaustive Forcing",
 }
 
 STRATEGY_DISPLAY_NAMES_IT = {
@@ -99,6 +105,7 @@ STRATEGY_DISPLAY_NAMES_IT = {
     "multiple_forcing": "Forcing multipli",
     "dynamic_forcing": "Forcing dinamici",
     "nested_forcing": "Forcing annidati",
+    "last_resort": "Last Resort",
 }
 
 
@@ -586,8 +593,7 @@ _CATALOG_ROWS = (
         proof_metric_profile=FORCING_METRICS,
     ),
 
-    # Fallback Nested attuale. P04 separerà la ricerca completa e le assegnerà
-    # l'ID ``forcing.complete_tree`` e il tier 2.
+    # Le vere Nested restano un livello distinto dalla ricerca esaustiva.
     _entry(
         "nested.contradiction", "Nested Contradiction Forcing Chain", 9.5,
         "nested_forcing", "nested_forcing", "nested_forcing_chain",
@@ -625,6 +631,12 @@ _CATALOG_ROWS = (
         "nested_forcing", "nested_forcing", "nested_forcing_chain",
         engine_type="nested", fallback_tier=1, abstract=True,
         proof_metric_profile=NESTED_METRICS,
+    ),
+    _entry(
+        "forcing.complete_tree", "Complete Forcing Tree", 13.0,
+        "exhaustive_forcing", "last_resort", "complete_forcing_tree",
+        rating_kind="project", engine_type="complete_tree",
+        fallback_tier=2, proof_metric_profile=FORCING_METRICS,
     ),
 )
 
@@ -898,6 +910,17 @@ def resolve_technique(name, *, namespace=None):
     return definitions[0]
 
 
+def resolve_legacy_technique(name):
+    """Risolve esclusivamente i nomi prodotti dagli archivi pre-P04."""
+    try:
+        canonical_name = LEGACY_TECHNIQUE_ALIASES[str(name)]
+    except KeyError as error:
+        raise KeyError(
+            f"Alias tecnica legacy sconosciuto: {name!r}."
+        ) from error
+    return resolve_technique(canonical_name)
+
+
 def validate_detector_registry(
     detector_technique_ids,
     definitions=TECHNIQUE_DEFINITIONS,
@@ -1015,6 +1038,7 @@ __all__ = [
     "FAMILY_TO_STRATEGY",
     "FAMILY_DISPLAY_NAMES_IT",
     "IMPLEMENTATION_STATUSES",
+    "LEGACY_TECHNIQUE_ALIASES",
     "MODERN_TECHNIQUE_PARENT",
     "RATING_KINDS",
     "STRATEGY_DISPLAY_NAMES_IT",
@@ -1033,6 +1057,7 @@ __all__ = [
     "TechniqueAlias",
     "TechniqueDefinition",
     "resolve_technique",
+    "resolve_legacy_technique",
     "technique_definition",
     "validate_catalog",
     "validate_detector_registry",

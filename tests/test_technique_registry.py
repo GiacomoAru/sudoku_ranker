@@ -123,14 +123,29 @@ class TechniqueRunnerTests(unittest.TestCase):
             "nested.contradiction",
             visible_name="Last Value renamed",
         )
+        complete_move = make_move(
+            "forcing.complete_tree",
+            visible_name="Naked Single renamed",
+        )
 
         self.assertEqual(solver._result_limit_for_move(local_move, 16), 16)
         self.assertEqual(
             solver._result_limit_for_move(nested_move, 16),
             solver.MAX_NESTED_MOVES_PER_STEP,
         )
+        self.assertEqual(
+            solver._result_limit_for_move(complete_move, 16),
+            solver.MAX_COMPLETE_TREE_MOVES_PER_STEP,
+        )
         self.assertEqual(solver._base_difficulty(local_move), 1.0)
         self.assertEqual(solver._base_difficulty(nested_move), 9.5)
+        self.assertEqual(solver._base_difficulty(complete_move), 13.0)
+
+    def test_pipeline_limits_are_explicit(self):
+        self.assertEqual(solver.MAX_MOVES_PER_TECHNIQUE, 16)
+        self.assertEqual(solver.MAX_LOGIC_ENGINE_MOVES_PER_TECHNIQUE, 8)
+        self.assertEqual(solver.MAX_NESTED_MOVES_PER_STEP, 2)
+        self.assertEqual(solver.MAX_COMPLETE_TREE_MOVES_PER_STEP, 1)
 
     def test_solver_has_no_runner_introspection_helpers(self):
         forbidden = (
@@ -184,6 +199,7 @@ class RegisteredCollectionTests(unittest.TestCase):
 
     def test_nested_runner_is_not_called_when_ordinary_move_exists(self):
         nested_calls = []
+        complete_calls = []
         ordinary = make_runner(
             "single.last_value",
             lambda _state: [make_move("single.last_value")],
@@ -194,10 +210,15 @@ class RegisteredCollectionTests(unittest.TestCase):
             return [make_move("nested.contradiction")]
 
         nested = make_runner("nested.contradiction", collect_nested)
+        complete = make_runner(
+            "forcing.complete_tree",
+            lambda _state: complete_calls.append(True),
+        )
 
         with (
             mock.patch.object(registry, "ORDINARY_RUNNERS", (ordinary,)),
             mock.patch.object(registry, "NESTED_RUNNERS", (nested,)),
+            mock.patch.object(registry, "COMPLETE_TREE_RUNNERS", (complete,)),
         ):
             moves, metadata = solver.collect_moves_for_analysis(
                 object(),
@@ -208,9 +229,13 @@ class RegisteredCollectionTests(unittest.TestCase):
             "single.last_value",
         ])
         self.assertFalse(nested_calls)
+        self.assertFalse(complete_calls)
         self.assertFalse(metadata["nested_fallback_used"])
+        self.assertEqual(metadata["fallback_tier_used"], 0)
+        self.assertEqual(metadata["fallback_stage"], "ordinary")
 
     def test_nested_runner_is_used_from_explicit_fallback_partition(self):
+        complete_calls = []
         ordinary = make_runner(
             "single.last_value",
             lambda _state: [],
@@ -219,10 +244,15 @@ class RegisteredCollectionTests(unittest.TestCase):
             "nested.contradiction",
             lambda _state: [make_move("nested.contradiction")],
         )
+        complete = make_runner(
+            "forcing.complete_tree",
+            lambda _state: complete_calls.append(True),
+        )
 
         with (
             mock.patch.object(registry, "ORDINARY_RUNNERS", (ordinary,)),
             mock.patch.object(registry, "NESTED_RUNNERS", (nested,)),
+            mock.patch.object(registry, "COMPLETE_TREE_RUNNERS", (complete,)),
         ):
             moves, metadata = solver.collect_moves_for_analysis(
                 object(),
@@ -233,8 +263,84 @@ class RegisteredCollectionTests(unittest.TestCase):
             "nested.contradiction",
         ])
         self.assertTrue(metadata["nested_fallback_used"])
+        self.assertTrue(metadata["nested_fallback_attempted"])
+        self.assertFalse(metadata["complete_tree_fallback_attempted"])
+        self.assertFalse(complete_calls)
+        self.assertEqual(metadata["fallback_tier_used"], 1)
+        self.assertEqual(metadata["fallback_stage"], "nested")
         self.assertEqual(moves[0]["detector_id"], "nested_forcing_chain")
         self.assertEqual(moves[0]["fallback_tier"], 1)
+
+    def test_complete_tree_runs_only_after_ordinary_and_nested_are_empty(self):
+        ordinary = make_runner("single.last_value", lambda _state: [])
+        nested = make_runner("nested.contradiction", lambda _state: [])
+        complete = make_runner(
+            "forcing.complete_tree",
+            lambda _state: [make_move("forcing.complete_tree")],
+        )
+
+        with (
+            mock.patch.object(registry, "ORDINARY_RUNNERS", (ordinary,)),
+            mock.patch.object(registry, "NESTED_RUNNERS", (nested,)),
+            mock.patch.object(registry, "COMPLETE_TREE_RUNNERS", (complete,)),
+        ):
+            moves, metadata = solver.collect_moves_for_analysis(
+                object(),
+                mode="deep",
+            )
+
+        self.assertEqual(
+            [move["technique_id"] for move in moves],
+            ["forcing.complete_tree"],
+        )
+        self.assertTrue(metadata["nested_fallback_attempted"])
+        self.assertFalse(metadata["nested_fallback_used"])
+        self.assertTrue(metadata["complete_tree_fallback_attempted"])
+        self.assertTrue(metadata["complete_tree_fallback_used"])
+        self.assertEqual(metadata["fallback_tier_used"], 2)
+        self.assertEqual(metadata["fallback_stage"], "complete_tree")
+        self.assertEqual(
+            metadata["fallback_reason"],
+            "no_ordinary_or_nested_move",
+        )
+
+    def test_nested_and_complete_tree_results_use_their_own_caps(self):
+        nested_moves = []
+        for index in range(3):
+            move = make_move("nested.contradiction")
+            move["eliminations"] = [(0, index, 1)]
+            nested_moves.append(move)
+
+        nested = make_runner(
+            "nested.contradiction",
+            lambda _state: nested_moves,
+        )
+        with (
+            mock.patch.object(registry, "ORDINARY_RUNNERS", ()),
+            mock.patch.object(registry, "NESTED_RUNNERS", (nested,)),
+            mock.patch.object(registry, "COMPLETE_TREE_RUNNERS", ()),
+        ):
+            moves, _ = solver.collect_moves_for_analysis(object(), mode="deep")
+
+        self.assertEqual(len(moves), 2)
+
+        complete_moves = []
+        for index in range(3):
+            move = make_move("forcing.complete_tree")
+            move["eliminations"] = [(0, index, 1)]
+            complete_moves.append(move)
+        complete = make_runner(
+            "forcing.complete_tree",
+            lambda _state: complete_moves,
+        )
+        with (
+            mock.patch.object(registry, "ORDINARY_RUNNERS", ()),
+            mock.patch.object(registry, "NESTED_RUNNERS", ()),
+            mock.patch.object(registry, "COMPLETE_TREE_RUNNERS", (complete,)),
+        ):
+            moves, _ = solver.collect_moves_for_analysis(object(), mode="deep")
+
+        self.assertEqual(len(moves), 1)
 
 
 if __name__ == "__main__":
