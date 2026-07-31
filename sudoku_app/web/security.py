@@ -23,7 +23,7 @@ SECURITY_HEADERS = {
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
-    "X-Sudoku-Logic-Lab": "1",
+    "X-Sudoku-Ranker": "1",
 }
 
 
@@ -87,7 +87,7 @@ def install_security_middleware(app, username=None, password=None):
                 media_type="text/plain",
                 headers={
                     "WWW-Authenticate": (
-                        'Basic realm="Sudoku Logic Lab", charset="UTF-8"'
+                        'Basic realm="Sudoku Ranker", charset="UTF-8"'
                     ),
                 },
             )

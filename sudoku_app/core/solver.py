@@ -22,6 +22,7 @@ import math
 from . import canonicalization as sc
 from . import data_structure as sds
 from . import difficulty as difficulty_model
+from . import proof_schema
 from . import techniques as st
 from . import technique_catalog
 from . import technique_registry
@@ -100,96 +101,11 @@ def _base_difficulty(move):
     return float(_move_definition(move).base_difficulty)
 
 
-def _literal_signature(literal):
-    """Firma stabile di un letterale conservato nella prova."""
-    if isinstance(literal, dict):
-        return (
-            literal.get("row"),
-            literal.get("column"),
-            literal.get("value"),
-            literal.get("state"),
-        )
-
-    if isinstance(literal, (tuple, list)):
-        return tuple(literal)
-
-    return repr(literal)
-
-
-def _nonnegative_number(value, default=0.0):
-    try:
-        result = float(value)
-    except (TypeError, ValueError):
-        return float(default)
-
-    if not math.isfinite(result):
-        return float(default)
-
-    return max(0.0, result)
-
-
 def _proof_metrics(move):
-    """Estrae metriche uniformi dalla prova disponibile nella mossa."""
-    logic = move.get("logic", {}) or {}
-    explicit = logic.get("metrics", {}) or {}
-    chains = [
-        list(chain)
-        for chain in (logic.get("chains", ()) or ())
-        if chain
-    ]
-    assumptions = list(logic.get("assumptions", ()) or ())
-
-    chain_lengths = [len(chain) for chain in chains]
-    proof_literals = {
-        _literal_signature(literal)
-        for chain in chains
-        for literal in chain
-    }
-    proof_literals.update(
-        _literal_signature(literal)
-        for literal in assumptions
+    """Legge esclusivamente le metriche normalizzate della prova."""
+    return proof_schema.normalize_proof_metrics(
+        move.get("logic", {}) or {}
     )
-
-    chain_count = max(
-        _nonnegative_number(explicit.get("chain_count")),
-        float(len(chains)),
-    )
-    max_chain_length = max(
-        _nonnegative_number(explicit.get("max_chain_length")),
-        float(max(chain_lengths, default=0)),
-    )
-    total_chain_length = max(
-        _nonnegative_number(explicit.get("total_chain_length")),
-        float(sum(chain_lengths)),
-    )
-    assumption_count = max(
-        _nonnegative_number(explicit.get("assumption_count")),
-        float(len(assumptions)),
-    )
-    node_count = max(
-        _nonnegative_number(explicit.get("node_count")),
-        _nonnegative_number(explicit.get("proof_node_count")),
-        float(len(proof_literals)),
-        total_chain_length,
-    )
-    branch_count = max(
-        _nonnegative_number(explicit.get("branch_count")),
-        _nonnegative_number(explicit.get("branches")),
-    )
-    nested_depth = max(
-        _nonnegative_number(explicit.get("nested_depth")),
-        _nonnegative_number(explicit.get("max_depth")),
-    )
-
-    return {
-        "chain_count": chain_count,
-        "max_chain_length": max_chain_length,
-        "total_chain_length": total_chain_length,
-        "assumption_count": assumption_count,
-        "node_count": node_count,
-        "branch_count": branch_count,
-        "nested_depth": nested_depth,
-    }
 
 
 def _proof_complexity_extra(move):
@@ -227,7 +143,7 @@ def _proof_complexity_extra(move):
     assumption_count = max(metrics["assumption_count"], 1.0)
     secondary_nodes = max(
         0.0,
-        metrics["node_count"] - max_chain_length,
+        metrics["proof_node_count"] - max_chain_length,
     )
 
     length_extra = (
@@ -314,6 +230,8 @@ def _prepare_move(move):
         definition.se_equivalent_parent_id
     )
     move["rating_kind"] = definition.rating_kind
+    if move.get("logic") is not None:
+        move["logic"] = proof_schema.normalize_proof(move["logic"])
     metrics = _proof_metrics(move)
     extra = _proof_complexity_extra(move)
     move["base_difficulty"] = _base_difficulty(move)
@@ -343,7 +261,7 @@ def _move_sort_key(move, canonical_transform=None):
     key = (
         _difficulty_score(move),
         _tie_rank(move),
-        metrics["node_count"],
+        metrics["proof_node_count"],
         metrics["max_chain_length"],
     )
 

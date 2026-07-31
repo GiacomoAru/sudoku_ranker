@@ -9,7 +9,10 @@ import numpy as np
 
 from sudoku_app.archive import repository as archive
 from sudoku_app.web.app import create_app
-from sudoku_app.web.photo_recognition import SudokuPhotoRecognizer
+from sudoku_app.web.photo_recognition import (
+    RECOGNITION_VERSION,
+    SudokuPhotoRecognizer,
+)
 from sudoku_app.web.photo_recognition import (
     _load_image,
     _periodic_projection_bounds,
@@ -222,10 +225,18 @@ class SudokuPhotoApiTests(unittest.TestCase):
         self.assertEqual(len(metadata["attempts"]), 1)
         self.assertEqual(
             metadata["attempts"][0]["algorithm_version"],
-            "opencv-hog-synthetic-v2",
+            RECOGNITION_VERSION,
         )
         puzzle = archive.load_sudoku(puzzle_id)
-        self.assertEqual(puzzle["metadata"]["source"], "web-photo")
+        self.assertEqual(puzzle["metadata"]["source"], "foto")
+        self.assertEqual(
+            puzzle["metadata"]["entry_channel"],
+            "web",
+        )
+        self.assertEqual(
+            puzzle["metadata"]["input_method"],
+            "photo",
+        )
         self.assertEqual(puzzle["metadata"]["photo_id"], photo_id)
 
     def test_failed_recognition_keeps_the_original_photo(self):

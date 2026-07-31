@@ -198,7 +198,9 @@ Regole:
 
 ### Obiettivo
 
-Separare semanticamente la ricerca esaustiva dalle vere Nested Forcing Chains.
+Separare semanticamente la ricerca esaustiva dalle vere Nested Forcing Chains. 
+La attuale implementazione può non essere ottimale, ma attualmente va solo trattata separatamente,
+In preparazione di una successiva aggiunta di nested vere.
 
 ### Implementazione
 

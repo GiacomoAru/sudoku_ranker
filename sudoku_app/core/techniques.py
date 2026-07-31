@@ -56,14 +56,13 @@ A move must change something: it either places a digit or eliminates >=1
 candidate; moves that would do nothing are not returned.
 """
 
-import math
-
 from collections import defaultdict
 from itertools import combinations
 
 from .data_structure import *
 from . import logic_engine
 from . import difficulty as difficulty_model
+from . import proof_schema
 from . import technique_catalog
 
 
@@ -1910,112 +1909,24 @@ def _specific_logic_technique(state, parent, deduction):
     return parent
 
 
-def _nested_structure_depth(value, depth=0):
-    if isinstance(value, dict):
-        if not value:
-            return depth
-        return max(
-            _nested_structure_depth(item, depth + 1)
-            for item in value.values()
-        )
-    if isinstance(value, (list, tuple, set)):
-        if not value:
-            return depth
-        return max(
-            _nested_structure_depth(item, depth + 1)
-            for item in value
-        )
-    return depth
-
-
 def _proof_metrics(deduction):
-    """Stima deterministica della complessita della prova mostrata."""
-    logic = deduction.get("logic", {}) or {}
-    chains = logic.get("chains", ()) or ()
-    chain_lengths = [
-        len(chain)
-        for chain in chains
-        if isinstance(chain, (list, tuple))
-    ]
-    node_count = sum(chain_lengths)
+    """Legge lo schema condiviso senza sostituire i dati del motore."""
+    return proof_schema.normalize_proof_metrics(
+        deduction.get("logic", {}) or {}
+    )
 
-    return {
-        "chain_count": len(chain_lengths),
-        "node_count": node_count,
-        "max_chain_length": max(chain_lengths, default=0),
-        "nesting_depth": _nested_structure_depth(logic),
-        "primary_cell_count": len(set(deduction.get("primary", ()))),
-    }
 
 def _proof_rank(deduction, placements, eliminations):
     metrics = _proof_metrics(deduction)
     return (
-        metrics["nesting_depth"],
-        metrics["node_count"],
+        metrics["nested_depth"],
+        metrics["proof_node_count"],
         metrics["max_chain_length"],
-        metrics["primary_cell_count"],
+        len(set(deduction.get("primary", ()))),
         len(placements) + len(eliminations),
         deduction.get("description", ""),
     )
 
-
-def _effective_logic_difficulty(technique, metrics):
-    """
-    Calcola la difficoltà effettiva di una tecnica logica.
-
-    Il valore nella tabella TECHNIQUE_DIFFICULTY resta il minimo
-    canonico della tecnica. Le Nested Forcing Chain possono superarlo
-    in base alla complessità concreta della prova.
-    """
-    base_difficulty = _canonical_difficulty(technique)
-
-    if not technique.startswith("Nested "):
-        return base_difficulty
-
-    chain_count = max(
-        int(metrics.get("chain_count", 0)),
-        1,
-    )
-    node_count = max(
-        int(metrics.get("node_count", 0)),
-        0,
-    )
-    max_chain_length = max(
-        int(metrics.get("max_chain_length", 0)),
-        0,
-    )
-
-    # Una catena fino a 6 nodi non supera il rating base.
-    length_extra = (
-        0.10
-        * max(0, max_chain_length - 6)
-    )
-
-    # Conta i nodi appartenenti a rami o sotto-prove ulteriori.
-    secondary_nodes = max(
-        0,
-        node_count - max_chain_length,
-    )
-
-    branching_extra = (
-        0.10
-        * math.log2(1 + secondary_nodes)
-    )
-
-    # Penalità aggiuntiva quando la prova contiene più catene.
-    multiple_chain_extra = (
-        0.15
-        * max(0, chain_count - 1)
-    )
-
-    difficulty = (
-        base_difficulty
-        + length_extra
-        + branching_extra
-        + multiple_chain_extra
-    )
-
-    return round(difficulty, 1)
 
 def _logic_moves(state, technique, excluded_effects=()):
     """
@@ -2110,23 +2021,16 @@ def _logic_moves(state, technique, excluded_effects=()):
             if specific not in description:
                 description = f"{specific}: {description}"
 
-        metrics = _proof_metrics(deduction)
-
-        effective_difficulty = _effective_logic_difficulty(
-            specific,
-            metrics,
-        )
-
         proof = dict(deduction.get("logic", {}) or {})
         proof["parent_technique"] = technique
         proof["specific_technique"] = specific
-        proof["metrics"] = metrics
         proof["equivalent_proof_count"] = bucket["proof_count"]
+        proof = proof_schema.normalize_proof(proof)
 
         move = _build_move(
             technique=specific,
             family=technique_family(specific),
-            difficulty=effective_difficulty,
+            difficulty=_canonical_difficulty(specific),
             description=description,
             placements=bucket["placements"],
             eliminations=bucket["eliminations"],

@@ -200,7 +200,7 @@ function buildAnalysisRequest(grid) {
     name: metadata.title || null,
     metadata,
     analysis_mode: "profile",
-    profile_difficulty_window: 3.0,
+    profile_difficulty_window: 1.5,
     photo_id: metadata.photo_id || null,
   };
 }

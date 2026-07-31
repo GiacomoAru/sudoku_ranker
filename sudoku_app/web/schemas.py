@@ -2,6 +2,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from ..core import solver
+
 
 AnalysisMode = Literal["profile", "deep", "superficial"]
 
@@ -24,7 +26,7 @@ class SudokuSubmission(BaseModel):
 
     analysis_mode: AnalysisMode = "profile"
     profile_difficulty_window: float = Field(
-        default=3.0,
+        default=solver.DEFAULT_PROFILE_DIFFICULTY_WINDOW,
         ge=0.0,
         le=10.0,
     )

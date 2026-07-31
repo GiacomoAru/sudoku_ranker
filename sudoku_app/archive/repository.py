@@ -37,8 +37,8 @@ CANONICAL_CLASS_SCHEMA_VERSION = 1
 
 # Incrementare questo numero quando cambia il funzionamento del solver
 # o il formato dell'analisi. Le vecchie analisi verranno ricalcolate.
-ANALYSIS_VERSION = 18
-ANALYSIS_SCHEMA_VERSION = 7
+ANALYSIS_VERSION = 19
+ANALYSIS_SCHEMA_VERSION = 8
 
 # Evita anche letture ripetute dal disco durante la stessa esecuzione.
 # La chiave è (puzzle_id, analysis_variant), non soltanto puzzle_id.
@@ -728,9 +728,20 @@ def _restore_analysis(data):
     return analysis
 
 
-_STORED_MOVE_FIELDS = {
+_STORED_MOVE_FIELDS = (
+    "technique_id",
     "technique",
     "family",
+    "strategy",
+    "parent_id",
+    "se_equivalent_parent_id",
+    "rating_kind",
+    "detector_id",
+    "engine_type",
+    "fallback_tier",
+    "base_difficulty",
+    "difficulty_extra",
+    "difficulty_metrics",
     "technical_difficulty",
     "resolution_load",
     "move_discovery_difficulty",
@@ -739,6 +750,8 @@ _STORED_MOVE_FIELDS = {
     "eliminations",
     "highlight",
     "logic",
+    "proof_count",
+    "conclusion_count",
     "step",
     "grid_after",
     "available_move_count",
@@ -746,8 +759,12 @@ _STORED_MOVE_FIELDS = {
     "effective_move_count",
     "available_by_technique",
     "frontier_by_technique",
+    "nested_fallback_used",
+    "move_inventory_censored",
+    "effective_move_count_is_lower_bound",
+    "move_discovery_difficulty_is_upper_bound",
     "capped_techniques",
-}
+)
 
 def _compact_analysis_for_storage(analysis):
     """
@@ -881,25 +898,7 @@ def _compact_analysis_for_storage(analysis):
         
         migrated = {
             key: move[key]
-            for key in (
-                "technique_id",
-                "technique",
-                "family",
-                "strategy",
-                "parent_id",
-                "se_equivalent_parent_id",
-                "rating_kind",
-                "detector_id",
-                "engine_type",
-                "fallback_tier",
-                "description",
-                "placements",
-                "eliminations",
-                "highlight",
-                "logic",
-                "step",
-                "grid_after",
-            )
+            for key in _STORED_MOVE_FIELDS
             if key in move
         }
         migrated.update({
@@ -2015,6 +2014,7 @@ def save_analysis(analysis):
     canonical_id = stored_puzzle["canonical_id"]
     analysis["canonical_id"] = canonical_id
 
+    stored_analysis = _compact_analysis_for_storage(analysis)
     payload = {
         "schema_version": ANALYSIS_SCHEMA_VERSION,
         "analysis_version": ANALYSIS_VERSION,
@@ -2024,14 +2024,18 @@ def save_analysis(analysis):
         "analysis_mode": mode,
         "profile_difficulty_window": window,
         "created_at": _current_timestamp(),
-        "analysis": _compact_analysis_for_storage(analysis),
+        "analysis": stored_analysis,
     }
 
     path = _analysis_path(puzzle_id, mode, window)
     _write_json(path, payload, compact=True)
 
     cache_key = _analysis_cache_key(puzzle_id, mode, window)
-    _ANALYSIS_MEMORY_CACHE[cache_key] = analysis
+    cached_analysis = _restore_analysis(stored_analysis)
+    cached_analysis["puzzle_id"] = puzzle_id
+    cached_analysis["canonical_id"] = canonical_id
+    cached_analysis["analysis_variant"] = variant
+    _ANALYSIS_MEMORY_CACHE[cache_key] = cached_analysis
 
     return path
 
@@ -2103,7 +2107,7 @@ def analyse_puzzle_cached(
     Restituisce e persiste la variante di analisi richiesta.
 
     Le varianti ``deep``, ``profile`` e ``superficial`` hanno file e chiavi
-    di cache distinti. ``profile`` con finestra 3.0 è il default; la ``deep``
+    di cache distinti. ``profile`` con finestra 1.5 è il default; la ``deep``
     continua a usare il nome storico ``analysis.json``.
     """
     _ensure_sudoku_directories()
@@ -2185,4 +2189,4 @@ def analyse_puzzle_cached(
     analysis["analysis_variant"] = _analysis_variant(mode, window)
 
     save_analysis(analysis)
-    return analysis
+    return _ANALYSIS_MEMORY_CACHE[cache_key]

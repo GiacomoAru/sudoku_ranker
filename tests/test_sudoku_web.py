@@ -7,7 +7,10 @@ import unittest
 from fastapi.testclient import TestClient
 
 from sudoku_app.archive import repository as archive
+from sudoku_app.core import proof_schema
+from sudoku_app.core import solver
 from sudoku_app.web.app import create_app
+from sudoku_app.web.photo_recognition import RECOGNITION_VERSION
 
 
 PUZZLE = (
@@ -57,13 +60,32 @@ class SudokuWebTests(unittest.TestCase):
         )
         self.assertEqual(
             response.json()["default_profile_difficulty_window"],
-            3.0,
+            solver.DEFAULT_PROFILE_DIFFICULTY_WINDOW,
         )
         self.assertEqual(
             response.json()["photo_recognition_version"],
-            "opencv-hog-synthetic-v2",
+            RECOGNITION_VERSION,
         )
         self.assertEqual(response.json()["max_photo_size_mb"], 12)
+        openapi = self.app.openapi()
+        self.assertEqual(openapi["info"]["title"], "Sudoku Ranker")
+        self.assertEqual(
+            openapi["components"]["schemas"]["SudokuSubmission"]
+            ["properties"]["profile_difficulty_window"]["default"],
+            solver.DEFAULT_PROFILE_DIFFICULTY_WINDOW,
+        )
+        plot_parameters = {
+            parameter["name"]: parameter
+            for parameter in openapi["paths"][
+                "/api/v1/analyses/{puzzle_id}/plots/{plot_name}.png"
+            ]["get"]["parameters"]
+        }
+        self.assertEqual(
+            plot_parameters["profile_difficulty_window"]["schema"][
+                "default"
+            ],
+            solver.DEFAULT_PROFILE_DIFFICULTY_WINDOW,
+        )
         self.assertTrue(
             (
                 self.offline_root
@@ -80,13 +102,13 @@ class SudokuWebTests(unittest.TestCase):
         response = self.client.get("/")
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Sudoku Logic Lab", response.text)
-        self.assertIn("<dt>Carico di risoluzione</dt>", response.text)
-        self.assertIn("<dt>Difficoltà percepita</dt>", response.text)
+        self.assertIn("Sudoku Ranker", response.text)
+        self.assertIn("<dt>Carico risolutivo</dt>", response.text)
+        self.assertIn("<dt>Difficoltà tecnica</dt>", response.text)
         self.assertNotIn("Perceived 1–10", response.text)
         self.assertIn('inputmode="numeric"', response.text)
-        self.assertIn('class="metric-help"', response.text)
-        self.assertIn("Riconosci da una foto", response.text)
+        self.assertIn('class="metric-help ', response.text)
+        self.assertIn("Importa il Sudoku da una foto", response.text)
         self.assertIn("/static/app.js", response.text)
 
         javascript = self.client.get("/static/app.js")
@@ -94,6 +116,10 @@ class SudokuWebTests(unittest.TestCase):
         self.assertIn('"Chiudi"', javascript.text)
         self.assertIn(
             'addEventListener("toggle", updateJsonSummaryAction)',
+            javascript.text,
+        )
+        self.assertIn(
+            "profile_difficulty_window: 1.5",
             javascript.text,
         )
 
@@ -113,7 +139,7 @@ class SudokuWebTests(unittest.TestCase):
                 denied.headers["www-authenticate"],
             )
             self.assertEqual(
-                denied.headers["x-sudoku-logic-lab"],
+                denied.headers["x-sudoku-ranker"],
                 "1",
             )
 
@@ -165,22 +191,36 @@ class SudokuWebTests(unittest.TestCase):
         analysis = payload["analysis"]
 
         self.assertEqual(payload["archive_profile"], "online")
-        self.assertEqual(payload["name"], "rivista_sfida_0")
+        self.assertEqual(
+            payload["name"],
+            f"sudoku_{payload['puzzle_id'][:8]}",
+        )
         self.assertEqual(analysis["analysis_mode"], "profile")
-        self.assertEqual(analysis["profile_difficulty_window"], 3.0)
+        self.assertEqual(
+            analysis["profile_difficulty_window"],
+            solver.DEFAULT_PROFILE_DIFFICULTY_WINDOW,
+        )
         self.assertIn(analysis["status"], {"solved", "stuck"})
         self.assertIn("grading", analysis)
         self.assertIn("chain", analysis)
         self.assertTrue(analysis["unique_solution"])
         self.assertIn("technical_difficulty", analysis["grading"])
         self.assertIn("resolution_load", analysis["grading"])
-        self.assertIn("resolution_load_level", analysis["grading"])
+        self.assertIn("resolution_load_label", analysis["grading"])
         self.assertGreater(
-            analysis["grading"]["perceived_difficulty"],
+            analysis["grading"]["move_discovery_difficulty"],
             0.0,
         )
         self.assertIn("technical_difficulty", analysis["chain"][0])
         self.assertIn("resolution_load", analysis["chain"][0])
+        self.assertIn("technique_id", analysis["chain"][0])
+        self.assertIn("difficulty_metrics", analysis["chain"][0])
+        self.assertEqual(
+            analysis["chain"][0]["difficulty_metrics"][
+                "metrics_version"
+            ],
+            proof_schema.PROOF_METRICS_VERSION,
+        )
         self.assertTrue(
             (self.online_root / "puzzles" / f"{payload['puzzle_id']}.json")
             .exists()
@@ -190,7 +230,7 @@ class SudokuWebTests(unittest.TestCase):
                 self.online_root
                 / "analyses"
                 / payload["puzzle_id"]
-                / "analysis_profile_3.json"
+                / "analysis_profile_1p5.json"
             ).exists()
         )
         puzzle_payload = json.loads(
@@ -203,11 +243,11 @@ class SudokuWebTests(unittest.TestCase):
         self.assertEqual(
             puzzle_payload["metadata"],
             {
-                "source": "web",
-                "provenience": "rivista",
-                "tag": "luglio_2026",
-                "difficulty": "sfida",
-                "index": 0,
+                "entry_channel": "web",
+                "input_method": "manual",
+                "source": "rivista",
+                "source_reference": "luglio_2026",
+                "stated_difficulty": "sfida",
             },
         )
 
@@ -215,23 +255,45 @@ class SudokuWebTests(unittest.TestCase):
             self.online_root
             / "analyses"
             / payload["puzzle_id"]
-            / "analysis_profile_3.json"
+            / "analysis_profile_1p5.json"
         )
         stored_analysis = json.loads(
             analysis_path.read_text(encoding="utf-8")
         )
         stored_move = stored_analysis["analysis"]["chain"][0]
-        self.assertEqual(stored_analysis["schema_version"], 4)
+        self.assertEqual(
+            stored_analysis["schema_version"],
+            archive.ANALYSIS_SCHEMA_VERSION,
+        )
+        self.assertEqual(
+            stored_analysis["analysis_version"],
+            archive.ANALYSIS_VERSION,
+        )
         self.assertIsInstance(
             stored_analysis["analysis"]["original"],
             str,
         )
         self.assertIn("available_by_technique", stored_move)
+        self.assertIn("technique_id", stored_move)
+        self.assertIn("difficulty_metrics", stored_move)
         self.assertNotIn("availability", stored_move)
-        self.assertNotIn(
-            "applicable_by_technique",
-            archive.load_analysis(payload["puzzle_id"])["chain"][0],
+        archive._ANALYSIS_MEMORY_CACHE.clear()
+        reloaded_move = archive.load_analysis(
+            payload["puzzle_id"]
+        )["chain"][0]
+        self.assertEqual(
+            set(analysis["chain"][0]),
+            set(reloaded_move),
         )
+        self.assertEqual(
+            analysis["chain"][0]["difficulty_metrics"],
+            reloaded_move["difficulty_metrics"],
+        )
+        self.assertEqual(
+            analysis["chain"][0].get("logic"),
+            reloaded_move.get("logic"),
+        )
+        self.assertNotIn("applicable_by_technique", reloaded_move)
 
         for plot_url in payload["plots"].values():
             plot_response = self.client.get(plot_url)

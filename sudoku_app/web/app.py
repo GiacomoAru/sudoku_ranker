@@ -7,6 +7,8 @@ from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from ..core import solver
+
 from .jobs import AnalysisJobManager, JobQueueFullError
 from .schemas import (
     AnalysisEnvelope,
@@ -135,7 +137,7 @@ def create_app(
         job_manager.shutdown(wait=True)
 
     app = FastAPI(
-        title="Sudoku Logic Lab",
+        title="Sudoku Ranker",
         version="0.2.0",
         description=(
             "API web per riconoscere Sudoku da foto, salvarli e ricevere "
@@ -295,7 +297,7 @@ def create_app(
         plot_name: str,
         analysis_mode: str = Query(default="profile"),
         profile_difficulty_window: float = Query(
-            default=3.0,
+            default=solver.DEFAULT_PROFILE_DIFFICULTY_WINDOW,
             ge=0.0,
             le=10.0,
         ),

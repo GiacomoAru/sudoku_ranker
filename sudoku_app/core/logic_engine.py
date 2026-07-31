@@ -28,6 +28,7 @@ from itertools import chain, combinations
 from threading import RLock
 
 from .data_structure import UNITS, UNIT_KINDS, peers
+from . import proof_schema
 
 
 Candidate = tuple[int, int, int]
@@ -185,7 +186,8 @@ def _literal_record(literal: Literal) -> dict:
 
 
 def _proof(kind: str, assumptions, chains, reasons=None) -> dict:
-    return {
+    proof = {
+        "schema_version": proof_schema.PROOF_SCHEMA_VERSION,
         "kind": kind,
         "assumptions": [_literal_record(item) for item in assumptions],
         "chains": [
@@ -194,6 +196,8 @@ def _proof(kind: str, assumptions, chains, reasons=None) -> dict:
         ],
         "reasons": sorted(set(reasons or ())),
     }
+    proof["metrics"] = proof_schema.normalize_proof_metrics(proof)
+    return proof
 
 
 def _deduction(
@@ -1177,32 +1181,53 @@ class _CompleteNestedSearch:
     def _proof_metrics(node):
         def visit(current):
             local_length = len(current.propagations)
+            local_assumption_count = 0
             local_depth = 0
 
             if current.assumption is not None:
                 local_length += 1
+                local_assumption_count = 1
                 local_depth = 1
 
             if current.contradiction or not current.children:
                 return {
                     "chain_count": 1,
-                    "node_count": max(local_length, 1),
+                    "proof_node_count": max(local_length, 1),
+                    "assumption_count": local_assumption_count,
                     "max_chain_length": local_length,
+                    "total_chain_length": local_length,
                     "nested_depth": local_depth,
                     "branch_count": 0,
+                    "leaf_count": 1,
+                    "nested_subproof_count": 0,
                 }
 
             child_metrics = [visit(child) for child in current.children]
+            chain_count = sum(
+                item["chain_count"] for item in child_metrics
+            )
 
             return {
-                "chain_count": sum(
-                    item["chain_count"] for item in child_metrics
+                "chain_count": chain_count,
+                "proof_node_count": local_length + 1 + sum(
+                    item["proof_node_count"] for item in child_metrics
                 ),
-                "node_count": local_length + 1 + sum(
-                    item["node_count"] for item in child_metrics
+                "assumption_count": (
+                    local_assumption_count
+                    + sum(
+                        item["assumption_count"]
+                        for item in child_metrics
+                    )
                 ),
                 "max_chain_length": local_length + max(
                     item["max_chain_length"] for item in child_metrics
+                ),
+                "total_chain_length": (
+                    local_length * chain_count
+                    + sum(
+                        item["total_chain_length"]
+                        for item in child_metrics
+                    )
                 ),
                 "nested_depth": local_depth + max(
                     item["nested_depth"] for item in child_metrics
@@ -1210,9 +1235,28 @@ class _CompleteNestedSearch:
                 "branch_count": len(current.children) + sum(
                     item["branch_count"] for item in child_metrics
                 ),
+                "leaf_count": sum(
+                    item["leaf_count"] for item in child_metrics
+                ),
+                "nested_subproof_count": 0,
             }
 
-        return visit(node)
+        structural = visit(node)
+        structural["proof_edge_count"] = max(
+            structural["proof_node_count"] - 1,
+            0,
+        )
+        return proof_schema.normalize_proof_metrics({
+            "assumptions": (
+                (node.assumption,)
+                if node.assumption is not None
+                else ()
+            ),
+            "chains": (
+                _CompleteNestedSearch._longest_chain(node),
+            ),
+            "metrics": structural,
+        })
 
     @staticmethod
     def _serialize_proof(root):
