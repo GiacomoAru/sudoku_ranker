@@ -65,6 +65,8 @@ from . import difficulty as difficulty_model
 from . import move_presentation
 from . import proof_schema
 from . import technique_catalog
+from . import technique_classification
+from . import uniqueness as uniqueness_patterns
 
 
 # Viste derivate dal catalogo. I nomi storici restano locali a questo modulo
@@ -257,7 +259,18 @@ def _state_signature(state):
         for c in range(9)
     )
 
-    return grid_signature, candidate_signature
+    given_mask = getattr(state, "given_mask", None)
+    given_signature = (
+        given_mask.tobytes()
+        if hasattr(given_mask, "tobytes")
+        else None
+    )
+    return (
+        grid_signature,
+        candidate_signature,
+        getattr(state, "uniqueness_status", UNIQUENESS_NOT_CHECKED),
+        given_signature,
+    )
 
 
 def _state_cache(state):
@@ -315,7 +328,17 @@ def _canonical_difficulty(technique, fallback=None):
         return float(fallback)
 
 
-def _elim_move(technique, family, difficulty, description, eliminations, primary, state):
+def _elim_move(
+    technique,
+    family,
+    difficulty,
+    description,
+    eliminations,
+    primary,
+    state,
+    *,
+    extra=None,
+):
     """Costruisce una mossa di sole eliminazioni, scartando i no-op."""
     real = [
         (r, c, value)
@@ -330,6 +353,7 @@ def _elim_move(technique, family, difficulty, description, eliminations, primary
         placements=(),
         eliminations=real,
         primary=primary,
+        extra=extra,
     )
 
 
@@ -1272,8 +1296,18 @@ def empty_rectangle(state):
 
 
 # ----------------------------------------------------------- 8. unique rect
+def _uniqueness_verified(state):
+    return (
+        getattr(state, "uniqueness_status", UNIQUENESS_NOT_CHECKED)
+        == UNIQUENESS_VERIFIED
+    )
+
+
 def _rectangle_patterns(state):
     """Genera rettangoli validi: due righe, due colonne e due box."""
+    if not _uniqueness_verified(state):
+        return
+
     for r1, r2 in combinations(range(9), 2):
         for c1, c2 in combinations(range(9), 2):
             cells = (
@@ -1532,8 +1566,347 @@ def unique_rectangle_type5(state):
     return moves
 
 
+def unique_rectangle_type6(state):
+    """UR6: due celle tetto diagonali e X-Wing su una cifra base."""
+    moves = []
+    seen = set()
+
+    for cells, pair, extras in _rectangle_patterns(state):
+        roof = [cell for cell in cells if extras[cell]]
+        floor = [cell for cell in cells if not extras[cell]]
+        if len(roof) != 2 or len(floor) != 2:
+            continue
+        if roof[0][0] == roof[1][0] or roof[0][1] == roof[1][1]:
+            continue
+
+        rows = {row for row, _ in cells}
+        columns = {column for _, column in cells}
+        for locked_digit in sorted(pair):
+            outside = {
+                (row, column)
+                for row in rows
+                for column in range(9)
+                if (row, column) not in cells
+                and locked_digit in state.candidates[row][column]
+            } | {
+                (row, column)
+                for column in columns
+                for row in range(9)
+                if (row, column) not in cells
+                and locked_digit in state.candidates[row][column]
+            }
+            if outside:
+                continue
+
+            eliminations = [
+                (row, column, locked_digit)
+                for row, column in roof
+            ]
+            mv = _elim_move(
+                'Unique Rectangle Type 6', 'Unicita', 4.8,
+                f'Nel rettangolo basato su {sorted(pair)}, il candidato '
+                f'{locked_digit} compare nelle due righe e nelle due '
+                f'colonne soltanto nelle quattro celle del pattern. '
+                f'Non puo quindi occupare le due celle tetto diagonali.',
+                eliminations,
+                list(cells),
+                state,
+            )
+            _append_unique(moves, mv, seen)
+
+    return moves
+
+
+def hidden_rectangle(state):
+    """Hidden Rectangle con una cifra base confinata in riga e colonna."""
+    moves = []
+    seen = set()
+
+    for cells, pair, extras in _rectangle_patterns(state):
+        extra_cells = [cell for cell in cells if extras[cell]]
+        if len(extra_cells) not in (2, 3):
+            continue
+
+        pure_cells = [cell for cell in cells if not extras[cell]]
+        for start in pure_cells:
+            target = next(
+                cell
+                for cell in cells
+                if cell[0] != start[0] and cell[1] != start[1]
+            )
+            for locked_digit in sorted(pair):
+                row_outside = {
+                    (target[0], column)
+                    for column in range(9)
+                    if (target[0], column) not in cells
+                    and locked_digit in state.candidates[target[0]][column]
+                }
+                column_outside = {
+                    (row, target[1])
+                    for row in range(9)
+                    if (row, target[1]) not in cells
+                    and locked_digit in state.candidates[row][target[1]]
+                }
+                if row_outside or column_outside:
+                    continue
+
+                removable = next(iter(set(pair) - {locked_digit}))
+                mv = _elim_move(
+                    'Hidden Rectangle', 'Unicita', 4.9,
+                    f'Partendo dalla cella pura R{start[0]+1}C{start[1]+1}, '
+                    f'il candidato {locked_digit} resta confinato alle '
+                    f'celle del rettangolo sia nella riga sia nella colonna '
+                    f'dell angolo opposto R{target[0]+1}C{target[1]+1}. '
+                    f'Il candidato {removable} viene eliminato da tale angolo.',
+                    [(target[0], target[1], removable)],
+                    list(cells),
+                    state,
+                )
+                _append_unique(moves, mv, seen)
+
+    return moves
+
+
+def _avoidable_rectangle_sides(cells):
+    """Restituisce le due orientazioni in cui un lato giace in un box."""
+    (top_left, top_right, bottom_left, bottom_right) = cells
+    if box_of(*top_left) == box_of(*top_right):
+        yield (top_left, top_right), (bottom_left, bottom_right)
+        yield (bottom_left, bottom_right), (top_left, top_right)
+    if box_of(*top_left) == box_of(*bottom_left):
+        yield (top_left, bottom_left), (top_right, bottom_right)
+        yield (top_right, bottom_right), (top_left, bottom_left)
+
+
+def _avoidable_rectangle_patterns(state):
+    if not _uniqueness_verified(state):
+        return
+
+    for r1, r2 in combinations(range(9), 2):
+        for c1, c2 in combinations(range(9), 2):
+            cells = (
+                (r1, c1), (r1, c2),
+                (r2, c1), (r2, c2),
+            )
+            if len({box_of(row, column) for row, column in cells}) != 2:
+                continue
+            if any(state.given_mask[row, column] for row, column in cells):
+                continue
+
+            for solved_side, opposite_side in _avoidable_rectangle_sides(cells):
+                first, second = solved_side
+                first_value = int(state.grid[first[0], first[1]])
+                second_value = int(state.grid[second[0], second[1]])
+                if (
+                    first_value == 0
+                    or second_value == 0
+                    or first_value == second_value
+                ):
+                    continue
+                expected = (second_value, first_value)
+                yield cells, solved_side, opposite_side, expected
+
+
+def avoidable_rectangle_type1(state):
+    moves = []
+    seen = set()
+
+    for cells, solved_side, opposite_side, expected in (
+        _avoidable_rectangle_patterns(state)
+    ):
+        solved_opposite = [
+            index
+            for index, cell in enumerate(opposite_side)
+            if state.grid[cell[0], cell[1]] != 0
+        ]
+        if len(solved_opposite) != 1:
+            continue
+        solved_index = solved_opposite[0]
+        solved_cell = opposite_side[solved_index]
+        if int(state.grid[solved_cell[0], solved_cell[1]]) != expected[solved_index]:
+            continue
+
+        target_index = 1 - solved_index
+        target = opposite_side[target_index]
+        forbidden = expected[target_index]
+        mv = _elim_move(
+            'Avoidable Rectangle Type 1', 'Unicita', 4.4,
+            f'Le tre cifre risolte non date nel rettangolo '
+            f'{", ".join(f"R{r+1}C{c+1}" for r, c in cells)} '
+            f'formerebbero un pattern scambiabile se '
+            f'R{target[0]+1}C{target[1]+1} fosse {forbidden}.',
+            [(target[0], target[1], forbidden)],
+            list(cells),
+            state,
+        )
+        _append_unique(moves, mv, seen)
+
+    return moves
+
+
+def avoidable_rectangle_type2(state):
+    moves = []
+    seen = set()
+
+    for cells, solved_side, opposite_side, expected in (
+        _avoidable_rectangle_patterns(state)
+    ):
+        if any(state.grid[row, column] != 0 for row, column in opposite_side):
+            continue
+        if any(
+            set((expected[index],))
+            - state.candidates[cell[0]][cell[1]]
+            for index, cell in enumerate(opposite_side)
+        ):
+            continue
+
+        extras = [
+            set(state.candidates[cell[0]][cell[1]]) - {expected[index]}
+            for index, cell in enumerate(opposite_side)
+        ]
+        if any(len(values) != 1 for values in extras) or extras[0] != extras[1]:
+            continue
+        extra_digit = next(iter(extras[0]))
+        if extra_digit in expected:
+            continue
+
+        targets = _common_peer_cells(opposite_side) - set(cells)
+        eliminations = [
+            (row, column, extra_digit)
+            for row, column in targets
+        ]
+        mv = _elim_move(
+            'Avoidable Rectangle Type 2', 'Unicita', 4.6,
+            f'Nel rettangolo con due cifre gia risolte e non date, '
+            f'le due celle opposte condividono il solo extra '
+            f'{extra_digit}; almeno una deve contenerlo.',
+            eliminations,
+            list(cells),
+            state,
+        )
+        _append_unique(moves, mv, seen)
+
+    return moves
+
+
+def unique_loops(state):
+    """Rileva Unique Loop Type 1-4 da un unico enumeratore strutturale."""
+    if not _uniqueness_verified(state):
+        return []
+
+    moves = []
+    seen = set()
+    for pattern in uniqueness_patterns.enumerate_unique_loops(state):
+        pair = set(pattern.base_pair)
+        extra_cells = list(pattern.extra_cells)
+        proof_cells = list(pattern.cells)
+
+        if len(extra_cells) == 1:
+            target = extra_cells[0]
+            mv = _elim_move(
+                'Unique Loop Type 1', 'Unicita', 5.0,
+                f'Il ciclo unico di lunghezza {len(pattern.cells)} basato '
+                f'su {sorted(pair)} ha una sola cella con candidati extra. '
+                f'La coppia base viene eliminata da tale cella.',
+                [(target[0], target[1], value) for value in pair],
+                proof_cells,
+                state,
+                extra={"logic": pattern.proof_payload(1)},
+            )
+            _append_unique(moves, mv, seen)
+
+        if len(extra_cells) >= 2 and len(pattern.extra_values) == 1:
+            extra_digit = pattern.extra_values[0]
+            targets = _common_peer_cells(extra_cells) - set(pattern.cells)
+            mv = _elim_move(
+                'Unique Loop Type 2', 'Unicita', 5.1,
+                f'Le celle extra del ciclo unico condividono il solo '
+                f'candidato {extra_digit}; esso deve essere vero in '
+                f'almeno una di esse.',
+                [(row, column, extra_digit) for row, column in targets],
+                proof_cells,
+                state,
+                extra={"logic": pattern.proof_payload(2)},
+            )
+            _append_unique(moves, mv, seen)
+
+        if len(extra_cells) == 2 and len(pattern.extra_values) >= 2:
+            virtual_values = set(pattern.extra_values)
+            for unit_index, unit, kind in _common_units(extra_cells):
+                available = [
+                    cell for cell in unit
+                    if cell not in pattern.cells
+                    and state.grid[cell[0], cell[1]] == 0
+                    and state.candidates[cell[0]][cell[1]]
+                    and not (state.candidates[cell[0]][cell[1]] & pair)
+                ]
+                for support_count in range(1, min(3, len(available)) + 1):
+                    subset_size = support_count + 1
+                    for support in combinations(available, support_count):
+                        union = set(virtual_values)
+                        for row, column in support:
+                            union |= state.candidates[row][column]
+                        if len(union) != subset_size:
+                            continue
+                        locked = set(pattern.cells) | set(support)
+                        eliminations = [
+                            (row, column, value)
+                            for row, column in unit
+                            if (row, column) not in locked
+                            for value in union
+                        ]
+                        mv = _elim_move(
+                            'Unique Loop Type 3', 'Unicita', 5.4,
+                            f'Gli extra {sorted(virtual_values)} del ciclo '
+                            f'agiscono come una pseudo-cella e formano un '
+                            f'sottoinsieme bloccato nella '
+                            f'{_unit_name(unit_index, kind)}.',
+                            eliminations,
+                            proof_cells + list(support),
+                            state,
+                            extra={"logic": pattern.proof_payload(3)},
+                        )
+                        _append_unique(moves, mv, seen)
+
+        if len(extra_cells) == 2:
+            for unit_index, unit, kind in _common_units(extra_cells):
+                locked_digits = [
+                    value
+                    for value in sorted(pair)
+                    if {
+                        (row, column)
+                        for row, column in unit
+                        if value in state.candidates[row][column]
+                    } == set(extra_cells)
+                ]
+                if len(locked_digits) != 1:
+                    continue
+                locked_digit = locked_digits[0]
+                removable = next(iter(pair - {locked_digit}))
+                mv = _elim_move(
+                    'Unique Loop Type 4', 'Unicita', 5.2,
+                    f'Nel ciclo unico il candidato {locked_digit} e '
+                    f'coniugato fra le due celle extra nella '
+                    f'{_unit_name(unit_index, kind)}; {removable} viene '
+                    f'eliminato da entrambe.',
+                    [
+                        (row, column, removable)
+                        for row, column in extra_cells
+                    ],
+                    proof_cells,
+                    state,
+                    extra={"logic": pattern.proof_payload(4)},
+                )
+                _append_unique(moves, mv, seen)
+
+    return moves
+
+
 def bug_plus_one(state):
     """Riconosce una BUG+1 in forma stretta e piazza il candidato extra."""
+    if not _uniqueness_verified(state):
+        return []
+
     unsolved = [
         (r, c) for r in range(9) for c in range(9)
         if state.grid[r, c] == 0
@@ -1598,6 +1971,9 @@ def bug_plus_one(state):
 # ---------------------------------------------------------- 5.7-6.0 BUG 2-4
 def _bug_core(state):
     """Rimuove virtualmente i candidati extra e valida il deadly pattern."""
+    if not _uniqueness_verified(state):
+        return None
+
     unsolved = [
         (r, c) for r in range(9) for c in range(9)
         if state.grid[r, c] == 0
@@ -1865,65 +2241,29 @@ def _effects_of_moves(moves):
 
 
 def _specific_logic_technique(state, parent, deduction):
-    """Classifica una prova generale solo quando il sottotipo e univoco."""
-    logic = deduction.get("logic", {})
-    chains = logic.get("chains", [])
-    kind = logic.get("kind")
-
-    if parent in ("Bidirectional Y-Cycle", "XY-Chain") and chains:
-        chain_items = (
-            chains[0][1:-1]
-            if parent == "XY-Chain"
-            else chains[0][:-1]
-        )
-        cells = {
-            (item["row"], item["column"])
-            for item in chain_items
-        }
-        candidate_sets = [
-            set(state.candidates[r][c]) for r, c in cells
-        ]
-        if parent == "XY-Chain" and len(cells) >= 2 and candidate_sets:
-            common_pair = candidate_sets[0]
-            if (
-                len(common_pair) == 2
-                and all(values == common_pair for values in candidate_sets)
+    """Classifica una prova usando soltanto vincoli strutturali verificati."""
+    matching_x_patterns = ()
+    if parent == "Forcing X-Chain":
+        wanted = _conclusion_effects(deduction)
+        matches = []
+        for name, cache_key, detector in (
+            ("Skyscraper", "skyscraper", skyscraper),
+            ("Two-String Kite", "two_string_kite", two_string_kite),
+            ("Empty Rectangle", "empty_rectangle", empty_rectangle),
+        ):
+            if any(
+                wanted <= _conclusion_effects(move)
+                for move in _cached_local(state, cache_key, detector)
             ):
-                return "Remote Pair"
-        if parent == "XY-Chain" and len(cells) >= 3 and all(
-            len(values) == 2 for values in candidate_sets
-        ):
-            return "XY-Chain"
-        if parent == "Bidirectional Y-Cycle" and len(cells) >= 2 and all(
-            len(values) == 2 for values in candidate_sets
-        ):
-            return "XY-Cycle"
+                matches.append(name)
+        matching_x_patterns = tuple(matches)
 
-    if parent == "Forcing X-Chain" and len(chains) == 1:
-        if len(chains[0]) == 6:
-            return "Turbot Fish"
-
-    if parent == "Forcing Chain":
-        return "Alternating Inference Chain"
-
-    if parent == "Bidirectional Cycle":
-        return "Continuous Nice Loop"
-
-    forcing_subtypes = {
-        "dynamic-contradiction": "Contradiction",
-        "dynamic-reduction": "Double",
-        "dynamic-cell-reduction": "Cell",
-        "dynamic-region-reduction": "Region",
-    }
-    subtype = forcing_subtypes.get(kind)
-    if subtype and parent == "Dynamic Forcing Chain":
-        return f"Dynamic {subtype} Forcing Chain"
-    if subtype and parent == "Dynamic Forcing Chain Plus":
-        return f"Dynamic {subtype} Forcing Chain Plus"
-    if subtype and parent == "Nested Forcing Chain":
-        return f"Nested {subtype} Forcing Chain"
-
-    return parent
+    return technique_classification.classify_logic_technique(
+        state,
+        parent,
+        deduction,
+        matching_x_patterns=matching_x_patterns,
+    )
 
 
 def _proof_metrics(deduction):
@@ -1997,6 +2337,8 @@ def _logic_moves(state, technique, excluded_effects=()):
             technique,
             deduction,
         )
+        if specific is None:
+            continue
         signature = (
             specific,
             tuple(placements),

@@ -533,7 +533,7 @@ class LogicEngineTests(unittest.TestCase):
             for move in moves
         ))
 
-    def test_general_proofs_are_classified_by_structure(self):
+    def test_generic_proof_labels_do_not_imply_a_specific_structure(self):
         state = synthetic_state({(0, 0): {1, 2}})
         six_literal_chain = [{
             "row": 0,
@@ -542,20 +542,32 @@ class LogicEngineTests(unittest.TestCase):
             "state": "on" if index % 2 == 0 else "off",
         } for index in range(6)]
         cases = [
-            ("Forcing X-Chain", "forcing-chain", [six_literal_chain], "Turbot Fish"),
-            ("Forcing Chain", "forcing-chain", [], "Alternating Inference Chain"),
-            ("Bidirectional Cycle", "bidirectional-cycle", [], "Continuous Nice Loop"),
-            ("Dynamic Forcing Chain", "dynamic-contradiction", [], "Dynamic Contradiction Forcing Chain"),
-            ("Dynamic Forcing Chain Plus", "dynamic-cell-reduction", [], "Dynamic Cell Forcing Chain Plus"),
-            ("Nested Forcing Chain", "dynamic-region-reduction", [], "Nested Region Forcing Chain"),
+            ("Forcing X-Chain", "forcing-chain", [six_literal_chain]),
+            ("Forcing Chain", "forcing-chain", []),
+            ("Bidirectional Cycle", "bidirectional-cycle", []),
         ]
-        for parent, kind, chains, expected in cases:
+        for parent, kind, chains in cases:
+            with self.subTest(parent=parent, kind=kind):
+                self.assertIsNone(
+                    techniques._specific_logic_technique(
+                        state,
+                        parent,
+                        {"logic": {"kind": kind, "chains": chains}},
+                    ),
+                )
+
+        dynamic_cases = [
+            ("Dynamic Forcing Chain", "dynamic-contradiction", "Dynamic Contradiction Forcing Chain"),
+            ("Dynamic Forcing Chain Plus", "dynamic-cell-reduction", "Dynamic Cell Forcing Chain Plus"),
+            ("Nested Forcing Chain", "dynamic-region-reduction", "Nested Region Forcing Chain"),
+        ]
+        for parent, kind, expected in dynamic_cases:
             with self.subTest(parent=parent, kind=kind):
                 self.assertEqual(
                     techniques._specific_logic_technique(
                         state,
                         parent,
-                        {"logic": {"kind": kind, "chains": chains}},
+                        {"logic": {"kind": kind, "chains": []}},
                     ),
                     expected,
                 )

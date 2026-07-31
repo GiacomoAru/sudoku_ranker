@@ -16,6 +16,15 @@ from itertools import combinations
 
 ALL_DIGITS = set(range(1, 10))
 
+UNIQUENESS_VERIFIED = "verified_unique"
+UNIQUENESS_NOT_CHECKED = "not_checked"
+UNIQUENESS_MULTIPLE_SOLUTIONS = "multiple_solutions"
+UNIQUENESS_STATUSES = frozenset({
+    UNIQUENESS_VERIFIED,
+    UNIQUENESS_NOT_CHECKED,
+    UNIQUENESS_MULTIPLE_SOLUTIONS,
+})
+
 
 def get_units():
     units = []
@@ -58,12 +67,30 @@ def box_of(r, c):
 class SudokuState:
     """Mutable state: grid of solved digits + candidate sets for empty cells."""
 
-    def __init__(self, grid):
+    def __init__(
+        self,
+        grid,
+        *,
+        uniqueness_status=UNIQUENESS_NOT_CHECKED,
+        initial_grid=None,
+    ):
         if isinstance(grid, str):
             s = grid.strip().replace('.', '0')
             assert len(s) == 81, f"expected 81 chars, got {len(s)}"
             grid = [int(ch) for ch in s]
         self.grid = np.array(grid, dtype=int).reshape(9, 9)
+        if uniqueness_status not in UNIQUENESS_STATUSES:
+            allowed = ", ".join(sorted(UNIQUENESS_STATUSES))
+            raise ValueError(
+                f"uniqueness_status non valido: {uniqueness_status!r}; "
+                f"valori ammessi: {allowed}."
+            )
+        self.uniqueness_status = uniqueness_status
+        self.initial_grid = np.array(
+            self.grid if initial_grid is None else initial_grid,
+            dtype=int,
+        ).reshape(9, 9).copy()
+        self.given_mask = self.initial_grid != 0
         self.candidates = [[set() for _ in range(9)] for _ in range(9)]
         self._init_candidates()
 
@@ -106,7 +133,11 @@ class SudokuState:
         return False
 
     def copy(self):
-        s = SudokuState(self.grid.copy())
+        s = SudokuState(
+            self.grid.copy(),
+            uniqueness_status=self.uniqueness_status,
+            initial_grid=self.initial_grid,
+        )
         s.candidates = [[set(x) for x in row] for row in self.candidates]
         return s
 
@@ -117,11 +148,14 @@ class SudokuState:
         return ''.join(str(self.grid[r, c]) for r in range(9) for c in range(9))
 
     @staticmethod
-    def from_string(s):
+    def from_string(s, *, uniqueness_status=UNIQUENESS_NOT_CHECKED):
         s = s.strip().replace('.', '0')
         assert len(s) == 81, f"expected 81 chars, got {len(s)}"
         digits = [int(ch) for ch in s]
-        return SudokuState(np.array(digits).reshape(9, 9))
+        return SudokuState(
+            np.array(digits).reshape(9, 9),
+            uniqueness_status=uniqueness_status,
+        )
     
 
 

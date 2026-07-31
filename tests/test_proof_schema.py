@@ -326,6 +326,10 @@ class ProofPipelineTests(unittest.TestCase):
         restored = archive._restore_analysis(compact)
         restored_move = restored["chain"][0]
 
+        self.assertEqual(
+            restored["uniqueness_status"],
+            "verified_unique",
+        )
         self.assertEqual(restored_move["technique_id"], definition.id)
         self.assertEqual(restored_move["detector_id"], definition.detector_id)
         self.assertEqual(restored_move["difficulty_metrics"], metrics)
@@ -333,6 +337,10 @@ class ProofPipelineTests(unittest.TestCase):
         self.assertEqual(
             restored_move["logic"]["proof_dag"],
             proof["proof_dag"],
+        )
+        self.assertEqual(
+            restored_move["logic"]["chain_links"],
+            proof["chain_links"],
         )
         self.assertEqual(restored_move["proof_count"], 1)
         self.assertEqual(restored_move["conclusion_count"], 1)

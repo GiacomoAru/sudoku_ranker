@@ -313,6 +313,36 @@ _DECLARED_RUNNERS = (
         techniques.unique_rectangle_type5,
     ),
     _local(
+        "ur_type_6",
+        ("unique.ur.6",),
+        techniques.unique_rectangle_type6,
+    ),
+    _local(
+        "hidden_rectangle",
+        ("unique.hidden_rectangle",),
+        techniques.hidden_rectangle,
+    ),
+    _local(
+        "avoidable_rectangle:1",
+        ("unique.avoidable.1",),
+        techniques.avoidable_rectangle_type1,
+    ),
+    _local(
+        "avoidable_rectangle:2",
+        ("unique.avoidable.2",),
+        techniques.avoidable_rectangle_type2,
+    ),
+    _local(
+        "unique_loop",
+        (
+            "unique.loop.1",
+            "unique.loop.2",
+            "unique.loop.3",
+            "unique.loop.4",
+        ),
+        techniques.unique_loops,
+    ),
+    _local(
         "bug_plus_one",
         ("unique.bug.1",),
         techniques.bug_plus_one,

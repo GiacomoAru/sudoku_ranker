@@ -38,8 +38,8 @@ CANONICAL_CLASS_SCHEMA_VERSION = 1
 
 # Incrementare questo numero quando cambia il funzionamento del solver
 # o il formato dell'analisi. Le vecchie analisi verranno ricalcolate.
-ANALYSIS_VERSION = 21
-ANALYSIS_SCHEMA_VERSION = 10
+ANALYSIS_VERSION = 23
+ANALYSIS_SCHEMA_VERSION = 12
 
 # Evita anche letture ripetute dal disco durante la stessa esecuzione.
 # La chiave è (puzzle_id, analysis_variant), non soltanto puzzle_id.
@@ -826,6 +826,7 @@ def _compact_analysis_for_storage(analysis):
             "Impossibile migrare un'analisi di un Sudoku non univoco."
         )
     compact["unique_solution"] = True
+    compact["uniqueness_status"] = sds.UNIQUENESS_VERIFIED
     compact["solved_grid"] = _grid_to_string(
         sds.backtracking_solve(original)
     )
@@ -985,6 +986,7 @@ def _compact_analysis_for_storage(analysis):
         "original",
         "solved_grid",
         "unique_solution",
+        "uniqueness_status",
         "chain",
         "status",
         "grading",

@@ -1,7 +1,8 @@
 """Schema serializzato delle prove logiche e delle relative metriche.
 
-Da P06 il ``proof_dag`` e' autorevole. ``chains`` e ``metrics`` sono viste
-derivate, conservate nel payload per rendere semplici renderer e archivi.
+Da P06 il ``proof_dag`` e' autorevole. ``chains``, ``chain_links`` e
+``metrics`` sono viste derivate, conservate nel payload per rendere semplici
+renderer, classificatori e archivi.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from collections.abc import Mapping, Sequence
 from . import proof as proof_model
 
 
-PROOF_SCHEMA_VERSION = "3.0.0"
+PROOF_SCHEMA_VERSION = "3.1.0"
 PROOF_METRICS_VERSION = "3.0.0"
 
 PROOF_METRIC_FIELDS = (
@@ -195,6 +196,7 @@ def normalize_proof(logic, *, placements=None, eliminations=None):
         [proof_model.literal_record(literal) for literal in chain]
         for chain in dag.derived_chains()
     ]
+    proof["chain_links"] = dag.derived_chain_links()
     proof["metrics"] = normalize_proof_metrics(proof)
     return proof
 

@@ -202,6 +202,7 @@ def _proof(
     assumptions,
     chains,
     reasons=None,
+    chain_reasons=(),
     *,
     placements=(),
     eliminations=(),
@@ -210,6 +211,7 @@ def _proof(
         assumptions=assumptions,
         chains=chains,
         reasons=reasons,
+        chain_reasons=chain_reasons,
         proof_kind=kind,
         placements=placements,
         eliminations=eliminations,
@@ -224,6 +226,7 @@ def _proof(
             [_literal_record(item) for item in chain]
             for chain in dag.derived_chains()
         ],
+        "chain_links": dag.derived_chain_links(),
         "reasons": sorted(set(reasons or ())),
         "proof_dag": dag.to_dict(),
         "dag_digest": dag.digest(),
@@ -240,6 +243,7 @@ def _deduction(
     assumptions=(),
     chains=(),
     reasons=(),
+    chain_reasons=(),
     kind: str,
 ) -> dict:
     placements = sorted(set(placements), key=_candidate_key)
@@ -262,6 +266,7 @@ def _deduction(
             assumptions,
             chain_list,
             reasons,
+            chain_reasons=chain_reasons,
             placements=placements,
             eliminations=eliminations,
         ),
@@ -1503,6 +1508,9 @@ class CompleteForcingTreeSearch:
                     ]
                     for chain in formal_dag.derived_chains()
                 ]
+                deduction["logic"]["chain_links"] = (
+                    formal_dag.derived_chain_links()
+                )
                 if STORE_COMPLETE_FORCING_TREE_PROOF:
                     deduction["logic"]["proof_tree"] = (
                         self._serialize_proof(proof)
@@ -1825,6 +1833,7 @@ class LogicEngine:
                 assumptions=(body[0],),
                 chains=(literals,),
                 reasons=reasons,
+                chain_reasons=(reasons,),
                 kind="bidirectional-cycle",
             )):
                 break
@@ -1906,6 +1915,7 @@ class LogicEngine:
                     assumptions=(source,),
                     chains=(path,),
                     reasons=reasons,
+                    chain_reasons=(reasons,),
                     kind="forcing-chain",
                 )):
                     return collector.results

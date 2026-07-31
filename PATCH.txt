@@ -1,4 +1,4 @@
-# Roadmap definitiva verso Sudoku Logic Lab 1.0
+# Roadmap restante verso Sudoku Logic Lab 1.0
 
 ## Perimetro della versione 1.0
 
@@ -11,647 +11,29 @@ La versione 1.0 deve essere un solver logico avanzato per Sudoku classico 9×9 c
 * vere Nested Forcing Chains;
 * Complete Forcing Tree come ultimo fallback;
 * prove serializzabili e verificabili;
-* scala SE e pseudo-SE trasparente;
-* compatibilità con gli archivi creati dalle versioni precedenti.
+* scala SE e pseudo-SE trasparente.
 
 Non è necessario includere ogni nome mai inventato nella comunità Sudoku. La copertura della 1.0 deve corrispondere alle principali tecniche documentate da Sudoku Explainer, SukakuExplainer e HoDoKu, con le famiglie parametriche rappresentate da motori generali.
 
-## Il progetto attuale possiede già una buona separazione tra solver, libreria delle tecniche e logic engine, ma distribuisce tassonomia, difficoltà e riconoscimento dei runner in più moduli. Inoltre, il fallback attualmente chiamato Nested esegue in realtà una ricerca ricorsiva completa.
-
-# Blocco A: fondamenta della nuova architettura
-
-## P01. Catalogo centrale delle tecniche
-
-### Obiettivo
-
-Creare una fonte unica e autorevole per nomi, famiglie, difficoltà, alias, parent e stato di implementazione.
-
-### Implementazione
-
-Creare:
-
-```text
-sudoku_app/core/technique_catalog.py
-```
-
-con una struttura simile:
-
-```python
-@dataclass(frozen=True, slots=True)
-class TechniqueDefinition:
-    id: str
-    canonical_name: str
-    display_name_it: str
-
-    aliases: tuple[TechniqueAlias, ...]
-
-    family_id: str
-    strategy_id: str
-    parent_id: str | None
-    se_equivalent_parent_id: str | None
-
-    base_difficulty: float
-    rating_kind: str
-
-    engine_type: str
-    fallback_tier: int
-    priority: int
-
-    detector_id: str | None
-    implementation_status: str
-    abstract: bool
-
-    requires_unique_solution: bool
-    proof_metric_profile: tuple[str, ...]
-```
-
-Tipi di rating:
-
-```text
-se
-pseudo_se
-project
-```
-
-Il catalogo deve sostituire progressivamente:
-
-```text
-TECHNIQUE_DIFFICULTY
-TECHNIQUE_FAMILY
-TECHNIQUE_STRATEGY
-MODERN_TECHNIQUE_PARENT
-_LOGIC_ENGINE_TECHNIQUE_NAMES
-```
-
-Durante la migrazione, queste mappe possono continuare a essere esportate automaticamente dal catalogo.
-
-### Criteri di completamento
-
-* Ogni tecnica attuale ha un ID stabile.
-* Ogni parent esiste.
-* Il grafo dei parent è aciclico.
-* Ogni tecnica implementata ha un detector registrato.
-* Ogni detector registrato dichiara almeno una tecnica.
-* Nessun nome canonico è duplicato.
-* Gli alias possono collidere soltanto se hanno namespace differenti.
-
----
-
-## P02. Registro esplicito dei detector
-
-### Obiettivo
-
-Eliminare il riconoscimento delle tecniche tramite nomi di funzione, closure, stringhe e sottostringhe.
-
-### Implementazione
-
-Creare un registro dichiarativo:
-
-```python
-@dataclass(frozen=True)
-class TechniqueRunner:
-    detector_id: str
-    technique_ids: tuple[str, ...]
-    function: Callable
-    engine_type: str
-    fallback_tier: int
-    minimum_difficulty: float
-```
-
-Il solver non deve più usare controlli come:
-
-```python
-"forcing chain" in technique.lower()
-technique.startswith("Nested ")
-metadata & _LOGIC_ENGINE_IDENTIFIERS
-```
-
-La classificazione del runner deve provenire direttamente dal catalogo.
-
-### Criteri di completamento
-
-* Nessuna funzione del solver determina il tipo del runner dal nome.
-* I runner ordinary, nested e complete tree sono separati dal registro.
-* L’ordine di esecuzione deriva da `priority` e `base_difficulty`.
-* Un rename visibile non modifica il funzionamento del solver.
-
----
-
-## P03. Schema unico delle prove e delle metriche
-
-### Obiettivo
-
-Correggere la pipeline delle metriche prima di aggiungere nuovi motori.
-
-### Implementazione
-
-Standardizzare:
-
-```python
-logic = {
-    "schema_version": "2.0.0",
-    "kind": "...",
-    "assumptions": [...],
-    "chains": [...],
-    "metrics": {
-        "metrics_version": "2.0.0",
-        "proof_node_count": 0,
-        "proof_edge_count": 0,
-        "displayed_literal_count": 0,
-        "assumption_count": 0,
-        "chain_count": 0,
-        "max_chain_length": 0,
-        "total_chain_length": 0,
-        "branch_count": 0,
-        "leaf_count": 0,
-        "nested_depth": 0,
-        "nested_subproof_count": 0,
-    },
-}
-```
-
-Creare:
-
-```python
-normalize_proof_metrics(logic)
-```
-
-Regole:
-
-1. Le metriche prodotte dal motore sono autorevoli.
-2. Le metriche ricavate dalle catene visualizzate sono soltanto un fallback.
-3. `nesting_depth` viene convertito in `nested_depth`.
-4. `proof_node_count` e `displayed_literal_count` restano separati.
-5. `branch_count`, `leaf_count` e `nested_subproof_count` non vengono ricostruiti da una semplice lista lineare.
-6. `techniques.py` non sovrascrive più `logic["metrics"]`.
-
-### Criteri di completamento
-
-* Le metriche esplicite sopravvivono alla conversione in `Move`.
-* Tutti i moduli leggono gli stessi nomi.
-* Una prova sintetica ramificata produce conteggi deterministici.
-* La difficoltà non dipende dalla quantità di dettagli scelta dal renderer.
-
----
-
-## P04. Ridenominazione dell’attuale Nested
-
-### Obiettivo
-
-Separare semanticamente la ricerca esaustiva dalle vere Nested Forcing Chains. 
-La attuale implementazione può non essere ottimale, ma attualmente va solo trattata separatamente,
-In preparazione di una successiva aggiunta di nested vere.
-
-### Implementazione
-
-Rinominare:
-
-```text
-_CompleteNestedSearch
-```
-
-in:
-
-```text
-CompleteForcingTreeSearch
-```
-
-Nuova tecnica:
-
-```text
-forcing.complete_tree
-Complete Forcing Tree
-```
-
-Nuovo `logic.kind`:
-
-```text
-complete-forcing-tree-contradiction
-```
-
-Tassonomia:
-
-```text
-family: Exhaustive Forcing
-strategy: Last Resort
-rating_kind: project
-base_difficulty: 13.0
-fallback_tier: 2
-```
-
-Gli archivi precedenti possono essere letti tramite alias legacy:
-
-```python
-LEGACY_TECHNIQUE_ALIASES = {
-    "Nested Forcing Chain": "Complete Forcing Tree",
-    "Nested Contradiction Forcing Chain": "Complete Forcing Tree",
-}
-```
-
-L’alias va applicato soltanto ai record prodotti dalle vecchie versioni.
-
-### Criteri di completamento
-
-* Nessun nuovo risultato della ricerca completa viene chiamato Nested.
-* Il comportamento logico precedente resta disponibile.
-* Gli archivi esistenti continuano a essere caricabili.
-* `Complete Forcing Tree` restituisce al massimo una conclusione per step.
-
----
-
-## P05. Pipeline dei fallback
-
-### Obiettivo
-
-Stabilire un flusso definitivo e prevedibile.
-
-### Implementazione
-
-Tre livelli:
-
-```text
-fallback_tier = 0: ordinary
-fallback_tier = 1: nested
-fallback_tier = 2: complete_tree
-```
-
-Flusso:
-
-```python
-ordinary_moves = collect_ordinary_moves(state)
-
-if ordinary_moves:
-    return ordinary_moves
-
-nested_moves = collect_nested_moves(state)
-
-if nested_moves:
-    return nested_moves
-
-return collect_complete_tree_moves(state)
-```
-
-Limiti iniziali:
-
-```python
-MAX_MOVES_PER_TECHNIQUE = 16
-MAX_LOGIC_ENGINE_MOVES_PER_TECHNIQUE = 8
-MAX_NESTED_MOVES_PER_STEP = 2
-MAX_COMPLETE_TREE_MOVES_PER_STEP = 1
-```
-
-La modalità `deep` interroga tutte le tecniche ordinary, ma non deve eseguire automaticamente Nested e Complete Tree se esiste già una deduzione ordinary.
-
-### Criteri di completamento
-
-* Complete Tree non viene mai cercato quando esiste una mossa ordinary.
-* Complete Tree non viene mai cercato quando esiste una vera Nested.
-* I metadata indicano quale livello è stato usato.
-* Il comportamento non dipende dal nome della tecnica.
-
----
-
-# Blocco B: prove e classificazione strutturale
-
-## P06. Proof DAG
-
-### Obiettivo
-
-Rendere la prova logica una struttura formale, non una semplice lista di letterali.
-
-### Implementazione
-
-Creare:
-
-```text
-sudoku_app/core/proof.py
-```
-
-Strutture principali:
-
-```python
-@dataclass(slots=True)
-class ProofNode:
-    id: int
-    kind: str
-    conclusion: Literal | None
-    parents: tuple[int, ...]
-    reason: str
-    depth: int
-    payload: dict
-
-
-@dataclass(slots=True)
-class ProofDAG:
-    nodes: dict[int, ProofNode]
-    roots: tuple[int, ...]
-    conclusions: tuple[int, ...]
-    nested_proofs: dict[int, "ProofDAG"]
-```
-
-Tipi di nodo iniziali:
-
-```text
-assumption
-static-implication
-dynamic-single
-advanced-rule
-common-conclusion
-contradiction
-branch
-nested-subproof
-```
-
-Le liste `chains` devono diventare una rappresentazione derivata dal DAG, utile all’interfaccia ma non autorevole.
-
-### Criteri di completamento
-
-* Ogni catena esistente può essere convertita in DAG.
-* Il DAG è aciclico.
-* La serializzazione conserva tutti i parent.
-* Il renderer produce spiegazioni equivalenti a quelle attuali.
-* Deduplicazione e difficoltà utilizzano il DAG.
-
----
-## P06.5. Miglioramento delle spiegazioni e delle celle evidenziate
-
-### Obiettivo
-
-Rendere tutte le mosse del solver comprensibili e visualizzabili usando la struttura attuale:
-
-```python
-"description": str,
-"highlight": {
-    "primary": [...],
-    "secondary": [...],
-}
-```
-
-Non modificare ancora il formato generale delle `Move`. La futura introduzione di un modello visivo più avanzato verrà effettuata in una patch successiva.
-
-### Spiegazioni delle mosse
-
-Ogni tecnica deve produrre una descrizione che contenga chiaramente:
-
-1. gli elementi che formano il pattern;
-2. il motivo logico per cui la tecnica è valida;
-3. le eliminazioni o gli inserimenti ottenuti.
-
-Le descrizioni devono usare uno stile uniforme e coordinate nel formato:
-
-```text
-R3C7
-```
-
-Esempio:
-
-```text
-Le celle R2C4 e R8C4 sono le uniche posizioni possibili per il candidato 6 nella colonna 4. Le celle R2C9 e R8C7 formano le estremità dello Skyscraper e vedono entrambe R8C9. Il candidato 6 può quindi essere eliminato da R8C9.
-```
-
-Per le tecniche complesse, la descrizione deve riassumere la prova senza tentare di riportare ogni singolo passaggio interno.
-
-### Celle principali
-
-`highlight["primary"]` deve contenere esclusivamente le celle che definiscono la tecnica:
-
-* celle del pattern;
-* pivot e pincers;
-* celle delle catene;
-* assunzioni dei forcing;
-* celle appartenenti agli ALS;
-* fins e celle strutturali dei fish;
-* celle coinvolte nei rami principali di una prova.
-
-Le celle devono essere deduplicate e ordinate.
-
-### Celle secondarie
-
-`highlight["secondary"]` deve contenere esclusivamente le celle interessate dalle conclusioni:
-
-* celle che ricevono un inserimento;
-* celle da cui vengono eliminati uno o più candidati.
-
-Le celle secondarie non devono essere aggiunte automaticamente alle principali, salvo che svolgano realmente entrambi i ruoli.
-
-### Helper comuni
-
-Creare funzioni condivise per evitare che ogni detector costruisca descrizioni ed evidenziazioni in modo diverso:
-
-```python
-def format_cell(row, column):
-    return f"R{row + 1}C{column + 1}"
-
-
-def format_cells(cells):
-    ...
-
-
-def build_highlight(primary, placements, eliminations):
-    secondary = {
-        (row, column)
-        for row, column, _ in placements
-    } | {
-        (row, column)
-        for row, column, _ in eliminations
-    }
-
-    return {
-        "primary": sorted(set(primary)),
-        "secondary": sorted(secondary),
-    }
-```
-
-Aggiornare `_build_move()` affinché normalizzi sempre:
-
-```python
-move["description"]
-move["highlight"]["primary"]
-move["highlight"]["secondary"]
-```
-
-### Catene e forcing
-
-Per le mosse provenienti dal Logic Engine:
-
-* le assunzioni e i candidati presenti nelle catene formano le celle principali;
-* placement ed eliminazioni formano le celle secondarie;
-* la descrizione deve indicare il tipo di prova;
-* quando disponibile, deve indicare il numero di catene, assunzioni o rami;
-* una Nested deve indicare che contiene sottoprove;
-* il Complete Forcing Tree deve essere descritto esplicitamente come albero completo di casi.
-
-Le metriche della prova non devono essere ricavate dal testo o dalle evidenziazioni.
-
-### Preparazione al modello futuro
-
-La costruzione di descrizioni e highlight deve essere concentrata in pochi helper comuni, così che una patch futura possa sostituirli con un modello semantico più ricco senza modificare nuovamente tutti i detector.
-
-Non introdurre ancora:
-
-* evidenziazione dei singoli candidati;
-* strong e weak link grafici;
-* ruoli visivi dettagliati;
-* template multilingua;
-* sottoviste delle prove;
-* una nuova struttura `Move`;
-* modifiche sostanziali alle API o all’interfaccia web.
-
-### Criteri di completamento
-
-1. Ogni mossa possiede una descrizione non vuota.
-2. Ogni descrizione indica pattern, ragionamento e conclusione.
-3. Le coordinate usano sempre il formato `RrCc`.
-4. Le celle principali rappresentano soltanto il pattern o la prova.
-5. Le celle secondarie rappresentano placement ed eliminazioni.
-6. Entrambe le liste sono ordinate e prive di duplicati.
-7. I detector utilizzano helper comuni.
-8. Le catene e i forcing espongono descrizioni coerenti con la prova.
-9. Il solver non usa descrizioni o highlight per validare, ordinare o applicare le mosse.
-10. La struttura attuale delle `Move` rimane invariata.
-
----
-## P07. Correzione dei nomi delle tecniche esistenti
-
-### Obiettivo
-
-Rivalutare ciò che il solver già riconosce senza ancora aggiungere grandi famiglie nuove.
-
-### Tecniche da verificare
-
-```text
-Skyscraper
-Two-String Kite
-Empty Rectangle
-Turbot Fish
-Remote Pair
-XY-Chain
-XY-Cycle
-Bidirectional X-Cycle
-Bidirectional Y-Cycle
-Forcing X-Chain
-Forcing Chain
-Alternating Inference Chain
-Continuous Nice Loop
-Bidirectional Cycle
-```
-
-### Regole
-
-Un nome specifico viene assegnato soltanto se il detector verifica l’intera struttura.
-
-Non sono sufficienti:
-
-```text
-numero di letterali
-lunghezza della catena
-nome del runner
-tipo generico della prova
-presenza della parola forcing
-```
-
-Ordine di specificità per le X-Chain corte:
-
-```text
-Skyscraper
-Two-String Kite
-Empty Rectangle
-Turbot Fish
-X-Chain
-Forcing X-Chain
-```
-
-Per ogni mossa vanno conservati:
-
-```python
-technique_id
-parent_id
-se_equivalent_parent_id
-classification_confidence
-```
-
-### Criteri di completamento
-
-* Una Skyscraper non viene chiamata Turbot Fish.
-* Una Remote Pair contiene realmente la stessa coppia in tutte le celle.
-* Una XY-Chain verifica esplicitamente le transizioni tra i candidati.
-* AIC e Continuous Nice Loop vengono distinti tramite strong e weak link.
-* Il nome generico resta disponibile come parent.
+## Baseline acquisito
+
+Le patch P01-P08 e P06.5 sono applicate e non fanno più parte della roadmap operativa. Il progetto dispone già di:
+
+* catalogo centrale e identificatori stabili;
+* registro dichiarativo dei detector;
+* pipeline ordinary, Nested e Complete Tree separata;
+* `ProofDAG` autorevole e viste lineari derivate;
+* metriche condivise, descrizioni e highlight normalizzati;
+* archi ordinati con motivo e forza `strong`/`weak`;
+* classificazione strutturale delle catene esistenti;
+* contesto di unicità verificato, givens distinti dalle celle risolte e famiglia Unique Loop strutturale;
+* versionamento esplicito di prove e analisi archiviate.
+
+Le patch future devono estendere queste strutture, non crearne copie parallele.
 
 ---
 
 # Blocco C: completamento delle tecniche locali
-
-## P08. Unicità completa
-
-### Obiettivo
-
-Completare la famiglia delle tecniche basate sull’unicità.
-
-### Tecniche
-
-```text
-Unique Rectangle Type 1
-Unique Rectangle Type 2
-Unique Rectangle Type 3
-Unique Rectangle Type 4
-Unique Rectangle Type 5
-Unique Rectangle Type 6
-Hidden Rectangle
-Avoidable Rectangle Type 1
-Avoidable Rectangle Type 2
-Unique Loop Type 1
-Unique Loop Type 2
-Unique Loop Type 3
-Unique Loop Type 4
-BUG+1
-BUG Type 2
-BUG Type 3 Pair
-BUG Type 3 Triplet
-BUG Type 3 Quad
-BUG Type 4
-```
-
-`BUG-Lite` può essere inserito nel catalogo come pianificato o opzionale, senza renderlo obbligatorio per la 1.0.
-
-### Modifica strutturale
-
-Lo stato dell’analisi deve contenere:
-
-```python
-uniqueness_status = (
-    "verified_unique"
-    | "not_checked"
-    | "multiple_solutions"
-)
-```
-
-Le tecniche di unicità possono essere restituite soltanto con:
-
-```python
-uniqueness_status == "verified_unique"
-```
-
-### Unique Loop
-
-Creare un enumeratore di cicli pari:
-
-```text
-lunghezza almeno 6
-coppia base comune
-alternanza valida tra case
-ciclo semplice
-canonicalizzazione di rotazione e direzione
-```
-
-### Criteri di completamento
-
-* Le tecniche di unicità sono disattivate sui puzzle non verificati.
-* UR6, Hidden Rectangle e Unique Loop non sono simulati con detector approssimativi.
-* Le celle risolte usate da Avoidable Rectangle non sono givens.
-* I loop equivalenti vengono deduplicati.
-
----
 
 ## P09. Tecniche locali avanzate ed exclusion
 
@@ -679,6 +61,8 @@ techniques/subsets.py
 techniques/sue_de_coq.py
 techniques/exclusion.py
 ```
+
+La suddivisione dei moduli deve avvenire soltanto se riduce realmente la responsabilità dell’attuale `techniques.py`; catalogo e registro restano le fonti di verità.
 
 ### Criteri di completamento
 
@@ -766,7 +150,7 @@ Multi Colors Type 1
 Multi Colors Type 2
 ```
 
-Il grafo esistente delle strong link a cifra singola può essere riutilizzato.
+Il grafo esistente delle strong link a cifra singola e i `chain_links` possono essere riutilizzati.
 
 ### Criteri di completamento
 
@@ -782,19 +166,22 @@ Il grafo esistente delle strong link a cifra singola può essere riutilizzato.
 
 ### Obiettivo
 
-Sostituire le categorie troppo generiche con una classificazione formale delle catene.
+Estendere la classificazione strutturale già introdotta in P07 fino a un modello AIC e Nice Loop completo.
 
-### Nuova rappresentazione degli archi
+### Estensione degli archi correnti
+
+Il DAG conserva già origine, destinazione, `reason` e `strength`. Va aggiunto il supporto logico dell’arco senza introdurre una seconda rappresentazione autorevole:
 
 ```python
 @dataclass(frozen=True)
-class ImplicationEdge:
+class ImplicationEdgeSupport:
     source_id: int
     target_id: int
-    link_strength: str
-    reason: str
     support_candidates: tuple[Candidate, ...]
+    support_house_ids: tuple[int, ...]
 ```
+
+Le viste `chain_links` restano derivate dal DAG.
 
 ### Tecniche
 
@@ -833,7 +220,7 @@ loop perfettamente alternato              Continuous Nice Loop
 * Ogni percorso alterna realmente strong e weak link.
 * Le conclusioni derivano dalla polarità degli endpoint.
 * Nessuna AIC viene classificata dalla sola lunghezza.
-* Il detector conserva tutti i supporti degli archi.
+* Il detector conserva tutti i supporti degli archi nel DAG.
 * Le catene equivalenti vengono canonicalizzate.
 
 ---
@@ -943,11 +330,11 @@ Le generalized wings devono essere classificazioni specifiche prodotte dal motor
 
 # Blocco E: forcing avanzato
 
-## P15. Proof DAG non lineari e Forcing Net
+## P15. Classificazione dei Proof DAG non lineari e Forcing Net
 
 ### Obiettivo
 
-Distinguere formalmente una catena da una rete di implicazioni.
+Usare la non linearità già supportata da `ProofDAG` per distinguere formalmente una catena da una rete di implicazioni.
 
 ### Regola
 
@@ -1061,6 +448,8 @@ MAX_NESTED_SUBPROOFS = 32
 MAX_NESTED_RESULTS = 2
 ```
 
+Questi budget limitano il motore Nested e devono essere esposti chiaramente; non si applicano al Complete Forcing Tree autorevole.
+
 ### Memoizzazione
 
 Chiave minima:
@@ -1086,15 +475,6 @@ Serve anche un cycle guard per evitare sottoprove ricorsive autoreferenziali.
 * La profondità e il numero di sottoprove vengono conservati correttamente.
 
 ---
-## P16.5 Rivedere Full Tree Ricrosion o come cavovlo si chiama, l'ultimo fallback.
-### Obiettivo
-rendere il fallback finale che rappresenta la tecnica più complessa più "sudoku friently" possibile
-Renderla sempre senza limiti e capace di risolvere qualsiasi cosa, ma lavorare sia dal punto di vista di ottimizzazione della computazione
-sia di comprensibilità e umanizzazione.
-Deve essere meglio quindi di un "andare a caso".
-
---- 
-PRIMA DI QUESTO STEP FERMATI SEMPRE, E DISCUTI DELLA IMPLEMENTAZIONE E DI COSA RENDERE DEFAULT ECC
 
 ## P17. Profili Dynamic, Plus e Nested
 
@@ -1150,13 +530,36 @@ costo
 
 ---
 
-# Blocco F: difficoltà, compatibilità e pubblicazione
+## P16.5. Revisione del Complete Forcing Tree
+
+### Checkpoint obbligatorio
+
+Prima di iniziare questa patch bisogna fermarsi e discutere:
+
+* strategia di branching;
+* euristiche e ordine dei casi;
+* comportamento predefinito nelle modalità profile e deep;
+* cancellazione esplicita richiesta dall’utente;
+* quantità di prova da mostrare nell’interfaccia;
+* separazione tra ricerca autorevole e viste di presentazione.
+
+### Obiettivo
+
+Rendere il fallback finale il più possibile vicino a un ragionamento Sudoku: deterministico, ottimizzato, comprensibile e capace di completare ogni puzzle valido quando le tecniche precedenti non bastano.
+
+La ricerca autorevole deve restare completa e senza cap interni che possano alterare il risultato. Eventuali timeout, cancellazioni o limiti operativi devono essere esterni, espliciti e discussi prima dell’implementazione. Non devono esistere troncamenti silenziosi della prova.
+
+Il motore non deve essere un “andare a caso”: deve preferire branch informativi, riusare stati equivalenti e produrre un `ProofDAG` umano anche quando la ricerca sottostante è esaustiva.
+
+---
+
+# Blocco F: difficoltà, archivi e pubblicazione
 
 ## P18. Modello definitivo della difficoltà
 
 ### Obiettivo
 
-Separare rating della tecnica e complessità della prova.
+Consolidare il modello già introdotto, separando definitivamente rating della tecnica e complessità della prova.
 
 ### Campi pubblici
 
@@ -1169,6 +572,8 @@ Separare rating della tecnica e complessità della prova.
     "difficulty_model_version": "3.0.0",
 }
 ```
+
+Il nome pubblico `proof_complexity_extra` deve sostituire eventuali alias transitori soltanto in questa patch, insieme all’aggiornamento coordinato di solver, web e archivio.
 
 ### Regole
 
@@ -1243,13 +648,13 @@ Complete Tree usa una formula distinta e `rating_kind="project"`.
 
 ---
 
-## P19. Migrazione degli archivi
+## P19. Consolidamento degli archivi
 
 ### Obiettivo
 
-Portare i dati esistenti al nuovo schema senza perdere analisi precedenti.
+Allineare gli archivi allo schema definitivo senza introdurre retrocompatibilità indefinita.
 
-### Migrazione
+### Regole
 
 Ogni analisi salvata deve contenere:
 
@@ -1258,25 +663,26 @@ technique_catalog_version
 proof_schema_version
 proof_metrics_version
 difficulty_model_version
+analysis_version
+analysis_schema_version
 ```
 
 Procedura:
 
-1. Conservare il nome originale in `legacy_technique_name`.
-2. Risolvere il nuovo `technique_id` attraverso gli alias.
-3. Rinominare le vecchie Nested complete in Complete Forcing Tree.
-4. Marcare come incomplete le vecchie metriche non ricostruibili.
-5. Ricalcolare la difficoltà quando la prova contiene dati sufficienti.
-6. Non inventare `branch_count` o `nested_depth` mancanti.
-7. Conservare il record originale in un backup di migrazione.
+1. Accettare direttamente soltanto gli schemi correnti.
+2. Mantenere migrazioni esplicite esclusivamente per formati legacy ancora presenti nei fixture o negli archivi reali del repository.
+3. Invalidare e ricalcolare le analisi quando cambia il comportamento del solver.
+4. Non inventare metriche mancanti.
+5. Rendere ogni migrazione mantenuta idempotente.
+6. Rimuovere alias e percorsi di migrazione privi di dati reali da supportare.
 
 ### Criteri di completamento
 
-* Gli archivi precedenti vengono caricati.
-* I nuovi record non utilizzano nomi legacy come identificatore.
-* Le metriche mancanti sono indicate come sconosciute.
-* Una migrazione ripetuta non modifica ulteriormente il record.
+* I record correnti effettuano round-trip senza perdita.
+* Gli schemi incompatibili vengono rifiutati o ricalcolati esplicitamente.
+* Nessun nome legacy viene usato come identificatore nuovo.
 * La canonicalizzazione dei Sudoku resta invariata.
+* Il codice di migrazione residuo è coperto da fixture reali.
 
 ---
 
@@ -1291,15 +697,16 @@ Trasformare il progetto aggiornato in una release stabile.
 ```text
 TechniqueDefinition
 TechniqueRunner
-Deduction
 ProofNode
 ProofDAG
 InferenceProfile
 Move
 collect_moves_for_analysis()
-solve()
-analyze()
+solve_and_log()
+analyse_puzzle()
 ```
+
+I nomi effettivamente esportati dal progetto prevalgono su alias teorici non presenti nel codice.
 
 ### Requisiti di rilascio
 
@@ -1348,51 +755,44 @@ La versione 1.0 è pronta quando:
 8. Complete Forcing Tree viene usato soltanto dopo ordinary e Nested.
 9. Le tecniche di unicità richiedono unicità verificata.
 10. Rating SE, pseudo-SE e project sono sempre distinguibili.
-11. Gli archivi precedenti sono migrabili.
+11. Gli archivi correnti sono versionati e riproducibili.
 12. Nessuna tecnica promessa dal catalogo 1.0 è priva di implementazione o esplicitamente disabilitata.
 
 ---
 
 # Sequenza consigliata delle release intermedie
 
-| Versione | Patch incluse | Risultato                                                          |
-| -------- | ------------- | ------------------------------------------------------------------ |
-| `0.7.0`  | P01-P05       | Catalogo, runner e fallback corretti                               |
-| `0.8.0`  | P06-P09       | Prove strutturate, nomi attuali corretti, tecniche locali complete |
-| `0.8.5`  | P10-P11       | Fish e coloring completi                                           |
-| `0.9.0`  | P12-P14       | AIC, Group Nodes, ALS e generalized wings                          |
-| `0.9.5`  | P15-P17       | Forcing Net, Kraken, vere Nested e profili                         |
-| `0.9.8`  | P18-P19       | Difficoltà definitiva e migrazione archivi                         |
-| `1.0.0`  | P20           | API e tassonomia congelate                                         |
+| Versione | Patch incluse | Risultato                                                  |
+| -------- | ------------- | ---------------------------------------------------------- |
+| `0.8.0`  | P08-P09       | Unicità e tecniche locali complete                         |
+| `0.8.5`  | P10-P11       | Fish e coloring completi                                   |
+| `0.9.0`  | P12-P14       | AIC, Group Nodes, ALS e generalized wings                  |
+| `0.9.5`  | P15-P17       | Forcing Net, Kraken, vere Nested e profili                 |
+| `0.9.6`  | P16.5         | Complete Forcing Tree rivisto dopo checkpoint progettuale |
+| `0.9.8`  | P18-P19       | Difficoltà definitiva e archivi consolidati                |
+| `1.0.0`  | P20           | API e tassonomia congelate                                 |
 
 # Dipendenze principali
 
+Le fondamenta P01-P08 sono già acquisite.
+
 ```text
-P01 -> tutte le patch
-P03 -> P06, P16, P18
-P04 -> P05, P16
-P06 -> P12, P13, P14, P15, P16
 P10 -> P15 e profilo Plus
-P12 -> P13 e P16
+P11 -> profilo Plus
+P12 -> P13, P15 e P16
 P13 -> P14 e profilo Nested
-P14 -> P15 e P16
+P14 -> P15, P16 e profilo Nested
 P15 -> P16
-P16 -> P18
+P16 -> P17
+P17 -> checkpoint P16.5 e P18
+P16.5 -> P18
 P18 -> P19
 P19 -> P20
 ```
 
-# Ordine pratico finale
+# Ordine pratico restante
 
 ```text
-P01 Catalogo
-P02 Registro dei detector
-P03 Metriche
-P04 Complete Forcing Tree
-P05 Fallback
-P06 Proof DAG
-P07 Correzione nomi attuali
-P08 Unicità
 P09 Tecniche locali avanzate
 P10 Fish
 P11 Coloring
@@ -1402,9 +802,11 @@ P14 ALS e generalized wings
 P15 Forcing Net, Templates e Kraken
 P16 Vere Nested
 P17 Profili Dynamic, Plus e Nested
+CHECKPOINT obbligatorio prima di P16.5
+P16.5 Revisione Complete Forcing Tree
 P18 Difficoltà definitiva
-P19 Migrazione archivi
+P19 Consolidamento archivi
 P20 Release 1.0
 ```
 
-Questa sequenza evita di riscrivere più volte gli stessi componenti. Le tecniche semplici vengono completate soltanto dopo la stabilizzazione del catalogo; le tecniche avanzate vengono costruite sopra il Proof DAG; le Nested arrivano soltanto quando catene, gruppi, ALS e forcing sono già formalizzati; Complete Forcing Tree rimane disponibile per tutta la migrazione come fallback estremo.
+Questa sequenza evita di riscrivere più volte gli stessi componenti. Le tecniche avanzate vengono costruite sopra il `ProofDAG` e i `chain_links` già disponibili; le Nested arrivano soltanto quando catene, gruppi, ALS e forcing sono formalizzati; il Complete Forcing Tree rimane un fallback estremo e viene rivisto soltanto dopo una decisione esplicita sui suoi default.

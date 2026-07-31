@@ -394,7 +394,34 @@ def _validate_runner_move(runner, move):
 
 
 def _call_registered_runner(runner, state):
-    return runner.collect(state)
+    definitions = tuple(
+        technique_catalog.technique_definition(technique_id)
+        for technique_id in runner.technique_ids
+    )
+    uniqueness_verified = (
+        getattr(
+            state,
+            "uniqueness_status",
+            sds.UNIQUENESS_NOT_CHECKED,
+        ) == sds.UNIQUENESS_VERIFIED
+    )
+    if (
+        definitions
+        and all(
+            definition.requires_unique_solution
+            for definition in definitions
+        )
+        and not uniqueness_verified
+    ):
+        return []
+    moves = runner.collect(state)
+    if uniqueness_verified:
+        return moves
+    return [
+        move
+        for move in (moves or ())
+        if not _move_definition(move).requires_unique_solution
+    ]
 
 
 def _deduplicate_moves(moves, canonical_transform=None):
@@ -938,11 +965,15 @@ def solve_and_log(
     verbose=False,
     analysis_mode=DEFAULT_ANALYSIS_MODE,
     profile_difficulty_window=DEFAULT_PROFILE_DIFFICULTY_WINDOW,
+    uniqueness_status=sds.UNIQUENESS_NOT_CHECKED,
 ):
     """Risolve il Sudoku e registra l'inventario logico di ogni stato."""
     max_steps = _normalise_solver_step_limit(max_steps)
     analysis_mode = _normalise_analysis_mode(analysis_mode)
-    state = sds.SudokuState(grid)
+    state = sds.SudokuState(
+        grid,
+        uniqueness_status=uniqueness_status,
+    )
     canonical_transform = sc.canonicalize_details(
         state.grid
     ).transform
@@ -1776,6 +1807,7 @@ def analyse_puzzle(
         verbose=verbose,
         analysis_mode=analysis_mode,
         profile_difficulty_window=profile_difficulty_window,
+        uniqueness_status=sds.UNIQUENESS_VERIFIED,
     )
     grading = grade_difficulty(chain, status)
 
@@ -1784,6 +1816,7 @@ def analyse_puzzle(
         "original": original,
         "solved_grid": solved_grid,
         "unique_solution": True,
+        "uniqueness_status": sds.UNIQUENESS_VERIFIED,
         "chain": chain,
         "status": status,
         "grading": grading,

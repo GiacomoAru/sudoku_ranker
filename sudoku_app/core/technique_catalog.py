@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import math
 
 
-TECHNIQUE_CATALOG_VERSION = "1.1.0"
+TECHNIQUE_CATALOG_VERSION = "1.2.0"
 
 LEGACY_TECHNIQUE_ALIASES = {
     "Nested Forcing Chain": "Complete Forcing Tree",
@@ -361,9 +361,21 @@ _CATALOG_ROWS = (
         requires_unique_solution=True,
     ),
     _entry(
+        "unique.avoidable.1", "Avoidable Rectangle Type 1", 4.4,
+        "uniqueness", "uniqueness_exclusion", "avoidable_rectangle:1",
+        aliases=_aliases("AR1"), rating_kind="pseudo_se",
+        requires_unique_solution=True,
+    ),
+    _entry(
         "unique.ur.2", "Unique Rectangle Type 2", 4.5,
         "uniqueness", "uniqueness_exclusion", "ur_type_2",
         aliases=_aliases("UR2"), rating_kind="pseudo_se",
+        requires_unique_solution=True,
+    ),
+    _entry(
+        "unique.avoidable.2", "Avoidable Rectangle Type 2", 4.6,
+        "uniqueness", "uniqueness_exclusion", "avoidable_rectangle:2",
+        aliases=_aliases("AR2"), rating_kind="pseudo_se",
         requires_unique_solution=True,
     ),
     _entry(
@@ -384,11 +396,30 @@ _CATALOG_ROWS = (
         requires_unique_solution=True,
     ),
     _entry(
+        "unique.ur.6", "Unique Rectangle Type 6", 4.8,
+        "uniqueness", "uniqueness_exclusion", "ur_type_6",
+        aliases=_aliases("UR6"), rating_kind="pseudo_se",
+        requires_unique_solution=True,
+    ),
+    _entry(
+        "unique.hidden_rectangle", "Hidden Rectangle", 4.9,
+        "uniqueness", "uniqueness_exclusion", "hidden_rectangle",
+        aliases=_aliases("HR"), rating_kind="pseudo_se",
+        requires_unique_solution=True,
+    ),
+    _entry(
         "unique.ur.3", "Unique Rectangle Type 3", 4.9,
         "uniqueness", "uniqueness_exclusion", "ur_type_3",
         aliases=_aliases("UR3"), rating_kind="pseudo_se",
         requires_unique_solution=True,
         proof_metric_profile=SUBSET_METRICS,
+    ),
+    _entry(
+        "unique.loop.1", "Unique Loop Type 1", 5.0,
+        "uniqueness", "uniqueness_exclusion", "unique_loop",
+        aliases=_aliases("UL1"), rating_kind="pseudo_se",
+        requires_unique_solution=True,
+        proof_metric_profile=CHAIN_METRICS,
     ),
     _entry(
         "unique.bug.2", "BUG Type 2", 5.0,
@@ -401,6 +432,20 @@ _CATALOG_ROWS = (
         rating_kind="pseudo_se", requires_unique_solution=True,
     ),
     _entry(
+        "unique.loop.2", "Unique Loop Type 2", 5.1,
+        "uniqueness", "uniqueness_exclusion", "unique_loop",
+        aliases=_aliases("UL2"), rating_kind="pseudo_se",
+        requires_unique_solution=True,
+        proof_metric_profile=CHAIN_METRICS,
+    ),
+    _entry(
+        "unique.loop.4", "Unique Loop Type 4", 5.2,
+        "uniqueness", "uniqueness_exclusion", "unique_loop",
+        aliases=_aliases("UL4"), rating_kind="pseudo_se",
+        requires_unique_solution=True,
+        proof_metric_profile=CHAIN_METRICS,
+    ),
+    _entry(
         "unique.bug.3.2", "BUG Type 3 (Pair)", 5.2,
         "uniqueness", "uniqueness_exclusion", "bug_types",
         aliases=_aliases("BUG Type 3 Pair"), rating_kind="pseudo_se",
@@ -411,6 +456,13 @@ _CATALOG_ROWS = (
         "uniqueness", "uniqueness_exclusion", "bug_types",
         aliases=_aliases("BUG Type 3 Triplet"), rating_kind="pseudo_se",
         requires_unique_solution=True, proof_metric_profile=SUBSET_METRICS,
+    ),
+    _entry(
+        "unique.loop.3", "Unique Loop Type 3", 5.4,
+        "uniqueness", "uniqueness_exclusion", "unique_loop",
+        aliases=_aliases("UL3"), rating_kind="pseudo_se",
+        requires_unique_solution=True,
+        proof_metric_profile=SUBSET_METRICS,
     ),
     _entry(
         "unique.bug.3.4", "BUG Type 3 (Quad)", 5.6,

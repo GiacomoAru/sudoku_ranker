@@ -264,8 +264,8 @@ class ProofDAG:
             for node_id, values in children.items()
         }
 
-    def derived_chains(self, max_chains=MAX_PRESENTATION_CHAINS):
-        """Deriva viste lineari deterministiche senza renderle autorevoli."""
+    def _derived_presentation_paths(self, max_chains):
+        """Restituisce i path di nodi usati dalle viste lineari."""
         if isinstance(max_chains, bool) or int(max_chains) < 1:
             raise ValueError("max_chains deve essere positivo.")
         max_chains = min(int(max_chains), MAX_PRESENTATION_CHAINS)
@@ -275,7 +275,7 @@ class ProofDAG:
             if node.payload.get("chain_terminal")
             or node.kind == "contradiction"
         )
-        chains = []
+        paths = []
         seen = set()
 
         def parent_paths(node_id):
@@ -293,6 +293,7 @@ class ProofDAG:
         for target in targets:
             for path in parent_paths(target):
                 literals = []
+                presentation_path = []
                 for node_id in path:
                     node = self.nodes[node_id]
                     if (
@@ -301,15 +302,52 @@ class ProofDAG:
                     ):
                         if not literals or literals[-1] != node.conclusion:
                             literals.append(node.conclusion)
+                            presentation_path.append(node_id)
                 signature = tuple(literals)
                 if signature and signature not in seen:
                     seen.add(signature)
-                    chains.append(list(signature))
-                if len(chains) >= max_chains:
+                    paths.append(tuple(presentation_path))
+                if len(paths) >= max_chains:
                     break
-            if len(chains) >= max_chains:
+            if len(paths) >= max_chains:
                 break
-        return sorted(chains, key=lambda chain: (-len(chain), tuple(chain)))
+        return sorted(
+            paths,
+            key=lambda path: (
+                -len(path),
+                tuple(self.nodes[node_id].conclusion for node_id in path),
+            ),
+        )
+
+    def derived_chains(self, max_chains=MAX_PRESENTATION_CHAINS):
+        """Deriva viste lineari deterministiche senza renderle autorevoli."""
+        return [
+            [self.nodes[node_id].conclusion for node_id in path]
+            for path in self._derived_presentation_paths(max_chains)
+        ]
+
+    def derived_chain_links(self, max_chains=MAX_PRESENTATION_CHAINS):
+        """Deriva motivo e forza di ogni arco delle catene mostrate."""
+        result = []
+        for path in self._derived_presentation_paths(max_chains):
+            links = []
+            for source_id, target_id in zip(path, path[1:]):
+                source = self.nodes[source_id].conclusion
+                target = self.nodes[target_id].conclusion
+                if source[3] and not target[3]:
+                    strength = "weak"
+                elif not source[3] and target[3]:
+                    strength = "strong"
+                else:
+                    strength = "non-alternating"
+                links.append({
+                    "source": literal_record(source),
+                    "target": literal_record(target),
+                    "reason": self.nodes[target_id].reason,
+                    "strength": strength,
+                })
+            result.append(links)
+        return result
 
     def metrics(self):
         chains = self.derived_chains()
@@ -449,6 +487,7 @@ class ProofDAG:
         assumptions=(),
         chains=(),
         reasons=(),
+        chain_reasons=(),
         proof_kind="unspecified",
         placements=(),
         eliminations=(),
@@ -458,6 +497,14 @@ class ProofDAG:
         next_id = 0
         assumption_ids = {}
         reason_set = {str(reason) for reason in reasons or ()}
+        chain_reason_lists = [
+            tuple(str(reason) for reason in raw_reasons)
+            for raw_reasons in chain_reasons or ()
+        ]
+        if chain_reason_lists and len(chain_reason_lists) != len(chains):
+            raise ValueError(
+                "chain_reasons deve contenere una sequenza per ogni catena."
+            )
 
         def add(kind, conclusion, parents=(), reason="unspecified", payload=None):
             nonlocal next_id
@@ -487,21 +534,35 @@ class ProofDAG:
                 )
 
         terminal_ids = []
-        for raw_chain in chains or ():
+        for chain_index, raw_chain in enumerate(chains or ()):
             literals = [normalize_literal(item) for item in raw_chain]
             if not literals:
                 continue
+            ordered_reasons = (
+                chain_reason_lists[chain_index]
+                if chain_reason_lists
+                else ()
+            )
+            if ordered_reasons and len(ordered_reasons) != len(literals) - 1:
+                raise ValueError(
+                    "Ogni catena deve avere esattamente un motivo per arco."
+                )
             parent = None
             for index, literal in enumerate(literals):
                 if index == 0 and literal in assumption_ids:
                     node_id = assumption_ids[literal]
                 else:
+                    edge_reason = (
+                        ordered_reasons[index - 1]
+                        if index > 0 and ordered_reasons
+                        else (sorted(reason_set)[0] if reason_set else proof_kind)
+                    )
                     if any(
                         reason.startswith("advanced")
-                        for reason in reason_set
+                        for reason in (edge_reason,)
                     ):
                         kind = "advanced-rule"
-                    elif "dynamic" in reason_set:
+                    elif edge_reason == "dynamic":
                         kind = "dynamic-single"
                     else:
                         kind = "static-implication"
@@ -509,7 +570,7 @@ class ProofDAG:
                         kind,
                         literal,
                         parents=(() if parent is None else (parent,)),
-                        reason=(sorted(reason_set)[0] if reason_set else proof_kind),
+                        reason=edge_reason,
                         payload={"presentation": True},
                     )
                 parent = node_id
