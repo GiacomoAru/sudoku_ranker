@@ -13,8 +13,9 @@ import json
 
 
 Literal = tuple[int, int, int, bool]
+Candidate = tuple[int, int, int]
 
-PROOF_DAG_SCHEMA_VERSION = "1.0.0"
+PROOF_DAG_SCHEMA_VERSION = "1.1.0"
 MAX_PRESENTATION_CHAINS = 16
 
 NODE_KINDS = frozenset({
@@ -70,6 +71,25 @@ def literal_record(literal: Literal | None):
 
 def _normalise_ids(values):
     return tuple(dict.fromkeys(int(value) for value in values or ()))
+
+
+def _normalise_candidate(value) -> Candidate:
+    if isinstance(value, Mapping):
+        candidate = (
+            int(value["row"]),
+            int(value["column"]),
+            int(value["value"]),
+        )
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        if len(value) != 3:
+            raise ValueError("Un candidato deve contenere tre valori.")
+        candidate = tuple(int(item) for item in value)
+    else:
+        raise TypeError("Un candidato deve essere una mappa o una sequenza.")
+    row, column, digit = candidate
+    if not (0 <= row < 9 and 0 <= column < 9 and 1 <= digit <= 9):
+        raise ValueError(f"Candidato Sudoku non valido: {candidate!r}.")
+    return candidate
 
 
 def _json_payload(payload):
@@ -133,12 +153,67 @@ class ProofNode:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class ImplicationEdgeSupport:
+    """Supporto Sudoku autorevole di un arco del ``ProofDAG``."""
+
+    source_id: int
+    target_id: int
+    support_candidates: tuple[Candidate, ...] = ()
+    support_house_ids: tuple[int, ...] = ()
+
+    def __post_init__(self):
+        object.__setattr__(self, "source_id", int(self.source_id))
+        object.__setattr__(self, "target_id", int(self.target_id))
+        object.__setattr__(
+            self,
+            "support_candidates",
+            tuple(sorted({
+                _normalise_candidate(item)
+                for item in self.support_candidates
+            })),
+        )
+        object.__setattr__(
+            self,
+            "support_house_ids",
+            tuple(sorted({int(item) for item in self.support_house_ids})),
+        )
+        if self.source_id < 0 or self.target_id < 0:
+            raise ValueError("Gli id di supporto non possono essere negativi.")
+        if self.source_id == self.target_id:
+            raise ValueError("Un supporto richiede due nodi distinti.")
+        if any(not 0 <= house_id < 27 for house_id in self.support_house_ids):
+            raise ValueError("Gli id delle case devono essere compresi tra 0 e 26.")
+
+    def to_dict(self):
+        return {
+            "source_id": self.source_id,
+            "target_id": self.target_id,
+            "support_candidates": [
+                list(item) for item in self.support_candidates
+            ],
+            "support_house_ids": list(self.support_house_ids),
+        }
+
+    @classmethod
+    def from_dict(cls, value):
+        if not isinstance(value, Mapping):
+            raise TypeError("Il supporto di un arco deve essere una mappa.")
+        return cls(
+            source_id=value["source_id"],
+            target_id=value["target_id"],
+            support_candidates=tuple(value.get("support_candidates", ())),
+            support_house_ids=tuple(value.get("support_house_ids", ())),
+        )
+
+
 @dataclass(slots=True)
 class ProofDAG:
     nodes: dict[int, ProofNode]
     roots: tuple[int, ...]
     conclusions: tuple[int, ...]
     nested_proofs: dict[int, "ProofDAG"] = field(default_factory=dict)
+    edge_supports: tuple[ImplicationEdgeSupport, ...] = ()
 
     def __post_init__(self):
         self.nodes = {
@@ -157,6 +232,15 @@ class ProofDAG:
             )
             for node_id, nested in dict(self.nested_proofs).items()
         }
+        self.edge_supports = tuple(sorted(
+            (
+                item
+                if isinstance(item, ImplicationEdgeSupport)
+                else ImplicationEdgeSupport.from_dict(item)
+                for item in self.edge_supports
+            ),
+            key=lambda item: (item.source_id, item.target_id),
+        ))
         self.validate()
 
     def validate(self):
@@ -170,6 +254,20 @@ class ProofDAG:
         for node in self.nodes.values():
             if not set(node.parents) <= known:
                 raise ValueError(f"Il nodo {node.id} ha parent inesistenti.")
+
+        dag_edges = {
+            (parent_id, node.id)
+            for node in self.nodes.values()
+            for parent_id in node.parents
+        }
+        support_edges = {
+            (item.source_id, item.target_id)
+            for item in self.edge_supports
+        }
+        if len(support_edges) != len(self.edge_supports):
+            raise ValueError("Il DAG contiene supporti duplicati per lo stesso arco.")
+        if not support_edges <= dag_edges:
+            raise ValueError("Un supporto riferisce un arco inesistente.")
 
         expected_roots = tuple(sorted(
             node.id for node in self.nodes.values() if not node.parents
@@ -227,6 +325,9 @@ class ProofDAG:
                 str(node_id): proof.to_dict()
                 for node_id, proof in sorted(self.nested_proofs.items())
             },
+            "edge_supports": [
+                item.to_dict() for item in self.edge_supports
+            ],
         }
 
     @classmethod
@@ -252,6 +353,7 @@ class ProofDAG:
                     value.get("nested_proofs", {}) or {}
                 ).items()
             },
+            edge_supports=tuple(value.get("edge_supports", ())),
         )
 
     def _children(self):
@@ -328,6 +430,10 @@ class ProofDAG:
 
     def derived_chain_links(self, max_chains=MAX_PRESENTATION_CHAINS):
         """Deriva motivo e forza di ogni arco delle catene mostrate."""
+        supports = {
+            (item.source_id, item.target_id): item
+            for item in self.edge_supports
+        }
         result = []
         for path in self._derived_presentation_paths(max_chains):
             links = []
@@ -340,12 +446,21 @@ class ProofDAG:
                     strength = "strong"
                 else:
                     strength = "non-alternating"
-                links.append({
+                support = supports.get((source_id, target_id))
+                link = {
                     "source": literal_record(source),
                     "target": literal_record(target),
                     "reason": self.nodes[target_id].reason,
                     "strength": strength,
-                })
+                }
+                if support is not None:
+                    link["support_candidates"] = [
+                        list(item) for item in support.support_candidates
+                    ]
+                    link["support_house_ids"] = list(
+                        support.support_house_ids
+                    )
+                links.append(link)
             result.append(links)
         return result
 
@@ -464,6 +579,25 @@ class ProofDAG:
             )
             selected.append(node_id)
 
+        # Il DAG normalizzato contiene soltanto gli antenati necessari alle
+        # conclusioni selezionate. Questo evita che prove indipendenti di
+        # conclusioni filtrate restino nella vista autorevole.
+        required = set()
+
+        def keep_ancestors(node_id):
+            if node_id in required:
+                return
+            required.add(node_id)
+            for parent_id in nodes[node_id].parents:
+                keep_ancestors(parent_id)
+
+        for node_id in selected:
+            keep_ancestors(node_id)
+        nodes = {
+            node_id: node
+            for node_id, node in nodes.items()
+            if node_id in required
+        }
         roots = tuple(sorted(
             node.id for node in nodes.values() if not node.parents
         ))
@@ -471,7 +605,16 @@ class ProofDAG:
             nodes=nodes,
             roots=roots,
             conclusions=tuple(sorted(selected)),
-            nested_proofs=dict(self.nested_proofs),
+            nested_proofs={
+                node_id: nested
+                for node_id, nested in self.nested_proofs.items()
+                if node_id in nodes
+            },
+            edge_supports=tuple(
+                item
+                for item in self.edge_supports
+                if item.source_id in nodes and item.target_id in nodes
+            ),
         )
 
     def signature(self):
@@ -488,6 +631,7 @@ class ProofDAG:
         chains=(),
         reasons=(),
         chain_reasons=(),
+        chain_supports=(),
         proof_kind="unspecified",
         placements=(),
         eliminations=(),
@@ -501,9 +645,29 @@ class ProofDAG:
             tuple(str(reason) for reason in raw_reasons)
             for raw_reasons in chain_reasons or ()
         ]
+        chain_support_lists = [
+            tuple(raw_supports)
+            for raw_supports in chain_supports or ()
+        ]
         if chain_reason_lists and len(chain_reason_lists) != len(chains):
             raise ValueError(
                 "chain_reasons deve contenere una sequenza per ogni catena."
+            )
+        if chain_support_lists and len(chain_support_lists) != len(chains):
+            raise ValueError(
+                "chain_supports deve contenere una sequenza per ogni catena."
+            )
+
+        edge_supports = []
+
+        def support_values(raw):
+            if isinstance(raw, ImplicationEdgeSupport):
+                return raw.support_candidates, raw.support_house_ids
+            if not isinstance(raw, Mapping):
+                raise TypeError("Il supporto di una catena deve essere una mappa.")
+            return (
+                tuple(raw.get("support_candidates", ())),
+                tuple(raw.get("support_house_ids", ())),
             )
 
         def add(kind, conclusion, parents=(), reason="unspecified", payload=None):
@@ -534,6 +698,7 @@ class ProofDAG:
                 )
 
         terminal_ids = []
+        dedicated_evidence = {}
         for chain_index, raw_chain in enumerate(chains or ()):
             literals = [normalize_literal(item) for item in raw_chain]
             if not literals:
@@ -546,6 +711,15 @@ class ProofDAG:
             if ordered_reasons and len(ordered_reasons) != len(literals) - 1:
                 raise ValueError(
                     "Ogni catena deve avere esattamente un motivo per arco."
+                )
+            ordered_supports = (
+                chain_support_lists[chain_index]
+                if chain_support_lists
+                else ()
+            )
+            if ordered_supports and len(ordered_supports) != len(literals) - 1:
+                raise ValueError(
+                    "Ogni catena deve avere esattamente un supporto per arco."
                 )
             parent = None
             for index, literal in enumerate(literals):
@@ -573,41 +747,87 @@ class ProofDAG:
                         reason=edge_reason,
                         payload={"presentation": True},
                     )
+                if parent is not None:
+                    candidates, house_ids = support_values(
+                        ordered_supports[index - 1]
+                        if ordered_supports
+                        else {}
+                    )
+                    edge_supports.append(ImplicationEdgeSupport(
+                        source_id=parent,
+                        target_id=node_id,
+                        support_candidates=candidates,
+                        support_house_ids=house_ids,
+                    ))
                 parent = node_id
             nodes[parent].payload["chain_terminal"] = True
             terminal_ids.append(parent)
 
-        evidence = tuple(dict.fromkeys(terminal_ids or assumption_ids.values()))
-        if len(evidence) > 1:
-            evidence = (add(
-                "branch",
-                None,
-                parents=evidence,
-                reason="common-branches",
-                payload={"branch_count": len(evidence), "presentation": False},
-            ),)
-        if "contradiction" in str(proof_kind):
-            evidence = (add(
-                "contradiction",
-                None,
-                parents=evidence,
-                reason=str(proof_kind),
-                payload={"presentation": False},
-            ),)
+            # Le endpoint-AIC possono provare più eliminazioni indipendenti
+            # con lo stesso percorso centrale. Ogni conclusione resta legata
+            # al terminale della propria catena di contraddizione esplicita.
+            if (
+                proof_kind == "endpoint-aic"
+                and literals[0][:3] == literals[-1][:3]
+                and literals[0][3] != literals[-1][3]
+            ):
+                dedicated_evidence.setdefault(literals[-1], parent)
 
-        conclusion_ids = []
+        conclusion_specs = []
         for action, items, state in (
             ("placement", placements, True),
             ("elimination", eliminations, False),
         ):
-            for row, column, value in sorted(set(tuple(item) for item in items)):
-                conclusion_ids.append(add(
-                    "common-conclusion",
-                    (row, column, value, state),
+            conclusion_specs.extend(
+                (action, (row, column, value, state))
+                for row, column, value in sorted(
+                    set(tuple(item) for item in items)
+                )
+            )
+
+        needs_common_evidence = any(
+            literal not in dedicated_evidence
+            for _, literal in conclusion_specs
+        )
+        evidence = ()
+        if needs_common_evidence:
+            evidence = tuple(dict.fromkeys(
+                terminal_ids or assumption_ids.values()
+            ))
+            if len(evidence) > 1:
+                evidence = (add(
+                    "branch",
+                    None,
                     parents=evidence,
-                    reason=action,
-                    payload={"action": action, "presentation": False},
-                ))
+                    reason="common-branches",
+                    payload={
+                        "branch_count": len(evidence),
+                        "presentation": False,
+                    },
+                ),)
+            if "contradiction" in str(proof_kind):
+                evidence = (add(
+                    "contradiction",
+                    None,
+                    parents=evidence,
+                    reason=str(proof_kind),
+                    payload={"presentation": False},
+                ),)
+
+        conclusion_ids = []
+        for action, literal in conclusion_specs:
+            parents = (
+                (dedicated_evidence[literal],)
+                if literal in dedicated_evidence
+                else evidence
+            )
+            conclusion_ids.append(add(
+                "common-conclusion",
+                literal,
+                parents=parents,
+                reason=action,
+                payload={"action": action, "presentation": False},
+            ))
 
         roots = tuple(sorted(
             node.id for node in nodes.values() if not node.parents
@@ -617,6 +837,7 @@ class ProofDAG:
             roots=roots,
             conclusions=tuple(conclusion_ids),
             nested_proofs={},
+            edge_supports=tuple(edge_supports),
         )
 
 
@@ -629,6 +850,8 @@ def proof_dag(value) -> ProofDAG | None:
 
 
 __all__ = [
+    "Candidate",
+    "ImplicationEdgeSupport",
     "Literal",
     "MAX_PRESENTATION_CHAINS",
     "NODE_KINDS",

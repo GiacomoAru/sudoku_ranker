@@ -90,8 +90,10 @@ ACTIVE_TECHNIQUE_BINDINGS = {
     "0607": TechniqueBinding("avoidable_rectangle:1", "unique.avoidable.1"),
     "0608": TechniqueBinding("avoidable_rectangle:2", "unique.avoidable.2"),
     "0610": TechniqueBinding("bug_plus_one", "unique.bug.1"),
+    "0701": TechniqueBinding("forcing_x_chain", "chain.x"),
     "0702": TechniqueBinding("xy_chain", "chain.xy"),
     "0703": TechniqueBinding("xy_chain", "chain.remote_pair"),
+    "0708": TechniqueBinding("aic", "chain.aic.type1"),
     "0800": TechniqueBinding("y_wing", "wing.xy"),
     "0801": TechniqueBinding("xyz_wing", "wing.xyz"),
     "0803": TechniqueBinding("w_wing", "wing.w"),
@@ -107,7 +109,7 @@ ACTIVE_TECHNIQUE_BINDINGS = {
 PLANNED_HODOKU_CODES = frozenset({
     "0341",
     "0502",
-    "0701", "0706", "0707", "0708", "0709", "0710", "0711",
+    "0706", "0707", "0709", "0710", "0711",
     "0901", "0902", "0903", "0904", "1201", "1202",
 })
 

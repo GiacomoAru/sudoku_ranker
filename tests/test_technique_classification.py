@@ -150,7 +150,7 @@ class StructuralTechniqueClassificationTests(unittest.TestCase):
             {"logic": {"kind": "bidirectional-cycle", "chains": []}},
         ))
 
-    def test_aic_requires_valid_strong_weak_transitions(self):
+    def test_discontinuous_loop_requires_valid_strong_weak_transitions(self):
         state = synthetic_state({
             (0, 0): {1},
             (0, 4): {1, 2},
@@ -163,8 +163,8 @@ class StructuralTechniqueClassificationTests(unittest.TestCase):
             move for move in techniques.forcing_chain(state)
             if move["eliminations"] == [(0, 0, 1)]
         )
-        self.assertEqual(move["technique"], "Alternating Inference Chain")
-        self.assertEqual(move["technique_id"], "chain.aic")
+        self.assertEqual(move["technique"], "Discontinuous Nice Loop")
+        self.assertEqual(move["technique_id"], "loop.dnl")
         self.assertEqual(move["parent_id"], "se.forcing_chain")
 
         deduction = logic_engine.find_logic_deductions(state, "Forcing Chain")[0]
@@ -196,10 +196,9 @@ class StructuralTechniqueClassificationTests(unittest.TestCase):
     def test_xy_cycle_and_x_cycle_validate_their_link_types(self):
         xy_state = synthetic_state({
             (0, 0): {1, 2},
-            (0, 3): {1, 2},
-            (3, 3): {1, 2},
-            (3, 0): {1, 2},
-            (1, 0): {1},
+            (0, 4): {2, 3},
+            (0, 7): {1, 3},
+            (0, 8): {1},
         })
         xy_deduction = logic_engine.find_logic_deductions(
             xy_state, "Bidirectional Y-Cycle"

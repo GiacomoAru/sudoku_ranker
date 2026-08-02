@@ -75,6 +75,7 @@ class TechniqueCatalogStructureTests(unittest.TestCase):
             definition.id
             for definition in catalog.TECHNIQUE_DEFINITIONS
             if definition.engine_type != "local"
+            and definition.implementation_status == "implemented"
         }
         self.assertEqual(
             registered_logic_ids,

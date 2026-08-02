@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import math
 
 
-TECHNIQUE_CATALOG_VERSION = "1.5.0"
+TECHNIQUE_CATALOG_VERSION = "1.6.0"
 
 LEGACY_TECHNIQUE_ALIASES = {
     "Nested Forcing Chain": "Complete Forcing Tree",
@@ -733,7 +733,15 @@ _CATALOG_ROWS = (
         proof_metric_profile=CHAIN_METRICS,
     ),
     _entry(
-        "chain.xy", "XY-Chain", 5.5,
+        "chain.x", "X-Chain", 6.5,
+        "forcing_chains", "static_chains", "forcing_x_chain",
+        parent_id="se.forcing_x_chain",
+        se_equivalent_parent_id="se.forcing_x_chain",
+        rating_kind="pseudo_se", engine_type="logic",
+        proof_metric_profile=CHAIN_METRICS,
+    ),
+    _entry(
+        "chain.xy", "XY-Chain", 6.0,
         "bivalue_chains", "static_chains", "xy_chain",
         aliases=_aliases("Y-Chain"),
         parent_id="se.bidirectional_y_cycle",
@@ -762,7 +770,7 @@ _CATALOG_ROWS = (
         proof_metric_profile=CHAIN_METRICS,
     ),
     _entry(
-        "loop.cnl", "Continuous Nice Loop", 6.1,
+        "loop.cnl", "Continuous Nice Loop", 7.2,
         "bidirectional_cycles", "static_chains", "bidirectional_cycle",
         aliases=_aliases("AIC Loop"),
         parent_id="se.bidirectional_cycle",
@@ -784,7 +792,32 @@ _CATALOG_ROWS = (
     ),
     _entry(
         "chain.aic", "Alternating Inference Chain", 6.0,
+        "forcing_chains", "static_chains", "aic",
+        parent_id="se.forcing_chain",
+        se_equivalent_parent_id="se.forcing_chain",
+        rating_kind="pseudo_se", engine_type="logic",
+        implementation_status="deprecated", abstract=True,
+        proof_metric_profile=CHAIN_METRICS,
+    ),
+    _entry(
+        "loop.dnl", "Discontinuous Nice Loop", 6.8,
         "forcing_chains", "static_chains", "forcing_chain",
+        parent_id="se.forcing_chain",
+        se_equivalent_parent_id="se.forcing_chain",
+        rating_kind="pseudo_se", engine_type="logic",
+        proof_metric_profile=CHAIN_METRICS,
+    ),
+    _entry(
+        "chain.aic.type1", "AIC Type 1", 7.0,
+        "forcing_chains", "static_chains", "aic",
+        parent_id="se.forcing_chain",
+        se_equivalent_parent_id="se.forcing_chain",
+        rating_kind="pseudo_se", engine_type="logic",
+        proof_metric_profile=CHAIN_METRICS,
+    ),
+    _entry(
+        "chain.aic.type2", "AIC Type 2", 7.1,
+        "forcing_chains", "static_chains", "aic",
         parent_id="se.forcing_chain",
         se_equivalent_parent_id="se.forcing_chain",
         rating_kind="pseudo_se", engine_type="logic",

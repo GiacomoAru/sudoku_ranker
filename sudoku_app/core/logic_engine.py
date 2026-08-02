@@ -73,6 +73,7 @@ LOGIC_TECHNIQUE_BATCHES = {
         "Bidirectional Y-Cycle",
         "Forcing X-Chain",
         "Forcing Chain",
+        "AIC",
         "Bidirectional Cycle",
     ),
     "multiple": (
@@ -165,6 +166,15 @@ def _sees(first: Candidate, second: Candidate) -> bool:
     return second[:2] in peers(first[0], first[1])
 
 
+def _conflict_reason(first: Candidate, second: Candidate) -> str | None:
+    """Tipo di weak link diretto fra due candidati, se esiste."""
+    if first[:2] == second[:2] and first[2] != second[2]:
+        return "y"
+    if _sees(first, second):
+        return "peer"
+    return None
+
+
 def _candidate_map(state) -> dict[tuple[int, int], set[int]]:
     return {
         (row, column): set(state.candidates[row][column])
@@ -203,6 +213,7 @@ def _proof(
     chains,
     reasons=None,
     chain_reasons=(),
+    chain_supports=(),
     *,
     placements=(),
     eliminations=(),
@@ -212,6 +223,7 @@ def _proof(
         chains=chains,
         reasons=reasons,
         chain_reasons=chain_reasons,
+        chain_supports=chain_supports,
         proof_kind=kind,
         placements=placements,
         eliminations=eliminations,
@@ -244,6 +256,7 @@ def _deduction(
     chains=(),
     reasons=(),
     chain_reasons=(),
+    chain_supports=(),
     kind: str,
 ) -> dict:
     placements = sorted(set(placements), key=_candidate_key)
@@ -267,6 +280,7 @@ def _deduction(
             chain_list,
             reasons,
             chain_reasons=chain_reasons,
+            chain_supports=chain_supports,
             placements=placements,
             eliminations=eliminations,
         ),
@@ -277,6 +291,8 @@ def _deduction(
 class Edge:
     target: Literal
     reason: str  # "peer" (debole), "x" (forte) oppure "y"
+    support_candidates: tuple[Candidate, ...] = ()
+    support_house_ids: tuple[int, ...] = ()
 
 
 class StaticImplicationGraph:
@@ -294,7 +310,24 @@ class StaticImplicationGraph:
             ),
             key=_candidate_key,
         )
-        adjacency: dict[Literal, set[tuple[Literal, str]]] = defaultdict(set)
+        adjacency: dict[Literal, dict[tuple[Literal, str], dict[str, set]]] = (
+            defaultdict(dict)
+        )
+
+        def add_edge(
+            source,
+            target,
+            reason,
+            *,
+            support_candidates=(),
+            support_house_ids=(),
+        ):
+            support = adjacency[source].setdefault(
+                (target, reason),
+                {"candidates": set(), "houses": set()},
+            )
+            support["candidates"].update(support_candidates)
+            support["houses"].update(support_house_ids)
 
         # Collegamenti Y: un candidato ON spegne gli altri nella cella;
         # in una cella bivalue un candidato OFF accende l'altro.
@@ -304,14 +337,28 @@ class StaticImplicationGraph:
                 source = (row, column, value)
                 for other in ordered:
                     if other != value:
-                        adjacency[_literal(source, True)].add(
-                            (_literal((row, column, other), False), "y")
+                        target = (row, column, other)
+                        add_edge(
+                            _literal(source, True),
+                            _literal(target, False),
+                            "y",
+                            support_candidates=(source, target),
                         )
             if len(ordered) == 2:
                 first = (row, column, ordered[0])
                 second = (row, column, ordered[1])
-                adjacency[_literal(first, False)].add((_literal(second, True), "y"))
-                adjacency[_literal(second, False)].add((_literal(first, True), "y"))
+                add_edge(
+                    _literal(first, False),
+                    _literal(second, True),
+                    "y",
+                    support_candidates=(first, second),
+                )
+                add_edge(
+                    _literal(second, False),
+                    _literal(first, True),
+                    "y",
+                    support_candidates=(first, second),
+                )
 
         # Collegamenti deboli universali: un candidato ON spegne lo stesso
         # valore in tutti i peer. Sono usati sia dalle catene X sia dalle Y.
@@ -323,12 +370,19 @@ class StaticImplicationGraph:
             for peer_row, peer_column in peers(row, column):
                 other = (peer_row, peer_column, value)
                 if other in available:
-                    adjacency[_literal(candidate, True)].add(
-                        (_literal(other, False), "peer")
+                    house_ids = set(_UNITS_BY_CELL[candidate[:2]]) & set(
+                        _UNITS_BY_CELL[other[:2]]
+                    )
+                    add_edge(
+                        _literal(candidate, True),
+                        _literal(other, False),
+                        "peer",
+                        support_candidates=(candidate, other),
+                        support_house_ids=house_ids,
                     )
 
         # Collegamenti X forti: due sole posizioni di un valore in una casa.
-        for unit in UNITS:
+        for unit_index, unit in enumerate(UNITS):
             for value in range(1, 10):
                 positions = [
                     (row, column, value)
@@ -337,15 +391,35 @@ class StaticImplicationGraph:
                 ]
                 if len(positions) == 2:
                     first, second = positions
-                    adjacency[_literal(first, False)].add((_literal(second, True), "x"))
-                    adjacency[_literal(second, False)].add((_literal(first, True), "x"))
+                    add_edge(
+                        _literal(first, False),
+                        _literal(second, True),
+                        "x",
+                        support_candidates=(first, second),
+                        support_house_ids=(unit_index,),
+                    )
+                    add_edge(
+                        _literal(second, False),
+                        _literal(first, True),
+                        "x",
+                        support_candidates=(first, second),
+                        support_house_ids=(unit_index,),
+                    )
 
         self.adjacency = {
             source: tuple(
-                Edge(target, reason)
-                for target, reason in sorted(
-                    targets,
-                    key=lambda item: (_literal_key(item[0]), item[1]),
+                Edge(
+                    target,
+                    reason,
+                    tuple(sorted(support["candidates"])),
+                    tuple(sorted(support["houses"])),
+                )
+                for (target, reason), support in sorted(
+                    targets.items(),
+                    key=lambda item: (
+                        _literal_key(item[0][0]),
+                        item[0][1],
+                    ),
                 )
             )
             for source, targets in adjacency.items()
@@ -356,6 +430,27 @@ class StaticImplicationGraph:
             edge for edge in self.adjacency.get(source, ())
             if edge.reason in allowed
         )
+
+    def edge(self, source: Literal, target: Literal, reason: str):
+        for edge in self.adjacency.get(source, ()):
+            if edge.target == target and edge.reason == reason:
+                return edge
+        return None
+
+    def chain_supports(self, literals, reasons):
+        """Supporti autorevoli degli archi di un percorso del grafo."""
+        if len(reasons) != len(literals) - 1:
+            raise ValueError("Il numero di supporti deve coincidere con gli archi.")
+        result = []
+        for source, target, reason in zip(literals, literals[1:], reasons):
+            edge = self.edge(source, target, reason)
+            if edge is None:
+                raise ValueError("Il percorso contiene un arco assente dal grafo.")
+            result.append({
+                "support_candidates": edge.support_candidates,
+                "support_house_ids": edge.support_house_ids,
+            })
+        return tuple(result)
 
     def conjugate_pairs(self, digit: int):
         """Restituisce gli archi X forti non orientati per una cifra.
@@ -504,17 +599,11 @@ class StaticImplicationGraph:
 
     @staticmethod
     def _cycle_signature(literals, reasons):
-        body = tuple(literals[:-1])
-        pairs = tuple(zip(body, reasons))
-        rotations = [pairs[index:] + pairs[:index] for index in range(len(pairs))]
-        reverse_body = tuple(reversed(body))
-        reverse_reasons = tuple(reversed(reasons))
-        reverse_pairs = tuple(zip(reverse_body, reverse_reasons))
-        rotations.extend(
-            reverse_pairs[index:] + reverse_pairs[:index]
-            for index in range(len(reverse_pairs))
-        )
-        return min(rotations)
+        edges = []
+        for source, target, reason in zip(literals, literals[1:], reasons):
+            endpoints = tuple(sorted((_candidate(source), _candidate(target))))
+            edges.append((endpoints, reason))
+        return tuple(sorted(edges))
 
 
 class StaticClosure:
@@ -1833,20 +1922,39 @@ class LogicEngine:
             maximum_edges=MAX_STATIC_CYCLE_EDGES,
         ):
             body = literals[:-1]
-            chain_cells = {(item[0], item[1]) for item in body}
-            on_candidates = [_candidate(item) for item in body if item[3]]
-            off_candidates = [_candidate(item) for item in body if not item[3]]
-            eliminations = []
+            supports = self.graph.chain_supports(literals, reasons)
+            eliminations = set()
 
-            for candidate in self.graph.all_candidates:
-                if candidate[:2] in chain_cells:
+            # In un Continuous Nice Loop ogni weak link viene reso strong
+            # dal percorso alternato restante. Le sole conclusioni lecite
+            # sono quindi quelle fornite dalle case/celle di tali weak link.
+            for source, target, reason, support in zip(
+                literals,
+                literals[1:],
+                reasons,
+                supports,
+            ):
+                if not source[3] or target[3]:
                     continue
-
-                if (
-                    any(_sees(candidate, item) for item in on_candidates)
-                    and any(_sees(candidate, item) for item in off_candidates)
-                ):
-                    eliminations.append(candidate)
+                endpoints = {_candidate(source), _candidate(target)}
+                if reason == "peer":
+                    digit = source[2]
+                    for house_id in support["support_house_ids"]:
+                        for row, column in UNITS[house_id]:
+                            candidate = (row, column, digit)
+                            if (
+                                candidate not in endpoints
+                                and digit in self.candidates.get(
+                                    (row, column), ()
+                                )
+                            ):
+                                eliminations.add(candidate)
+                elif reason == "y" and source[:2] == target[:2]:
+                    row, column = source[:2]
+                    for digit in self.candidates.get((row, column), ()):
+                        candidate = (row, column, digit)
+                        if candidate not in endpoints:
+                            eliminations.add(candidate)
 
             if not eliminations:
                 continue
@@ -1854,14 +1962,15 @@ class LogicEngine:
             if collector.add(_deduction(
                 description=(
                     f"Il {technique} alterna {len(body)} implicazioni: "
-                    "i candidati che vedono entrambi i colori del ciclo "
-                    "sono impossibili."
+                    "ogni weak link e' resa strong dal resto del loop e "
+                    "rimuove i candidati aggiuntivi dal proprio supporto."
                 ),
-                eliminations=eliminations,
+                eliminations=sorted(eliminations),
                 assumptions=(body[0],),
                 chains=(literals,),
                 reasons=reasons,
                 chain_reasons=(reasons,),
+                chain_supports=(supports,),
                 kind="bidirectional-cycle",
             )):
                 break
@@ -1944,17 +2053,138 @@ class LogicEngine:
                     chains=(path,),
                     reasons=reasons,
                     chain_reasons=(reasons,),
+                    chain_supports=(
+                        self.graph.chain_supports(path, reasons),
+                    ),
                     kind="forcing-chain",
                 )):
                     return collector.results
 
         return collector.results
 
+    def _endpoint_deductions(
+        self,
+        technique,
+        *,
+        allowed,
+        required,
+        subtype,
+        max_results,
+    ):
+        """Catene strong-ended; la conclusione nasce dai due endpoint.
+
+        Per ogni eliminazione ``T`` si conserva nel DAG la prova esplicita
+        ``T on -> A off -> ... -> B on -> T off``. Il percorso centrale e'
+        la AIC, mentre i due archi esterni documentano la conclusione.
+        """
+        collector = _DeductionCollector(max_results)
+        candidates = self.graph.all_candidates
+        allowed = frozenset(allowed)
+        required = frozenset(required)
+
+        for first_index, first in enumerate(candidates):
+            for second in candidates[first_index + 1:]:
+                same_digit = first[2] == second[2]
+                if subtype == "x" and not same_digit:
+                    continue
+                if subtype == "aic1" and not same_digit:
+                    continue
+                if subtype == "aic2" and same_digit:
+                    continue
+                if (
+                    subtype == "aic2"
+                    and second[:2] not in peers(first[0], first[1])
+                ):
+                    continue
+
+                targets = [
+                    candidate
+                    for candidate in candidates
+                    if candidate not in {first, second}
+                    and _conflict_reason(candidate, first)
+                    and _conflict_reason(candidate, second)
+                ]
+                if not targets:
+                    continue
+
+                path_data = self.graph.shortest_path(
+                    _literal(first, False),
+                    _literal(second, True),
+                    allowed=allowed,
+                    required=required,
+                    minimum_edges=3,
+                    maximum_edges=MAX_STATIC_CYCLE_EDGES - 2,
+                )
+                if path_data is None:
+                    continue
+                central, central_reasons = path_data
+                central_candidates = [_candidate(item) for item in central]
+                if len(set(central_candidates)) != len(central_candidates):
+                    continue
+                all_one_digit = len({item[2] for item in central}) == 1
+                if subtype == "x" and not all_one_digit:
+                    continue
+                if subtype in {"aic1", "aic2"} and all_one_digit:
+                    continue
+
+                chains = []
+                chain_reasons = []
+                chain_supports = []
+                for target in targets:
+                    left_reason = _conflict_reason(target, first)
+                    right_reason = _conflict_reason(second, target)
+                    proof_chain = (
+                        _literal(target, True),
+                        *central,
+                        _literal(target, False),
+                    )
+                    reasons = (
+                        left_reason,
+                        *central_reasons,
+                        right_reason,
+                    )
+                    try:
+                        supports = self.graph.chain_supports(
+                            proof_chain, reasons
+                        )
+                    except ValueError:
+                        continue
+                    chains.append(proof_chain)
+                    chain_reasons.append(reasons)
+                    chain_supports.append(supports)
+
+                if not chains:
+                    continue
+                eliminations = tuple(_candidate(chain[0]) for chain in chains)
+                endpoint_text = (
+                    f"R{first[0]+1}C{first[1]+1}={first[2]} e "
+                    f"R{second[0]+1}C{second[1]+1}={second[2]}"
+                )
+                if collector.add(_deduction(
+                    description=(
+                        f"La {technique} collega gli endpoint {endpoint_text}: "
+                        "ogni candidato in weak link con entrambi e' falso."
+                    ),
+                    eliminations=eliminations,
+                    assumptions=tuple(chain[0] for chain in chains),
+                    chains=chains,
+                    reasons=tuple(sorted(set(chain(
+                        *chain_reasons
+                    )))),
+                    chain_reasons=chain_reasons,
+                    chain_supports=chain_supports,
+                    kind="endpoint-aic",
+                )):
+                    return collector.results
+
+        return collector.results
+
     def _find_forcing_x_chain(self, *, max_results):
-        return self._forcing_deductions(
-            "Forcing X-Chain",
-            {"peer", "x"},
-            {"peer", "x"},
+        return self._endpoint_deductions(
+            "X-Chain",
+            allowed={"peer", "x"},
+            required={"peer", "x"},
+            subtype="x",
             max_results=max_results,
         )
 
@@ -1976,6 +2206,25 @@ class LogicEngine:
             {"x", "y"},
             max_results=max_results,
         )
+
+    def _find_aic(self, *, max_results):
+        subtype_results = []
+        for subtype in ("aic1", "aic2"):
+            subtype_results.append(self._endpoint_deductions(
+                "AIC",
+                allowed={"peer", "x", "y"},
+                required={"x", "y"},
+                subtype=subtype,
+                max_results=max_results,
+            ))
+        deductions = []
+        for index in range(max(map(len, subtype_results), default=0)):
+            deductions.extend(
+                results[index]
+                for results in subtype_results
+                if index < len(results)
+            )
+        return self._deduplicate(deductions, max_results=max_results)
 
     def _multiple_deductions(
         self,

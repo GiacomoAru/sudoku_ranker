@@ -13,6 +13,7 @@ Repository: [github.com/GiacomoAru/sudoku_ranker](https://github.com/GiacomoAru/
 - analisi logica passo per passo;
 - motore Fish parametrico per varianti Basic, Franken e Mutant;
 - Simple e Multi Colors sul grafo delle coppie coniugate;
+- X-Chain, XY-Chain, AIC e Nice Loop sul grafo d'implicazione condiviso;
 - ordinamento delle tecniche secondo difficoltà crescente;
 - tre metriche complementari di difficoltà;
 - riconoscimento locale da foto, senza servizi esterni;
@@ -115,6 +116,18 @@ Il detector distingue esplicitamente Color Trap, Color Wrap e Multi Colors
 Type 1/2. Le varianti Multi operano soltanto fra componenti scollegate; ogni
 conclusione conserva il pattern colorato e una prova `ProofDAG` con archi
 alternati `peer`/`x`.
+
+## AIC e Nice Loop
+
+Lo `StaticImplicationGraph` conserva per ogni arco i candidati e le case che
+ne giustificano il weak o strong link. Questi supporti appartengono al
+`ProofDAG`; `chains` e `chain_links` sono soltanto viste derivate.
+
+Il motore classifica strutturalmente X-Chain, XY-Chain, Discontinuous Nice
+Loop, AIC Type 1/2 e Continuous Nice Loop. Ogni percorso deve alternare
+realmente strong e weak link: le AIC derivano le conclusioni dalla polarità
+degli endpoint, mentre un loop continuo elimina soltanto attraverso i supporti
+delle weak link rese strong dal resto del ciclo.
 
 ## Riconoscimento da foto
 

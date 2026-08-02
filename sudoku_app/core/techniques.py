@@ -2524,6 +2524,8 @@ def _logic_moves(state, technique, excluded_effects=()):
             continue
 
         deduction = dict(deduction)
+        deduction["placements"] = placements
+        deduction["eliminations"] = eliminations
         deduction["logic"] = proof_schema.normalize_proof(
             deduction.get("logic", {}),
             placements=placements,
@@ -2700,6 +2702,25 @@ def forcing_chain(state):
     return _cached_moves(state, "logic:Forcing Chain", produce)
 
 
+def aic(state):
+    def produce():
+        specific_moves = (
+            _cached_local(state, "w_wing", w_wing)
+            + _cached_local(state, "y_wing", y_wing)
+            + bidirectional_x_cycle(state)
+            + xy_chain(state)
+            + bidirectional_y_cycle(state)
+            + forcing_x_chain(state)
+        )
+        return _logic_moves(
+            state,
+            "AIC",
+            _effects_of_moves(specific_moves),
+        )
+
+    return _cached_moves(state, "logic:AIC", produce)
+
+
 def bidirectional_cycle(state):
     def produce():
         excluded = _effects_from_functions(
@@ -2710,6 +2731,7 @@ def bidirectional_cycle(state):
                 bidirectional_y_cycle,
                 forcing_x_chain,
                 forcing_chain,
+                aic,
             ),
         )
         return _logic_moves(state, "Bidirectional Cycle", excluded)
@@ -2727,6 +2749,7 @@ def nishio(state):
                 bidirectional_y_cycle,
                 forcing_x_chain,
                 forcing_chain,
+                aic,
                 bidirectional_cycle,
             ),
         )
@@ -2745,6 +2768,7 @@ def cell_forcing_chain(state):
                 bidirectional_y_cycle,
                 forcing_x_chain,
                 forcing_chain,
+                aic,
                 bidirectional_cycle,
                 nishio,
             ),
@@ -2764,6 +2788,7 @@ def region_forcing_chain(state):
                 bidirectional_y_cycle,
                 forcing_x_chain,
                 forcing_chain,
+                aic,
                 bidirectional_cycle,
                 nishio,
                 cell_forcing_chain,
@@ -2784,6 +2809,7 @@ def dynamic_forcing_chain(state):
                 bidirectional_y_cycle,
                 forcing_x_chain,
                 forcing_chain,
+                aic,
                 bidirectional_cycle,
                 nishio,
                 cell_forcing_chain,
@@ -2805,6 +2831,7 @@ def dynamic_forcing_chain_plus(state):
                 bidirectional_y_cycle,
                 forcing_x_chain,
                 forcing_chain,
+                aic,
                 bidirectional_cycle,
                 nishio,
                 cell_forcing_chain,

@@ -17,7 +17,7 @@ Non è necessario includere ogni nome mai inventato nella comunità Sudoku. La c
 
 ## Baseline acquisito
 
-Le patch P01-P11, inclusa P06.5, sono applicate e non fanno più parte della roadmap operativa. Il progetto dispone già di:
+Le patch P01-P12, inclusa P06.5, sono applicate e non fanno più parte della roadmap operativa. Il progetto dispone già di:
 
 * catalogo centrale e identificatori stabili;
 * registro dichiarativo dei detector;
@@ -38,6 +38,9 @@ Le patch P01-P11, inclusa P06.5, sono applicate e non fanno più parte della roa
   con varianti Finned, Sashimi, Siamese, Endo-Finned e Cannibalistic;
 * Coloring sul grafo condiviso delle conjugate pair, con componenti bipartite,
   Color Trap, Color Wrap e Multi Colors Type 1/2;
+* grafo AIC completo con supporti autorevoli degli archi nel `ProofDAG`,
+  X-Chain, XY-Chain, Discontinuous Nice Loop, AIC Type 1/2 e Continuous Nice
+  Loop classificati da alternanza, chiusura ed endpoint;
 * versionamento esplicito di prove e analisi archiviate.
 
 Le patch future devono estendere queste strutture, non crearne copie parallele.
@@ -45,69 +48,6 @@ Le patch future devono estendere queste strutture, non crearne copie parallele.
 ---
 
 # Blocco D: motori parametrici
-
-## P12. Grafo AIC e Nice Loop completo
-
-### Obiettivo
-
-Estendere la classificazione strutturale già introdotta in P07 fino a un modello AIC e Nice Loop completo.
-
-### Estensione degli archi correnti
-
-Il DAG conserva già origine, destinazione, `reason` e `strength`. Va aggiunto il supporto logico dell’arco senza introdurre una seconda rappresentazione autorevole:
-
-```python
-@dataclass(frozen=True)
-class ImplicationEdgeSupport:
-    source_id: int
-    target_id: int
-    support_candidates: tuple[Candidate, ...]
-    support_house_ids: tuple[int, ...]
-```
-
-Le viste `chain_links` restano derivate dal DAG.
-
-### Tecniche
-
-```text
-X-Chain
-XY-Chain
-Discontinuous Nice Loop
-AIC Type 1
-AIC Type 2
-Continuous Nice Loop
-```
-
-Le vecchie categorie SE restano disponibili come parent:
-
-```text
-Bidirectional X-Cycle
-Bidirectional Y-Cycle
-Forcing X-Chain
-Forcing Chain
-Bidirectional Cycle
-```
-
-### Classificazione
-
-```text
-tutti i nodi stessa cifra                 X-Chain
-celle bivalue con transizioni valide      XY-Chain
-chiusura discontinua                      Discontinuous Nice Loop
-endpoint forzano candidato                AIC Type 1
-endpoint producono eliminazione comune    AIC Type 2
-loop perfettamente alternato              Continuous Nice Loop
-```
-
-### Criteri di completamento
-
-* Ogni percorso alterna realmente strong e weak link.
-* Le conclusioni derivano dalla polarità degli endpoint.
-* Nessuna AIC viene classificata dalla sola lunghezza.
-* Il detector conserva tutti i supporti degli archi nel DAG.
-* Le catene equivalenti vengono canonicalizzate.
-
----
 
 ## P13. Group Nodes
 
@@ -706,7 +646,7 @@ La versione 1.0 è pronta quando:
 
 # Dipendenze principali
 
-Le fondamenta P01-P09 sono già acquisite.
+Le fondamenta P01-P12 sono già acquisite.
 
 ```text
 P10 -> P15 e profilo Plus
@@ -726,9 +666,6 @@ P19 -> P20
 # Ordine pratico restante
 
 ```text
-P10 Fish
-P11 Coloring
-P12 AIC e Nice Loop
 P13 Group Nodes
 P14 ALS e generalized wings
 P15 Forcing Net, Templates e Kraken

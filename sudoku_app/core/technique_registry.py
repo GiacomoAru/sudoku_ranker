@@ -412,13 +412,18 @@ _DECLARED_RUNNERS = (
     ),
     _logic(
         "forcing_x_chain",
-        ("sdp.turbot_fish", "se.forcing_x_chain"),
+        ("sdp.turbot_fish", "chain.x", "se.forcing_x_chain"),
         techniques.forcing_x_chain,
     ),
     _logic(
         "forcing_chain",
-        ("chain.aic", "se.forcing_chain"),
+        ("loop.dnl", "se.forcing_chain"),
         techniques.forcing_chain,
+    ),
+    _logic(
+        "aic",
+        ("chain.aic.type1", "chain.aic.type2"),
+        techniques.aic,
     ),
     _logic(
         "bidirectional_cycle",

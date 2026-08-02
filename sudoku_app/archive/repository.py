@@ -38,8 +38,8 @@ CANONICAL_CLASS_SCHEMA_VERSION = 1
 
 # Incrementare questo numero quando cambia il funzionamento del solver
 # o il formato dell'analisi. Le vecchie analisi verranno ricalcolate.
-ANALYSIS_VERSION = 28
-ANALYSIS_SCHEMA_VERSION = 16
+ANALYSIS_VERSION = 29
+ANALYSIS_SCHEMA_VERSION = 17
 
 # Evita anche letture ripetute dal disco durante la stessa esecuzione.
 # La chiave è (puzzle_id, analysis_variant), non soltanto puzzle_id.
