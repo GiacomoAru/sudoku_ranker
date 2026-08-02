@@ -149,6 +149,111 @@ def classify_forcing_net(logic):
     return None
 
 
+def classify_nested_forcing(logic):
+    """Richiede una sottoprova reale che dimostri il nodo che la possiede."""
+    if not isinstance(logic, Mapping):
+        return None
+    try:
+        dag = proof_model.proof_dag(logic.get("proof_dag"))
+    except (KeyError, TypeError, ValueError):
+        return None
+    if dag is None or not dag.nested_proofs:
+        return None
+
+    metrics = dag.metrics()
+    if (
+        not 1 <= metrics["nested_depth"] <= 2
+        or metrics["nested_subproof_count"] < 1
+        or logic.get("complete") is True
+        or logic.get("exhaustive") is True
+    ):
+        return None
+
+    def valid_subproofs(container):
+        if any(
+            "complete-tree" in node.reason.lower()
+            or "complete-search" in node.reason.lower()
+            for node in container.nodes.values()
+        ):
+            return False
+
+        used = set()
+
+        def collect_ancestors(node_id):
+            if node_id in used:
+                return
+            used.add(node_id)
+            for parent_id in container.nodes[node_id].parents:
+                collect_ancestors(parent_id)
+
+        for conclusion_id in container.conclusions:
+            collect_ancestors(conclusion_id)
+
+        for owner_id, nested in container.nested_proofs.items():
+            owner = container.nodes.get(owner_id)
+            if (
+                owner is None
+                or owner_id not in used
+                or owner.kind != "nested-subproof"
+                or owner.conclusion is None
+                or owner.payload.get("node_type") != "nested-inference"
+            ):
+                return False
+            proven = {
+                nested.nodes[node_id].conclusion
+                for node_id in nested.conclusions
+                if node_id in nested.nodes
+            }
+            if owner.conclusion not in proven:
+                return False
+            if not valid_subproofs(nested):
+                return False
+        return True
+
+    if not valid_subproofs(dag):
+        return None
+
+    assumptions = [
+        node.conclusion
+        for node in dag.nodes.values()
+        if node.kind == "assumption" and node.conclusion is not None
+    ]
+    kind = logic.get("kind")
+    if kind == "nested-contradiction":
+        if (
+            len(assumptions) == 1
+            and any(node.kind == "contradiction" for node in dag.nodes.values())
+        ):
+            return "nested.contradiction"
+        return None
+    if kind == "nested-double":
+        if (
+            len(assumptions) == 2
+            and assumptions[0][:3] == assumptions[1][:3]
+            and assumptions[0][3] != assumptions[1][3]
+        ):
+            return "nested.double"
+        return None
+    if kind == "nested-cell":
+        if (
+            len(assumptions) >= 3
+            and all(item[3] for item in assumptions)
+            and len({item[:2] for item in assumptions}) == 1
+        ):
+            return "nested.cell"
+        return None
+    if kind == "nested-region":
+        cells = {item[:2] for item in assumptions}
+        if (
+            len(assumptions) >= 3
+            and all(item[3] for item in assumptions)
+            and len({item[2] for item in assumptions}) == 1
+            and any(cells <= set(unit) for unit in UNITS)
+        ):
+            return "nested.region"
+    return None
+
+
 def _literal(value) -> Literal | None:
     if not isinstance(value, Mapping):
         return None
@@ -802,6 +907,19 @@ def classify_logic_technique(
     """Restituisce il nome strutturale, o ``None`` per una prova invalida."""
     logic = deduction.get("logic", {})
 
+    if parent == "Nested Forcing Chain":
+        technique_id = classify_nested_forcing(logic)
+        return (
+            None
+            if technique_id is None
+            else {
+                "nested.contradiction": "Nested Contradiction Forcing Chain",
+                "nested.double": "Nested Double Forcing Chain",
+                "nested.cell": "Nested Cell Forcing Chain",
+                "nested.region": "Nested Region Forcing Chain",
+            }[technique_id]
+        )
+
     if parent == "Forcing Net":
         technique_id = classify_forcing_net(logic)
         return (
@@ -972,4 +1090,8 @@ def classify_logic_technique(
     return "Continuous Nice Loop"
 
 
-__all__ = ["classify_logic_technique"]
+__all__ = [
+    "classify_forcing_net",
+    "classify_logic_technique",
+    "classify_nested_forcing",
+]

@@ -17,11 +17,11 @@ Non è necessario includere ogni nome mai inventato nella comunità Sudoku. La c
 
 ## Baseline acquisito
 
-Le patch P01-P15, inclusa P06.5, sono applicate e non fanno più parte della roadmap operativa. Il progetto dispone già di:
+Le patch P01-P16, inclusa P06.5, sono applicate e non fanno più parte della roadmap operativa. Il progetto dispone già di:
 
 * catalogo centrale e identificatori stabili;
 * `TASSIONOMIA.md` come fonte normativa e catalogo come sua proiezione
-  eseguibile P15;
+  eseguibile P16;
 * separazione fra `inference_engine` semantico ed `engine_type` esecutivo;
 * registro dichiarativo dei detector;
 * pipeline ordinary, Nested e Complete Tree separata;
@@ -58,6 +58,8 @@ Le patch P01-P15, inclusa P06.5, sono applicate e non fanno più parte della roa
   `als_cell_count` e `rcc_count`;
 * classificazione P15 chain/net dal DAG e metriche di fork, merge e parent;
 * Templates per singola cifra e Kraken Fish Type 1/2 sopra Fish e grafo AIC;
+* vere Nested Forcing Chains con sottoprove di inferenze interne, memoizzazione,
+  cycle guard e budget depth 1-2;
 * versionamento esplicito di prove e analisi archiviate.
 
 Le patch future devono estendere queste strutture, non crearne copie parallele.
@@ -143,7 +145,7 @@ i percorsi AIC e i supporti degli archi.
 
 ---
 
-## P16. Vere Nested Forcing Chains
+## P16. Vere Nested Forcing Chains — completata
 
 ### Obiettivo
 
@@ -230,6 +232,13 @@ Serve anche un cycle guard per evitare sottoprove ricorsive autoreferenziali.
 * Il motore non prosegue fino alla soluzione completa.
 * Complete Forcing Tree resta un motore separato.
 * La profondità e il numero di sottoprove vengono conservati correttamente.
+
+Contratto acquisito: una mossa Nested contiene almeno un nodo
+`nested-subproof` la cui sottoprova conclude esattamente l'inferenza interna
+usata dalla catena principale. Sono implementati e classificati separatamente
+i casi Contradiction, Double, Cell e Region. Il motore usa i budget P16,
+memoizza su stato/ipotesi/target/profondità/profilo, applica un cycle guard e
+non invoca né inizializza il Complete Forcing Tree.
 
 ---
 
@@ -579,10 +588,9 @@ La versione 1.0 è pronta quando:
 
 # Dipendenze principali
 
-Le fondamenta P01-P15 sono già acquisite.
+Le fondamenta P01-P16 sono già acquisite.
 
 ```text
-P16 -> P17
 P17 -> checkpoint P17.1
 P17.1 -> P17.2
 P17.2 -> P18
@@ -593,7 +601,6 @@ P19 -> P20
 # Ordine pratico restante
 
 ```text
-P16 Vere Nested
 P17 Profili Dynamic, Plus e Nested
 CHECKPOINT obbligatorio prima di P16.5
 P17.1 Revisione Complete Forcing Tree

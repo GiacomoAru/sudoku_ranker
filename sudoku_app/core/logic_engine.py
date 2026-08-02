@@ -9,10 +9,11 @@ assunto falso. Le implicazioni statiche sono di due tipi:
 
 Le propagazioni dinamiche applicano le esclusioni a una copia locale dei
 candidati e scoprono nuovi single. I livelli Plus aggiungono locking, coppie
-e X-Wing. Il Complete Forcing Tree usa invece una ricerca ricorsiva completa
-per casi, senza troncare profondita', nodi o rami. I limiti di presentazione
-non modificano la prova autorevole. Nessuna funzione modifica lo
-``SudokuState`` ricevuto.
+e X-Wing. Le Nested dimostrano una singola inferenza interna con una
+sottocatena locale e limitata. Il Complete Forcing Tree usa invece una ricerca
+ricorsiva completa per casi, senza troncare profondita', nodi o rami. I limiti
+di presentazione non modificano la prova autorevole. Nessuna funzione modifica
+lo ``SudokuState`` ricevuto.
 
 L'API pubblica e' intenzionalmente piccola: ``find_logic_deductions``
 restituisce deduzioni neutrali. ``sudoku_app.core.techniques`` le converte nel
@@ -1187,13 +1188,28 @@ class StaticClosure:
 
 
 class PropagationResult:
-    def __init__(self, source: Literal):
-        self.source = source
+    def __init__(self, sources):
+        if (
+            isinstance(sources, tuple)
+            and len(sources) == 4
+            and isinstance(sources[3], bool)
+        ):
+            sources = (sources,)
+        self.sources = tuple(sources)
+        if not self.sources:
+            raise ValueError("La propagazione richiede almeno un'ipotesi.")
+        self.source = self.sources[0]
         self.on: set[Literal] = set()
         self.off: set[Literal] = set()
-        self.parents: dict[Literal, tuple[Literal, ...]] = {source: ()}
-        self.features: dict[Literal, frozenset[str]] = {source: frozenset()}
-        self.reasons: dict[Literal, str] = {source: "assumption"}
+        self.parents: dict[Literal, tuple[Literal, ...]] = {
+            source: () for source in self.sources
+        }
+        self.features: dict[Literal, frozenset[str]] = {
+            source: frozenset() for source in self.sources
+        }
+        self.reasons: dict[Literal, str] = {
+            source: "assumption" for source in self.sources
+        }
         self.contradiction = False
         self.contradiction_literals: tuple[Literal, ...] = ()
         self.contradiction_features: frozenset[str] = frozenset()
@@ -1272,9 +1288,29 @@ class DynamicPropagator:
         )
 
     def propagate(self, source: Literal, *, mode="dynamic", advanced_level=0):
+        return self.propagate_assumptions(
+            (source,),
+            mode=mode,
+            advanced_level=advanced_level,
+        )
+
+    def propagate_assumptions(
+        self,
+        sources,
+        *,
+        mode="dynamic",
+        advanced_level=0,
+    ):
+        """Propaga un contesto finito di ipotesi senza fare branching."""
+        sources = tuple(dict.fromkeys(sources))
+        if not sources:
+            raise ValueError("La propagazione richiede almeno un'ipotesi.")
         work = {cell: set(values) for cell, values in self.initial.items()}
-        result = PropagationResult(source)
-        queue = deque([(source, (), "assumption", frozenset())])
+        result = PropagationResult(sources)
+        queue = deque(
+            (source, (), "assumption", frozenset())
+            for source in sources
+        )
 
         while True:
             while queue and not result.contradiction:
@@ -1287,6 +1323,12 @@ class DynamicPropagator:
                 opposite = _opposite(literal)
                 if opposite in opposite_set:
                     combined = set(features) | set(result.features.get(opposite, ()))
+                    # Il letterale appena estratto non viene applicato allo
+                    # stato perché collide con l'opposto, ma la prova deve
+                    # conservarne comunque parent e motivo reali.
+                    result.parents.setdefault(literal, tuple(parents))
+                    result.features.setdefault(literal, frozenset(features))
+                    result.reasons.setdefault(literal, reason)
                     result.set_contradiction((opposite, literal), combined)
                     break
 
@@ -1325,8 +1367,16 @@ class DynamicPropagator:
 
                 if mode != "nishio":
                     if not values:
+                        empty_cell_literals = tuple(sorted(
+                            (
+                                item for item in result.off
+                                if item[:2] == cell
+                            ),
+                            key=_literal_key,
+                        )) or (literal,)
                         result.set_contradiction(
-                            (literal,), set(features) | {"dynamic"}
+                            empty_cell_literals,
+                            set(features) | {"dynamic"},
                         )
                         break
                     if len(values) == 1:
@@ -1359,7 +1409,18 @@ class DynamicPropagator:
                         next_features = set(features)
                         if initial_count != 2:
                             next_features.add("dynamic")
-                        result.set_contradiction((literal,), next_features)
+                        empty_unit_literals = tuple(sorted(
+                            (
+                                item for item in result.off
+                                if item[2] == value
+                                and item[:2] in UNITS[unit_index]
+                            ),
+                            key=_literal_key,
+                        )) or (literal,)
+                        result.set_contradiction(
+                            empty_unit_literals,
+                            next_features,
+                        )
                         break
                     if len(positions) == 1:
                         target_row, target_column = positions[0]
@@ -1395,7 +1456,7 @@ class DynamicPropagator:
                     parents = tuple(
                         literal for literal in result.literals
                         if _candidate(literal) in support
-                        and literal != source
+                        and literal not in result.sources
                     )
                     # Il pattern deve dipendere da almeno una conseguenza
                     # dell'ipotesi; in caso contrario è solo una tecnica
@@ -1403,7 +1464,7 @@ class DynamicPropagator:
                     if not parents:
                         changed = tuple(
                             literal for literal in result.off
-                            if literal != source
+                            if literal not in result.sources
                         )
                         if not changed:
                             continue
@@ -2273,6 +2334,7 @@ class LogicEngine:
         # chiave distinta e viene calcolato solo quando serve davvero.
         self._propagation_cache = {}
         self._closure_cache = {}
+        self._nested_forcing_engine = None
         self._complete_forcing_tree_search = None
         self._lock = RLock()
 
@@ -3595,9 +3657,18 @@ class LogicEngine:
         return collector.results
 
     def _find_nested_forcing_chain(self, *, max_results):
-        # Il vero nested riutilizzabile verra' introdotto dalla relativa
-        # patch. Non deve mai delegare alla ricerca esaustiva completa.
-        return []
+        # Import tardivo per lasciare al motore Nested l'uso del propagatore
+        # condiviso senza creare un ciclo di import a livello di modulo.
+        if self._nested_forcing_engine is None:
+            from .nested_forcing import NestedForcingEngine
+
+            self._nested_forcing_engine = NestedForcingEngine(
+                self.grid,
+                self.candidates,
+            )
+        return self._nested_forcing_engine.find_deductions(
+            max_results=max_results,
+        )
 
     def _find_complete_forcing_tree(self, *, max_results):
         max_results = _technique_result_limit(

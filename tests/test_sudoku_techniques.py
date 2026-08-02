@@ -610,7 +610,6 @@ class LogicEngineTests(unittest.TestCase):
         dynamic_cases = [
             ("Dynamic Forcing Chain", "dynamic-contradiction", "Dynamic Contradiction Forcing Chain"),
             ("Dynamic Forcing Chain Plus", "dynamic-cell-reduction", "Dynamic Cell Forcing Chain Plus"),
-            ("Nested Forcing Chain", "dynamic-region-reduction", "Nested Region Forcing Chain"),
         ]
         for parent, kind, expected in dynamic_cases:
             with self.subTest(parent=parent, kind=kind):
@@ -622,6 +621,17 @@ class LogicEngineTests(unittest.TestCase):
                     ),
                     expected,
                 )
+
+        self.assertIsNone(
+            techniques._specific_logic_technique(
+                state,
+                "Nested Forcing Chain",
+                {"logic": {
+                    "kind": "dynamic-region-reduction",
+                    "chains": [],
+                }},
+            ),
+        )
 
     def test_forcing_x_chain_rejects_unproven_three_node_near_miss(self):
         state = synthetic_state({

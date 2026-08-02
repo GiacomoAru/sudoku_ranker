@@ -21,7 +21,7 @@ ALSLiteral = tuple[ALSNode, bool]
 ProofLiteral = Literal | GroupLiteral | ALSLiteral
 Candidate = tuple[int, int, int]
 
-PROOF_DAG_SCHEMA_VERSION = "1.3.0"
+PROOF_DAG_SCHEMA_VERSION = "1.4.0"
 MAX_PRESENTATION_CHAINS = 16
 
 NODE_KINDS = frozenset({

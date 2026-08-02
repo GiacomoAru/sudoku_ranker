@@ -21,7 +21,10 @@ Le decisioni architetturali principali sono:
 
 La scala ufficiale SE 1.2.1 costituisce l’ancora numerica: da 1.0 per Last Value a 6.2 per Aligned Pair Exclusion, da 6.5 in poi per cicli e catene, da 8.5 per Dynamic Forcing Chains, da 9.0 per Dynamic Forcing Chains Plus e oltre 9.5 per Nested Forcing Chains. SukakuExplainer ha poi introdotto intervalli per Skyscraper, Two-String Kite, Turbot Crane, generalized wings e livelli Nested più profondi. citeturn13view0turn14view0
 
-Nel solver allegato, la separazione tra tecniche ordinarie e Nested è già presente, ma dipende da nomi e metadata dei runner. Il calcolo della difficoltà usa metriche strutturali e una crescita logaritmica. fileciteturn0file0 L’attuale `Nested Forcing Chain`, tuttavia, chiama `_CompleteNestedSearch`, che esplora ricorsivamente tutte le alternative senza limiti interni di profondità, nodi o rami. Questa procedura deve diventare `Complete Forcing Tree`. fileciteturn0file1 Inoltre, `techniques.py` ricostruisce le metriche dalla sola rappresentazione visualizzata, usa `nesting_depth` invece di `nested_depth` e sostituisce le metriche complete prodotte dal motore. Questo è l’errore prioritario della pipeline. fileciteturn0file2
+Nel solver attuale le tecniche ordinarie, le vere Nested e il Complete Forcing
+Tree sono motori separati. Il `ProofDAG` conserva le sottoprove Nested e le
+metriche strutturali autorevoli; le viste lineari restano soltanto derivate.
+La taratura numerica della difficoltà resta deliberatamente rinviata a P18.
 
 La priorità finale raccomandata è:
 
@@ -35,15 +38,15 @@ La priorità finale raccomandata è:
 | Sesto | Vere Nested Forcing Chains |
 | Ultimo | Complete Forcing Tree |
 
-## Contratto implementativo autorevole P15
+## Contratto implementativo autorevole P16
 
 Da P15 questo documento e' la fonte normativa della struttura del solver.
 `sudoku_app/core/technique_catalog.py` ne e' la proiezione eseguibile e
-versionata (`TAXONOMY_CONTRACT_VERSION = "P15"`, catalogo `2.0.0`). Le mappe
+versionata (`TAXONOMY_CONTRACT_VERSION = "P16"`, catalogo `2.1.0`). Le mappe
 di compatibilita' esportate da `techniques.py` non costituiscono fonti
 alternative.
 
-Il contratto P15 rende autorevoli:
+Il contratto P16 rende autorevoli:
 
 | Asse | Regola |
 |---|---|
@@ -109,9 +112,10 @@ troncamento deve rimanere distinguibile da una ricerca esaustiva. Le versioni
 attuali sono:
 
 ```text
-TECHNIQUE_CATALOG_VERSION = 2.0.0
-PROOF_SCHEMA_VERSION      = 3.5.0
+TECHNIQUE_CATALOG_VERSION = 2.1.0
+PROOF_SCHEMA_VERSION      = 3.6.0
 PROOF_METRICS_VERSION     = 3.2.0
+PROOF_DAG_SCHEMA_VERSION  = 1.4.0
 ```
 
 Alle metriche Group/ALS, P15 aggiunge `fork_node_count`, `merge_node_count`,
@@ -120,7 +124,7 @@ limitato per cifra; Kraken limita pattern, tentativi AIC, lunghezza dei
 percorsi e numero di risultati. Una ricerca Templates troncata non produce
 conclusioni da union/intersection parziali.
 
-La proiezione eseguibile P15 usa esattamente queste identità:
+La proiezione eseguibile P16 usa esattamente queste identità:
 
 | ID | Famiglia | Detector | Motore semantico / esecutivo |
 |---|---|---|---|
@@ -131,12 +135,57 @@ La proiezione eseguibile P15 usa esattamente queste identità:
 | `forcing.net.double` | `forcing_nets` | `forcing_net` | `forcing` / `logic` |
 | `forcing.net.cell` | `forcing_nets` | `forcing_net` | `forcing` / `logic` |
 | `forcing.net.region` | `forcing_nets` | `forcing_net` | `forcing` / `logic` |
+| `nested.contradiction` | `nested_forcing` | `nested_forcing_chain` | `nested` / `nested` |
+| `nested.double` | `nested_forcing` | `nested_forcing_chain` | `nested` / `nested` |
+| `nested.cell` | `nested_forcing` | `nested_forcing_chain` | `nested` / `nested` |
+| `nested.region` | `nested_forcing` | `nested_forcing_chain` | `nested` / `nested` |
 
 I quattro nomi Forcing Net richiedono una prova candidate-only, non Nested e
 con forma `net`. I runner Dynamic e Plus possono costruire lo stesso DAG di
 propagazione, ma non possono pubblicarlo come chain quando contiene merge o
 fork riconvergenti. Le famiglie ALS e Grouped mantengono invece la precedenza
 strutturale fuori dal forcing context.
+
+### Contratto delle vere Nested P16
+
+Una Nested usa almeno una sottocatena per dimostrare una singola inferenza
+interna consumata dalla prova contenitore. Il nodo proprietario ha tipo
+`nested-subproof`, payload `node_type = "nested-inference"` e la sua
+conclusione coincide con una conclusione della sottoprova. Sono obbligatorie:
+
+```text
+nested_depth >= 1
+nested_subproof_count >= 1
+complete = false
+exhaustive = false
+```
+
+In assenza di questi requisiti la prova resta Dynamic, Plus, Multiple Forcing
+o Forcing Net. I quattro casi specifici, mantenuti separati, sono
+`nested.contradiction`, `nested.double`, `nested.cell` e `nested.region`.
+
+Il motore non risolve l'intero puzzle, non esplora arbitrariamente tutte le
+celle residue e non usa l'insoddisfacibilità di un ramo completo come
+scorciatoia. `Complete Forcing Tree` resta un motore autonomo di fallback 2.
+Il profilo interno P16 è `p16-dynamic-subchain-v1`; P17 renderà esplicite le
+regole avanzate ammesse nei diversi profili.
+
+```python
+MAX_NESTED_DEPTH = 2
+MAX_NESTED_PROOF_NODES = 512
+MAX_NESTED_BRANCHES = 64
+MAX_NESTED_SUBPROOFS = 32
+MAX_NESTED_RESULTS = 2
+```
+
+La chiave minima della memoizzazione è
+`(state_fingerprint, assumptions, target, remaining_depth, rule_profile_id)`;
+un cycle guard impedisce sottoprove ricorsive autoreferenziali.
+L'implementazione limita inoltre a 512 i tentativi di sottoprova: questo
+guardrail di ricerca è distinto dai 64 rami logici ammessi nei certificati.
+Gli split di profondità 2 sono predecessori del target nella sua cella, nelle
+sue case o nel cono statico X/Y inverso, limitato a quattro archi: mai una
+scansione arbitraria delle celle residue.
 
 ## Fondamenti formali e architettura del motore
 
@@ -1017,7 +1066,7 @@ Esempio serializzato:
 
 ```json
 {
-  "catalog_version": "2.0.0",
+  "catalog_version": "2.1.0",
   "id": "sdp.skyscraper",
   "canonical_name": "Skyscraper",
   "display_name_it": "Skyscraper",
@@ -1089,9 +1138,10 @@ Le validazioni obbligatorie sono:
 Le versioni da salvare in ogni analisi sono:
 
 ```python
-TECHNIQUE_CATALOG_VERSION = "2.0.0"
-PROOF_SCHEMA_VERSION = "3.5.0"
+TECHNIQUE_CATALOG_VERSION = "2.1.0"
+PROOF_SCHEMA_VERSION = "3.6.0"
 PROOF_METRICS_VERSION = "3.2.0"
+PROOF_DAG_SCHEMA_VERSION = "1.4.0"
 DIFFICULTY_MODEL_VERSION = "3.0.0"
 ```
 
@@ -1383,7 +1433,7 @@ senza introdurre motori paralleli.
 | P14 | Introdurre ALS engine | Enumerazione ALS, RCC graph, ALS-XZ, ALS-XY-Wing, ALS Chain e Death Blossom | Validazione `N+1`, overlap, RCC e budget |
 | P14.1 | Unificare tassonomia e codice | ID moderni, `inference_engine`, `ALSNode`, vera ALS-AIC, precedenza specifica, metriche Group/ALS | Round trip, near miss, classificazione e persistenza |
 | P15 | Classificare ProofDAG non lineari | Forcing Net, Templates e Kraken Fish sopra i motori esistenti | Chain versus net; nessuna sovrascrittura di ALS/Grouped |
-| P16 | Implementare vere Nested | Nested inference come sottoprova, memoizzazione, cycle guard, budget depth 1-2 | `nested_subproof_count >= 1`; nessuna ricerca fino alla soluzione completa |
+| P16 (completata) | Implementare vere Nested | Nested inference come sottoprova, memoizzazione, cycle guard, budget depth 1-2 | `nested_subproof_count >= 1`; nessuna ricerca fino alla soluzione completa |
 | P17 | Esplicitare profili Dynamic/Plus/Nested | Regole interne configurabili per local, fish, grouped e ALS | Ogni inferenza avanzata conserva detector e subproof |
 | P18 | Calibrare e pubblicare | Ricalibrare rating e metriche, migrare archivi, congelare v1 | Holdout corpus, benchmark, compatibility report, schema migration test |
 
@@ -1437,13 +1487,15 @@ nested_depth = metrics["nested_depth"]
 nested_subproof_count = metrics["nested_subproof_count"]
 ```
 
-P15 ha completato l'unificazione strutturale: catalogo e registro usano ID
+P16 ha completato l'unificazione strutturale e il primo motore Nested reale:
+catalogo e registro usano ID
 stabili, ogni mossa espone il motore semantico separatamente dal livello
 esecutivo, GroupNode e ALSNode sopravvivono al round trip del ProofDAG e le
 metriche autorevoli non vengono ricostruite da una vista parziale. La forma
 chain/net deriva dal DAG; Templates opera per cifra; Kraken conserva fish e
-rami AIC verificabili.
+rami AIC verificabili. Le Nested conservano la sottoprova che dimostra il nodo
+interno e non invocano il Complete Forcing Tree.
 
-La roadmap complessiva sarà completa quando P16-P18 avranno aggiunto le vere
-Nested e la calibrazione senza violare questo contratto. Il Complete
+La roadmap complessiva sarà completa quando P17-P18 avranno aggiunto i profili
+espliciti e la calibrazione senza violare questo contratto. Il Complete
 Forcing Tree resta l'ultimo fallback dopo i livelli logici precedenti.

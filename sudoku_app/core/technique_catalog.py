@@ -1,7 +1,7 @@
 """Proiezione eseguibile della tassonomia autorevole del progetto.
 
 La fonte normativa e' ``TASSIONOMIA.md``; questo modulo ne applica il
-contratto P15 a ID, famiglie, motori e profili metrici. Le mappe generate in
+contratto P16 a ID, famiglie, motori e profili metrici. Le mappe generate in
 fondo al file sono soltanto viste di compatibilita'.
 
 Il modulo non importa il solver né i detector: in questo modo difficoltà,
@@ -21,8 +21,8 @@ import math
 
 
 TAXONOMY_SOURCE = "TASSIONOMIA.md"
-TAXONOMY_CONTRACT_VERSION = "P15"
-TECHNIQUE_CATALOG_VERSION = "2.0.0"
+TAXONOMY_CONTRACT_VERSION = "P16"
+TECHNIQUE_CATALOG_VERSION = "2.1.0"
 
 LEGACY_TECHNIQUE_ID_ALIASES = {
     "direct.hidden.2": "direct.hidden_pair",

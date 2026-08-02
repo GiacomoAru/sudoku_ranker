@@ -173,6 +173,26 @@ soluzioni complete del puzzle. Kraken Fish Type 1/2 riusa il motore Fish e il
 grafo AIC: conserva il fish incompleto o finned e un percorso verificabile da
 ogni fin o possibilità rilevante alla conclusione comune.
 
+## Vere Nested Forcing Chains
+
+P16 implementa `Nested Contradiction`, `Nested Double`, `Nested Cell` e
+`Nested Region Forcing Chain` come casi specifici distinti. Una mossa riceve
+un nome Nested soltanto quando il suo `ProofDAG` contiene almeno una vera
+sottoprova collegata al nodo interno che usa l'inferenza dimostrata:
+`nested_depth >= 1` e `nested_subproof_count >= 1`.
+
+Il motore dimostra una singola inferenza nel contesto della catena esterna;
+non risolve il puzzle, non enumera arbitrariamente tutte le celle residue e
+non delega al Complete Forcing Tree. Profondità, nodi, rami, sottoprove e
+risultati sono limitati rispettivamente a `2`, `512`, `64`, `32` e `2`, con
+memoizzazione dipendente da stato, ipotesi, target, profondità residua e
+profilo di regole, oltre a un cycle guard.
+I tentativi di sottoprova sono inoltre fermati a `512`: è un limite di
+ricerca interno distinto dai `64` rami che possono entrare nei certificati.
+Alla profondità 2 gli split intermedi sono soltanto predecessori logici del
+target nel suo cono X/Y locale, risalito per non più di quattro archi; il
+motore non prova genericamente tutte le celle non risolte.
+
 `TASSIONOMIA.md` è la fonte normativa di ID, famiglie e precedenze. Il
 catalogo Python ne è la proiezione eseguibile: `inference_engine` descrive il
 motore logico (`fish`, `group`, `als`, ecc.), mentre `engine_type` descrive il

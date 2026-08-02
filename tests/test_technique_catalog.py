@@ -13,7 +13,7 @@ from sudoku_app.core.data_structure import SudokuState
 class TechniqueCatalogStructureTests(unittest.TestCase):
     def test_catalog_declares_the_authoritative_taxonomy_contract(self):
         self.assertEqual(catalog.TAXONOMY_SOURCE, "TASSIONOMIA.md")
-        self.assertEqual(catalog.TAXONOMY_CONTRACT_VERSION, "P15")
+        self.assertEqual(catalog.TAXONOMY_CONTRACT_VERSION, "P16")
 
     def test_catalog_is_internally_valid(self):
         self.assertEqual(
