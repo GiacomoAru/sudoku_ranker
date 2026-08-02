@@ -60,15 +60,7 @@ soglie resta provvisoria fino alla patch di calibrazione P18. P14.1 non usa
 questi numeri per ridefinire la tassonomia e i test strutturali non congelano
 come ufficiali i vecchi valori storici.
 
-Le migrazioni di identita' applicate sono:
 
-```text
-direct.hidden.2                       -> direct.hidden_pair
-direct.hidden.3                       -> direct.hidden_triple
-intersection.sue_de_coq               -> misc.sue_de_coq.basic
-intersection.sue_de_coq.extended      -> misc.sue_de_coq.extended
-exclusion.aligned_triplet             -> exclusion.aligned_triple
-Y-Wing                                -> XY-Wing (alias conservato)
 ```
 
 ### Nodi logici e precedenza di classificazione

@@ -280,7 +280,7 @@ costo
 
 ---
 
-## P16.5. Revisione del Complete Forcing Tree
+## P17.1 Revisione del Complete Forcing Tree
 
 ### Checkpoint obbligatorio
 
@@ -303,7 +303,7 @@ Il motore non deve essere un “andare a caso”: deve preferire branch informat
 
 ---
 
-## P17.5. Revisione finale di spiegazioni e visualizzazioni
+## P17.2 Revisione finale di spiegazioni e visualizzazioni
 
 ### Collocazione
 
@@ -578,9 +578,9 @@ Le fondamenta P01-P13 sono già acquisite.
 P14 -> P15, P16 e profilo Nested
 P15 -> P16
 P16 -> P17
-P17 -> checkpoint P16.5
-P16.5 -> P17.5
-P17.5 -> P18
+P17 -> checkpoint P17.1
+P17.1 -> P17.2
+P17.2 -> P18
 P18 -> P19
 P19 -> P20
 ```
@@ -593,8 +593,8 @@ P15 Forcing Net, Templates e Kraken
 P16 Vere Nested
 P17 Profili Dynamic, Plus e Nested
 CHECKPOINT obbligatorio prima di P16.5
-P16.5 Revisione Complete Forcing Tree
-P17.5 Revisione finale di spiegazioni e visualizzazioni
+P17.1 Revisione Complete Forcing Tree
+P17.2 Revisione finale di spiegazioni e visualizzazioni
 P18 Difficoltà definitiva
 P19 Consolidamento archivi
 P20 Release 1.0
