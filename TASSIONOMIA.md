@@ -35,33 +35,30 @@ La priorità finale raccomandata è:
 | Sesto | Vere Nested Forcing Chains |
 | Ultimo | Complete Forcing Tree |
 
-## Contratto implementativo autorevole P14.1
+## Contratto implementativo autorevole P15
 
-Da P14.1 questo documento e' la fonte normativa della struttura del solver.
+Da P15 questo documento e' la fonte normativa della struttura del solver.
 `sudoku_app/core/technique_catalog.py` ne e' la proiezione eseguibile e
-versionata (`TAXONOMY_CONTRACT_VERSION = "P14.1"`, catalogo `1.9.0`). Le mappe
+versionata (`TAXONOMY_CONTRACT_VERSION = "P15"`, catalogo `2.0.0`). Le mappe
 di compatibilita' esportate da `techniques.py` non costituiscono fonti
 alternative.
 
-Il contratto P14.1 rende autorevoli ora:
+Il contratto P15 rende autorevoli:
 
 | Asse | Regola |
 |---|---|
 | Identita' | ID stabile, nome canonico, alias, parent e parent SE |
 | Famiglia | `family_id` e `strategy_id` provengono dal catalogo |
-| Motore semantico | `inference_engine`: `local`, `fish`, `coloring`, `chain`, `group`, `als`, `forcing`, `dynamic`, `nested`, `complete_tree` |
+| Motore semantico | `inference_engine`: `local`, `fish`, `coloring`, `chain`, `group`, `als`, `forcing`, `dynamic`, `nested`, `complete_tree`, `template` |
 | Livello esecutivo | `engine_type`: `local`, `logic`, `nested`, `complete_tree`; resta separato dal motore semantico |
 | Prova | `ProofDAG` e nodi tipizzati sono autorevoli; viste lineari e presentazione sono derivate |
-| Metriche strutturali | Profili separati per candidate, GroupNode e ALSNode |
+| Metriche strutturali | Profili separati per candidate, GroupNode, ALSNode, net, template e Kraken |
 | Precedenza | La famiglia strutturale specifica prevale sulla forma generica chain/net fuori dal forcing context |
 
 La taratura numerica di `base_difficulty`, `rating_kind`, carico risolutivo e
-soglie resta provvisoria fino alla patch di calibrazione P18. P14.1 non usa
+soglie resta provvisoria fino alla patch di calibrazione P18. P15 non usa
 questi numeri per ridefinire la tassonomia e i test strutturali non congelano
 come ufficiali i vecchi valori storici.
-
-
-```
 
 ### Nodi logici e precedenza di classificazione
 
@@ -101,10 +98,10 @@ nel forcing context: la dipendenza del DAG determina chain oppure net
 
 Death Blossom resta una tecnica ALS anche quando il suo DAG contiene una
 riconvergenza; la stessa forma viene chiamata net soltanto quando e' usata
-come prova di forcing. P15 estendera' la classificazione delle net senza
-sovrascrivere questi casi specifici.
+come prova di forcing. P15 classifica la dipendenza senza sovrascrivere questi
+casi specifici.
 
-### Budget ALS-AIC e versioni della prova
+### Budget dei motori e versioni della prova
 
 La ricerca ALS-AIC ordinaria e' esplicitamente limitata a 64 ALS multicella,
 256 tentativi di endpoint e 2048 stati di percorso per tentativo. Il flag di
@@ -112,14 +109,34 @@ troncamento deve rimanere distinguibile da una ricerca esaustiva. Le versioni
 attuali sono:
 
 ```text
-TECHNIQUE_CATALOG_VERSION = 1.9.0
-PROOF_SCHEMA_VERSION      = 3.4.0
-PROOF_METRICS_VERSION     = 3.1.0
+TECHNIQUE_CATALOG_VERSION = 2.0.0
+PROOF_SCHEMA_VERSION      = 3.5.0
+PROOF_METRICS_VERSION     = 3.2.0
 ```
 
-Le metriche P14.1 aggiungono `group_node_count`, `max_group_size`,
-`als_node_count`, `als_cell_count` e `rcc_count` ai conteggi generali del
-ProofDAG.
+Alle metriche Group/ALS, P15 aggiunge `fork_node_count`, `merge_node_count`,
+`max_parent_count`, `template_count` e `kraken_branch_count`. Templates è
+limitato per cifra; Kraken limita pattern, tentativi AIC, lunghezza dei
+percorsi e numero di risultati. Una ricerca Templates troncata non produce
+conclusioni da union/intersection parziali.
+
+La proiezione eseguibile P15 usa esattamente queste identità:
+
+| ID | Famiglia | Detector | Motore semantico / esecutivo |
+|---|---|---|---|
+| `template.single_digit` | `templates` | `templates` | `template` / `local` |
+| `kraken.fish.type1` | `fish` | `kraken` | `fish` / `logic` |
+| `kraken.fish.type2` | `fish` | `kraken` | `fish` / `logic` |
+| `forcing.net.contradiction` | `forcing_nets` | `forcing_net` | `forcing` / `logic` |
+| `forcing.net.double` | `forcing_nets` | `forcing_net` | `forcing` / `logic` |
+| `forcing.net.cell` | `forcing_nets` | `forcing_net` | `forcing` / `logic` |
+| `forcing.net.region` | `forcing_nets` | `forcing_net` | `forcing` / `logic` |
+
+I quattro nomi Forcing Net richiedono una prova candidate-only, non Nested e
+con forma `net`. I runner Dynamic e Plus possono costruire lo stesso DAG di
+propagazione, ma non possono pubblicarlo come chain quando contiene merge o
+fork riconvergenti. Le famiglie ALS e Grouped mantengono invece la precedenza
+strutturale fuori dal forcing context.
 
 ## Fondamenti formali e architettura del motore
 
@@ -1000,7 +1017,7 @@ Esempio serializzato:
 
 ```json
 {
-  "catalog_version": "1.9.0",
+  "catalog_version": "2.0.0",
   "id": "sdp.skyscraper",
   "canonical_name": "Skyscraper",
   "display_name_it": "Skyscraper",
@@ -1072,9 +1089,9 @@ Le validazioni obbligatorie sono:
 Le versioni da salvare in ogni analisi sono:
 
 ```python
-TECHNIQUE_CATALOG_VERSION = "1.9.0"
-PROOF_SCHEMA_VERSION = "3.4.0"
-PROOF_METRICS_VERSION = "3.1.0"
+TECHNIQUE_CATALOG_VERSION = "2.0.0"
+PROOF_SCHEMA_VERSION = "3.5.0"
+PROOF_METRICS_VERSION = "3.2.0"
 DIFFICULTY_MODEL_VERSION = "3.0.0"
 ```
 
@@ -1393,7 +1410,7 @@ def normalize_proof_metrics(logic: dict) -> dict:
         else:
             metrics[key] = value
 
-    metrics["metrics_version"] = "3.1.0"
+    metrics["metrics_version"] = "3.2.0"
     return metrics
 ```
 
@@ -1420,11 +1437,13 @@ nested_depth = metrics["nested_depth"]
 nested_subproof_count = metrics["nested_subproof_count"]
 ```
 
-P14.1 ha completato l'unificazione strutturale: catalogo e registro usano ID
+P15 ha completato l'unificazione strutturale: catalogo e registro usano ID
 stabili, ogni mossa espone il motore semantico separatamente dal livello
 esecutivo, GroupNode e ALSNode sopravvivono al round trip del ProofDAG e le
-metriche autorevoli non vengono ricostruite da una vista parziale.
+metriche autorevoli non vengono ricostruite da una vista parziale. La forma
+chain/net deriva dal DAG; Templates opera per cifra; Kraken conserva fish e
+rami AIC verificabili.
 
-La roadmap complessiva sarà completa quando P15-P18 avranno aggiunto le net,
-le vere Nested e la calibrazione senza violare questo contratto. Il Complete
+La roadmap complessiva sarà completa quando P16-P18 avranno aggiunto le vere
+Nested e la calibrazione senza violare questo contratto. Il Complete
 Forcing Tree resta l'ultimo fallback dopo i livelli logici precedenti.

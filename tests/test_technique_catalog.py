@@ -12,8 +12,8 @@ from sudoku_app.core.data_structure import SudokuState
 
 class TechniqueCatalogStructureTests(unittest.TestCase):
     def test_catalog_declares_the_authoritative_taxonomy_contract(self):
-        self.assertEqual(catalog.TAXONOMY_SOURCE, "TASSIONOMIA.txt")
-        self.assertEqual(catalog.TAXONOMY_CONTRACT_VERSION, "P14.1")
+        self.assertEqual(catalog.TAXONOMY_SOURCE, "TASSIONOMIA.md")
+        self.assertEqual(catalog.TAXONOMY_CONTRACT_VERSION, "P15")
 
     def test_catalog_is_internally_valid(self):
         self.assertEqual(
@@ -50,6 +50,9 @@ class TechniqueCatalogStructureTests(unittest.TestCase):
             "Forcing Chain": "se.forcing_chain",
             "Nested Forcing Chain": "nested.forcing_chain",
             "Complete Forcing Tree": "forcing.complete_tree",
+            "Templates": "template.single_digit",
+            "Kraken Fish Type 1": "kraken.fish.type1",
+            "Contradiction Forcing Net": "forcing.net.contradiction",
         }
         self.assertEqual(
             {
@@ -141,6 +144,9 @@ class TechniqueCatalogStructureTests(unittest.TestCase):
             "chain.grouped.aic": ("group", "logic"),
             "chain.als_aic": ("als", "local"),
             "forcing.dynamic": ("dynamic", "logic"),
+            "template.single_digit": ("template", "local"),
+            "kraken.fish.type1": ("fish", "logic"),
+            "forcing.net.cell": ("forcing", "logic"),
             "forcing.complete_tree": ("complete_tree", "complete_tree"),
         }
         for technique_id, engines in expected.items():

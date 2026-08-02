@@ -91,6 +91,7 @@ LOGIC_TECHNIQUE_BATCHES = {
     "dynamic": (
         "Dynamic Forcing Chain",
         "Dynamic Forcing Chain Plus",
+        "Forcing Net",
     ),
     "nested": (
         "Nested Forcing Chain",
@@ -338,6 +339,121 @@ def _deduction(
             eliminations=eliminations,
         ),
     }
+
+
+def _propagation_proof_dag(branches, final_literal, *, action):
+    """Conserva tutti i parent reali del propagatore, separati per ramo."""
+    nodes = {}
+    next_id = 0
+    terminals = []
+
+    def node_kind(reason, parents):
+        if not parents or reason == "assumption":
+            return "assumption"
+        if reason in {"x", "y", "peer"}:
+            return "static-implication"
+        if reason in {"cell-single", "unit-single"}:
+            return "dynamic-single"
+        return "advanced-rule"
+
+    for branch_index, (result, raw_targets, contradiction) in enumerate(
+        branches
+    ):
+        targets = tuple(raw_targets or (result.source,))
+        ordered = result.proof_literals(targets)
+        ids = {}
+        for literal in ordered:
+            parent_ids = tuple(
+                ids[parent]
+                for parent in result.parents.get(literal, ())
+                if parent in ids
+            )
+            reason = result.reasons.get(literal, "assumption")
+            depth = (
+                0
+                if not parent_ids
+                else 1 + max(nodes[parent].depth for parent in parent_ids)
+            )
+            node_id = next_id
+            next_id += 1
+            nodes[node_id] = proof_model.ProofNode(
+                id=node_id,
+                kind=node_kind(reason, parent_ids),
+                conclusion=literal,
+                parents=parent_ids,
+                reason=reason,
+                depth=depth,
+                payload={
+                    "branch_index": branch_index,
+                    "presentation": True,
+                },
+            )
+            ids[literal] = node_id
+
+        target_ids = tuple(
+            ids[target] for target in targets if target in ids
+        )
+        if not target_ids:
+            continue
+        if contradiction:
+            terminal_id = next_id
+            next_id += 1
+            nodes[terminal_id] = proof_model.ProofNode(
+                id=terminal_id,
+                kind="contradiction",
+                conclusion=None,
+                parents=target_ids,
+                reason="branch-contradiction",
+                depth=1 + max(nodes[parent].depth for parent in target_ids),
+                payload={
+                    "branch_index": branch_index,
+                    "chain_terminal": True,
+                    "presentation": False,
+                },
+            )
+        else:
+            terminal_id = target_ids[-1]
+            nodes[terminal_id].payload["chain_terminal"] = True
+        terminals.append(terminal_id)
+
+    if not terminals:
+        raise ValueError("La prova di propagazione non contiene terminali.")
+    conclusion_id = next_id
+    nodes[conclusion_id] = proof_model.ProofNode(
+        id=conclusion_id,
+        kind="common-conclusion",
+        conclusion=final_literal,
+        parents=tuple(terminals),
+        reason=action,
+        depth=1 + max(nodes[parent].depth for parent in terminals),
+        payload={"action": action, "presentation": False},
+    )
+    return proof_model.ProofDAG(
+        nodes=nodes,
+        roots=tuple(sorted(
+            node.id for node in nodes.values() if not node.parents
+        )),
+        conclusions=(conclusion_id,),
+    )
+
+
+def _attach_propagation_proof(
+    deduction,
+    branches,
+    final_literal,
+    *,
+    kind,
+    action,
+):
+    dag = _propagation_proof_dag(branches, final_literal, action=action)
+    deduction = dict(deduction)
+    deduction["primary"] = dag.primary_cells()
+    deduction["logic"] = proof_model.logic_payload(
+        dag,
+        kind=kind,
+        reasons=(node.reason for node in dag.nodes.values()),
+    )
+    return deduction
 
 
 @dataclass(frozen=True)
@@ -3050,8 +3166,16 @@ class LogicEngine:
         advanced_level,
         max_results,
         collector=None,
+        accept=None,
     ):
         collector = collector or _DeductionCollector(max_results)
+
+        def emit(deduction):
+            return (
+                False
+                if accept is not None and not accept(deduction)
+                else collector.add(deduction)
+            )
 
         for candidate in self.graph.all_candidates:
             if collector.full:
@@ -3078,7 +3202,7 @@ class LogicEngine:
                     required_feature,
                 )
             ):
-                collector.add(_deduction(
+                deduction = _deduction(
                     description=(
                         f"L'ipotesi R{candidate[0]+1}C{candidate[1]+1}="
                         f"{candidate[2]} conduce a una contraddizione "
@@ -3089,7 +3213,19 @@ class LogicEngine:
                     chains=(on_result.contradiction_path(),),
                     reasons=on_result.contradiction_features,
                     kind="dynamic-contradiction",
-                ))
+                )
+                deduction = _attach_propagation_proof(
+                    deduction,
+                    ((
+                        on_result,
+                        on_result.contradiction_literals,
+                        True,
+                    ),),
+                    (*candidate, False),
+                    kind="dynamic-contradiction",
+                    action="elimination",
+                )
+                emit(deduction)
                 continue
 
             if (
@@ -3100,7 +3236,7 @@ class LogicEngine:
                     required_feature,
                 )
             ):
-                collector.add(_deduction(
+                deduction = _deduction(
                     description=(
                         f"Escludere {candidate[2]} da "
                         f"R{candidate[0]+1}C{candidate[1]+1} conduce "
@@ -3111,7 +3247,19 @@ class LogicEngine:
                     chains=(off_result.contradiction_path(),),
                     reasons=off_result.contradiction_features,
                     kind="dynamic-contradiction",
-                ))
+                )
+                deduction = _attach_propagation_proof(
+                    deduction,
+                    ((
+                        off_result,
+                        off_result.contradiction_literals,
+                        True,
+                    ),),
+                    (*candidate, True),
+                    kind="dynamic-contradiction",
+                    action="placement",
+                )
+                emit(deduction)
                 continue
 
             if on_result.contradiction or off_result.contradiction:
@@ -3143,7 +3291,7 @@ class LogicEngine:
                     placements, eliminations = (), (target,)
                     conclusion = "deve essere falso"
 
-                if collector.add(_deduction(
+                deduction = _deduction(
                     description=(
                         f"Sia assumendo sia escludendo {candidate[2]} in "
                         f"R{candidate[0]+1}C{candidate[1]+1}, il candidato "
@@ -3159,7 +3307,18 @@ class LogicEngine:
                     ),
                     reasons=combined_features,
                     kind="dynamic-reduction",
-                )):
+                )
+                deduction = _attach_propagation_proof(
+                    deduction,
+                    (
+                        (on_result, (literal,), False),
+                        (off_result, (literal,), False),
+                    ),
+                    literal,
+                    kind="dynamic-reduction",
+                    action=("placement" if literal[3] else "elimination"),
+                )
+                if emit(deduction):
                     break
 
         return collector.results
@@ -3172,9 +3331,17 @@ class LogicEngine:
         advanced_level,
         max_results,
         collector=None,
+        accept=None,
     ):
         """Riduzioni dinamiche comuni a tutte le scelte di cella o casa."""
         collector = collector or _DeductionCollector(max_results)
+
+        def emit(deduction):
+            return (
+                False
+                if accept is not None and not accept(deduction)
+                else collector.add(deduction)
+            )
         groups = chain(
             (
                 ("cell", label, candidates)
@@ -3236,7 +3403,7 @@ class LogicEngine:
                     placements, eliminations = (), (target,)
                     conclusion = "deve essere falso"
 
-                if collector.add(_deduction(
+                deduction = _deduction(
                     description=(
                         f"Ogni alternativa dinamica di {label} implica "
                         f"che {target[2]} in "
@@ -3251,7 +3418,18 @@ class LogicEngine:
                     ),
                     reasons=features,
                     kind=f"dynamic-{source_kind}-reduction",
-                )):
+                )
+                deduction = _attach_propagation_proof(
+                    deduction,
+                    tuple(
+                        (outcome, (literal,), False)
+                        for outcome in outcomes
+                    ),
+                    literal,
+                    kind=f"dynamic-{source_kind}-reduction",
+                    action=("placement" if literal[3] else "elimination"),
+                )
+                if emit(deduction):
                     break
 
         return collector.results
@@ -3344,6 +3522,77 @@ class LogicEngine:
             advanced_level=1,
             max_results=max_results,
         )
+
+    def _find_forcing_net(self, *, max_results):
+        """DAG candidate-only realmente non lineari, senza sottoprove."""
+        collector = _DeductionCollector(max_results)
+
+        def is_candidate_net(deduction):
+            dag = proof_model.proof_dag(
+                deduction.get("logic", {}).get("proof_dag")
+            )
+            return (
+                dag is not None
+                and proof_model.proof_structural_family(dag) == "candidate"
+                and proof_model.dependency_shape(dag) == "net"
+                and not dag.nested_proofs
+            )
+
+        # Una net prende il nome dalla forma reale del DAG, non dal profilo
+        # di propagazione che l'ha trovata. Raccogliamo quindi sia i rami
+        # Dynamic sia i rami Plus; i rispettivi runner chain li rifiutano
+        # quando la prova non e' lineare.
+        for required_feature, advanced_level in (
+            ("dynamic", 0),
+            ("advanced", 1),
+        ):
+            if collector.full:
+                break
+            self._binary_dynamic(
+                "Forcing Net",
+                required_feature=required_feature,
+                advanced_level=advanced_level,
+                max_results=max_results,
+                collector=collector,
+                accept=is_candidate_net,
+            )
+            if collector.full:
+                break
+            self._multiple_dynamic(
+                "Forcing Net",
+                required_feature=required_feature,
+                advanced_level=advanced_level,
+                max_results=max_results,
+                collector=collector,
+                accept=is_candidate_net,
+            )
+
+        for technique, groups, kind in (
+            (
+                "Cell Forcing Net",
+                self._cell_source_groups(),
+                "forcing-net-cell",
+            ),
+            (
+                "Region Forcing Net",
+                self._region_source_groups(),
+                "forcing-net-region",
+            ),
+        ):
+            if collector.full:
+                break
+            for deduction in self._multiple_deductions(
+                technique,
+                groups,
+                kind,
+                max_results=max_results,
+            ):
+                if not is_candidate_net(deduction):
+                    continue
+                if collector.add(deduction):
+                    break
+
+        return collector.results
 
     def _find_nested_forcing_chain(self, *, max_results):
         # Il vero nested riutilizzabile verra' introdotto dalla relativa

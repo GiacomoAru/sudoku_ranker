@@ -373,6 +373,7 @@ def find_fish(
     max_endo_fins: int = DEFAULT_MAX_ENDO_FINS,
     max_results: int = DEFAULT_MAX_RAW_RESULTS,
     target_mask: int | None = None,
+    require_direct_elimination: bool = True,
 ) -> Iterator[FishDeduction]:
     """Trova fish parametrici per una cifra e una dimensione.
 
@@ -480,7 +481,7 @@ def find_fish(
             if not potential_targets:
                 continue
             visible_targets = potential_targets & _common_peer_mask(all_fins_mask)
-            if not visible_targets:
+            if require_direct_elimination and not visible_targets:
                 continue
 
             actual_cannibal = cover_overlap & visible_targets

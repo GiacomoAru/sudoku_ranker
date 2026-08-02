@@ -21,7 +21,7 @@ ALSLiteral = tuple[ALSNode, bool]
 ProofLiteral = Literal | GroupLiteral | ALSLiteral
 Candidate = tuple[int, int, int]
 
-PROOF_DAG_SCHEMA_VERSION = "1.2.0"
+PROOF_DAG_SCHEMA_VERSION = "1.3.0"
 MAX_PRESENTATION_CHAINS = 16
 
 NODE_KINDS = frozenset({
@@ -591,6 +591,32 @@ class ProofDAG:
             node.kind == "contradiction" for node in self.nodes.values()
         )
         nested_metrics = [proof.metrics() for proof in self.nested_proofs.values()]
+        children = self._children()
+        fork_node_count = sum(
+            len(node_children) > 1
+            for node_children in children.values()
+        )
+        merge_node_count = sum(
+            len(node.parents) > 1 for node in self.nodes.values()
+        )
+        max_parent_count = max(
+            (len(node.parents) for node in self.nodes.values()),
+            default=0,
+        )
+        template_count = max(
+            (
+                int(node.payload.get("template_count", 0))
+                for node in self.nodes.values()
+            ),
+            default=0,
+        )
+        kraken_branch_count = max(
+            (
+                int(node.payload.get("kraken_branch_count", 0))
+                for node in self.nodes.values()
+            ),
+            default=0,
+        )
         group_nodes = {
             node.conclusion[0]
             for node in self.nodes.values()
@@ -693,6 +719,29 @@ class ProofDAG:
             ),
             "rcc_count": local_rcc_count + sum(
                 metrics.get("rcc_count", 0)
+                for metrics in nested_metrics
+            ),
+            "fork_node_count": fork_node_count + sum(
+                metrics.get("fork_node_count", 0)
+                for metrics in nested_metrics
+            ),
+            "merge_node_count": merge_node_count + sum(
+                metrics.get("merge_node_count", 0)
+                for metrics in nested_metrics
+            ),
+            "max_parent_count": max(
+                [max_parent_count]
+                + [
+                    metrics.get("max_parent_count", 0)
+                    for metrics in nested_metrics
+                ]
+            ),
+            "template_count": template_count + sum(
+                metrics.get("template_count", 0)
+                for metrics in nested_metrics
+            ),
+            "kraken_branch_count": kraken_branch_count + sum(
+                metrics.get("kraken_branch_count", 0)
                 for metrics in nested_metrics
             ),
         }
@@ -1096,12 +1145,74 @@ def dependency_shape(value) -> str:
     return (
         "net"
         if any(len(node.parents) > 1 for node in dag.nodes.values())
+        or proof_has_fork_and_merge(dag)
         else "chain"
     )
 
 
+def proof_has_fork_and_merge(value) -> bool:
+    """Rileva due rami di uno stesso fork che raggiungono un discendente."""
+    dag = proof_dag(value)
+    if dag is None:
+        return False
+    children = dag._children()
+
+    def descendants(start):
+        found = set()
+        stack = list(children.get(start, ()))
+        while stack:
+            node_id = stack.pop()
+            if node_id in found:
+                continue
+            found.add(node_id)
+            stack.extend(children.get(node_id, ()))
+        return found
+
+    for branch_ids in children.values():
+        if len(branch_ids) < 2:
+            continue
+        branch_descendants = [
+            {branch_id, *descendants(branch_id)}
+            for branch_id in branch_ids
+        ]
+        for index, left in enumerate(branch_descendants):
+            if any(left & right for right in branch_descendants[index + 1:]):
+                return True
+    return False
+
+
+def logic_payload(dag, *, kind: str, reasons=(), extra=None) -> dict:
+    """Serializza una prova formale senza ricostruirla da viste lineari."""
+    from . import proof_schema
+
+    dag = proof_dag(dag)
+    if dag is None:
+        raise ValueError("logic_payload richiede un ProofDAG.")
+    assumptions = [
+        literal_record(node.conclusion)
+        for node in sorted(dag.nodes.values(), key=lambda item: item.id)
+        if node.kind == "assumption" and node.conclusion is not None
+    ]
+    payload = {
+        "schema_version": proof_schema.PROOF_SCHEMA_VERSION,
+        "kind": str(kind),
+        "assumptions": assumptions,
+        "chains": [
+            [literal_record(literal) for literal in chain]
+            for chain in dag.derived_chains()
+        ],
+        "chain_links": dag.derived_chain_links(),
+        "reasons": sorted({str(reason) for reason in reasons or ()}),
+        "proof_dag": dag.to_dict(),
+        "dag_digest": dag.digest(),
+    }
+    payload.update(dict(extra or {}))
+    payload["metrics"] = proof_schema.normalize_proof_metrics(payload)
+    return payload
+
+
 def classify_proof_structure(value, *, forcing_context: bool = False) -> str:
-    """Applica la precedenza P14.1 prima della futura chain/net di P15."""
+    """Applica la precedenza specifica e poi la forma chain/net P15."""
     family = proof_structural_family(value)
     if not forcing_context and family != "candidate":
         return family
@@ -1131,7 +1242,9 @@ __all__ = [
     "literal_state",
     "normalize_literal",
     "proof_dag",
+    "proof_has_fork_and_merge",
     "proof_structural_family",
     "dependency_shape",
     "classify_proof_structure",
+    "logic_payload",
 ]

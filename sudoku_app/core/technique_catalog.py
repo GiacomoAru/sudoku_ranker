@@ -1,7 +1,7 @@
 """Proiezione eseguibile della tassonomia autorevole del progetto.
 
-La fonte normativa e' ``TASSIONOMIA.txt``; questo modulo ne applica il
-contratto P14.1 a ID, famiglie, motori e profili metrici. Le mappe generate in
+La fonte normativa e' ``TASSIONOMIA.md``; questo modulo ne applica il
+contratto P15 a ID, famiglie, motori e profili metrici. Le mappe generate in
 fondo al file sono soltanto viste di compatibilita'.
 
 Il modulo non importa il solver né i detector: in questo modo difficoltà,
@@ -20,9 +20,9 @@ from dataclasses import dataclass
 import math
 
 
-TAXONOMY_SOURCE = "TASSIONOMIA.txt"
-TAXONOMY_CONTRACT_VERSION = "P14.1"
-TECHNIQUE_CATALOG_VERSION = "1.9.0"
+TAXONOMY_SOURCE = "TASSIONOMIA.md"
+TAXONOMY_CONTRACT_VERSION = "P15"
+TECHNIQUE_CATALOG_VERSION = "2.0.0"
 
 LEGACY_TECHNIQUE_ID_ALIASES = {
     "direct.hidden.2": "direct.hidden_pair",
@@ -50,6 +50,7 @@ INFERENCE_ENGINES = frozenset({
     "dynamic",
     "nested",
     "complete_tree",
+    "template",
 })
 IMPLEMENTATION_STATUSES = frozenset({
     "implemented",
@@ -121,6 +122,8 @@ FAMILY_DISPLAY_NAMES_IT = {
     "dynamic_forcing": "Forcing dinamici",
     "nested_forcing": "Forcing annidati",
     "exhaustive_forcing": "Exhaustive Forcing",
+    "templates": "Templates",
+    "forcing_nets": "Forcing Net",
 }
 
 STRATEGY_DISPLAY_NAMES_IT = {
@@ -191,6 +194,15 @@ NESTED_METRICS = FORCING_METRICS + (
     "nested_depth",
     "nested_subproof_count",
 )
+NET_METRICS = FORCING_METRICS + (
+    "fork_node_count",
+    "merge_node_count",
+    "max_parent_count",
+)
+TEMPLATE_METRICS = FORCING_METRICS + ("template_count",)
+KRAKEN_METRICS = tuple(dict.fromkeys(
+    FISH_METRICS + NET_METRICS + ("kraken_branch_count",)
+))
 
 
 def _aliases(*names: str, namespace: str = "common"):
@@ -1058,6 +1070,25 @@ _CATALOG_ROWS = (
         engine_type="logic", proof_metric_profile=FORCING_METRICS,
     ),
     _entry(
+        "template.single_digit", "Templates", 7.8,
+        "templates", "multiple_forcing", "templates",
+        aliases=_aliases("Pattern Overlay Method", "POM"),
+        rating_kind="pseudo_se", inference_engine="template",
+        proof_metric_profile=TEMPLATE_METRICS,
+    ),
+    _entry(
+        "kraken.fish.type1", "Kraken Fish Type 1", 8.2,
+        "fish", "fish_wings", "kraken",
+        rating_kind="pseudo_se", engine_type="logic",
+        inference_engine="fish", proof_metric_profile=KRAKEN_METRICS,
+    ),
+    _entry(
+        "kraken.fish.type2", "Kraken Fish Type 2", 8.4,
+        "fish", "fish_wings", "kraken",
+        rating_kind="pseudo_se", engine_type="logic",
+        inference_engine="fish", proof_metric_profile=KRAKEN_METRICS,
+    ),
+    _entry(
         "forcing.dynamic.contradiction",
         "Dynamic Contradiction Forcing Chain", 8.5,
         "dynamic_forcing", "dynamic_forcing", "dynamic_forcing_chain",
@@ -1094,6 +1125,30 @@ _CATALOG_ROWS = (
         "dynamic_forcing", "dynamic_forcing", "dynamic_forcing_chain",
         engine_type="logic", abstract=True,
         proof_metric_profile=FORCING_METRICS,
+    ),
+    _entry(
+        "forcing.net.contradiction", "Contradiction Forcing Net", 8.8,
+        "forcing_nets", "multiple_forcing", "forcing_net",
+        rating_kind="pseudo_se", engine_type="logic",
+        inference_engine="forcing", proof_metric_profile=NET_METRICS,
+    ),
+    _entry(
+        "forcing.net.double", "Double Forcing Net", 9.0,
+        "forcing_nets", "multiple_forcing", "forcing_net",
+        rating_kind="pseudo_se", engine_type="logic",
+        inference_engine="forcing", proof_metric_profile=NET_METRICS,
+    ),
+    _entry(
+        "forcing.net.cell", "Cell Forcing Net", 9.2,
+        "forcing_nets", "multiple_forcing", "forcing_net",
+        rating_kind="pseudo_se", engine_type="logic",
+        inference_engine="forcing", proof_metric_profile=NET_METRICS,
+    ),
+    _entry(
+        "forcing.net.region", "Region Forcing Net", 9.2,
+        "forcing_nets", "multiple_forcing", "forcing_net",
+        rating_kind="pseudo_se", engine_type="logic",
+        inference_engine="forcing", proof_metric_profile=NET_METRICS,
     ),
     _entry(
         "forcing.plus.contradiction",

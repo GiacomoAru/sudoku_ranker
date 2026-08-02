@@ -284,6 +284,11 @@ _DECLARED_RUNNERS = (
         techniques.generalized_fish,
     ),
     _logic(
+        "kraken",
+        ("kraken.fish.type1", "kraken.fish.type2"),
+        techniques.kraken,
+    ),
+    _logic(
         "coloring",
         technique_catalog.TECHNIQUE_IDS_BY_DETECTOR["coloring"],
         techniques.coloring,
@@ -310,6 +315,11 @@ _DECLARED_RUNNERS = (
         "als",
         technique_catalog.TECHNIQUE_IDS_BY_DETECTOR["als"],
         techniques.als,
+    ),
+    _local(
+        "templates",
+        ("template.single_digit",),
+        techniques.templates,
     ),
     _local(
         "ur_type_1",
@@ -481,6 +491,16 @@ _DECLARED_RUNNERS = (
             "forcing.plus.region",
         ),
         techniques.dynamic_forcing_chain_plus,
+    ),
+    _logic(
+        "forcing_net",
+        (
+            "forcing.net.contradiction",
+            "forcing.net.double",
+            "forcing.net.cell",
+            "forcing.net.region",
+        ),
+        techniques.forcing_net,
     ),
     _logic(
         "nested_forcing_chain",

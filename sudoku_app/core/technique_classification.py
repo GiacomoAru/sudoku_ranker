@@ -92,6 +92,63 @@ def classify_als_aic(logic, *, eliminations=()):
     return "chain.als_aic"
 
 
+def classify_forcing_net(logic):
+    """Classifica soltanto DAG candidate-only non lineari e non Nested."""
+    if not isinstance(logic, Mapping):
+        return None
+    try:
+        dag = proof_model.proof_dag(logic.get("proof_dag"))
+    except (KeyError, TypeError, ValueError):
+        return None
+    if (
+        dag is None
+        or dag.nested_proofs
+        or proof_model.proof_structural_family(dag) != "candidate"
+        or proof_model.dependency_shape(dag) != "net"
+    ):
+        return None
+
+    assumptions = [
+        node.conclusion
+        for node in dag.nodes.values()
+        if node.kind == "assumption" and node.conclusion is not None
+    ]
+    kind = logic.get("kind")
+    if kind == "dynamic-contradiction":
+        if (
+            len(assumptions) == 1
+            and any(node.kind == "contradiction" for node in dag.nodes.values())
+        ):
+            return "forcing.net.contradiction"
+        return None
+    if kind == "dynamic-reduction":
+        if (
+            len(assumptions) == 2
+            and assumptions[0][:3] == assumptions[1][:3]
+            and assumptions[0][3] != assumptions[1][3]
+        ):
+            return "forcing.net.double"
+        return None
+    if kind in {"forcing-net-cell", "dynamic-cell-reduction"}:
+        if (
+            len(assumptions) >= 3
+            and all(item[3] for item in assumptions)
+            and len({item[:2] for item in assumptions}) == 1
+        ):
+            return "forcing.net.cell"
+        return None
+    if kind in {"forcing-net-region", "dynamic-region-reduction"}:
+        cells = {item[:2] for item in assumptions}
+        if (
+            len(assumptions) >= 3
+            and all(item[3] for item in assumptions)
+            and len({item[2] for item in assumptions}) == 1
+            and any(cells <= set(unit) for unit in UNITS)
+        ):
+            return "forcing.net.region"
+    return None
+
+
 def _literal(value) -> Literal | None:
     if not isinstance(value, Mapping):
         return None
@@ -745,6 +802,19 @@ def classify_logic_technique(
     """Restituisce il nome strutturale, o ``None`` per una prova invalida."""
     logic = deduction.get("logic", {})
 
+    if parent == "Forcing Net":
+        technique_id = classify_forcing_net(logic)
+        return (
+            None
+            if technique_id is None
+            else {
+                "forcing.net.contradiction": "Contradiction Forcing Net",
+                "forcing.net.double": "Double Forcing Net",
+                "forcing.net.cell": "Cell Forcing Net",
+                "forcing.net.region": "Region Forcing Net",
+            }[technique_id]
+        )
+
     forcing_subtypes = {
         "dynamic-contradiction": "Contradiction",
         "dynamic-reduction": "Double",
@@ -752,6 +822,10 @@ def classify_logic_technique(
         "dynamic-region-reduction": "Region",
     }
     subtype = forcing_subtypes.get(logic.get("kind"))
+    if subtype and proof_model.dependency_shape(
+        logic.get("proof_dag")
+    ) == "net":
+        return None
     if subtype and parent == "Dynamic Forcing Chain":
         return f"Dynamic {subtype} Forcing Chain"
     if subtype and parent == "Dynamic Forcing Chain Plus":
@@ -759,6 +833,12 @@ def classify_logic_technique(
     if subtype and parent == "Nested Forcing Chain":
         return f"Nested {subtype} Forcing Chain"
 
+    if parent in {"Cell Forcing Chain", "Region Forcing Chain"}:
+        return (
+            parent
+            if proof_model.dependency_shape(logic.get("proof_dag")) == "chain"
+            else None
+        )
     if parent not in _STATIC_TECHNIQUES:
         return parent
     if parent == "Grouped Chain":

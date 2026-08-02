@@ -160,7 +160,20 @@ classificazioni strutturali delle corrispondenti deduzioni ALS-XZ; il payload
 mantiene sia il nome specifico sia il parent ALS che ne giustifica la logica.
 Le prove conservano ogni ALS come nodo strutturato nel `ProofDAG`.
 
-`TASSIONOMIA.txt` è la fonte normativa di ID, famiglie e precedenze. Il
+## Forcing Net, Templates e Kraken Fish
+
+P15 classifica la forma direttamente dal `ProofDAG`: una prova con un nodo a
+più parent, oppure con fork e successiva riconvergenza, è una net e non può
+essere pubblicata come chain. Contradiction, Double, Cell e Region Forcing Net
+restano casi specifici separati, anche quando condividono lo stesso motore di
+propagazione delle rispettive catene.
+
+Templates enumera configurazioni complete di una sola cifra, senza cercare
+soluzioni complete del puzzle. Kraken Fish Type 1/2 riusa il motore Fish e il
+grafo AIC: conserva il fish incompleto o finned e un percorso verificabile da
+ogni fin o possibilità rilevante alla conclusione comune.
+
+`TASSIONOMIA.md` è la fonte normativa di ID, famiglie e precedenze. Il
 catalogo Python ne è la proiezione eseguibile: `inference_engine` descrive il
 motore logico (`fish`, `group`, `als`, ecc.), mentre `engine_type` descrive il
 livello esecutivo (`local`, `logic`, `nested`, `complete_tree`).

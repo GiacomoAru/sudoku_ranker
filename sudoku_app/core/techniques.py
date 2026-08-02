@@ -65,12 +65,14 @@ from . import als as als_engine
 from . import difficulty as difficulty_model
 from . import exclusion as exclusion_patterns
 from . import fish as fish_engine
+from . import kraken as kraken_engine
 from . import coloring as coloring_engine
 from . import move_presentation
 from . import proof_schema
 from . import sue_de_coq as sue_de_coq_patterns
 from . import technique_catalog
 from . import technique_classification
+from . import templates as template_engine
 from . import uniqueness as uniqueness_patterns
 
 
@@ -960,6 +962,51 @@ def generalized_fish(state):
     ]
 
 
+def kraken(state):
+    """Kraken Type 1/2 con una prova AIC per ogni possibilità richiesta."""
+    moves = []
+    for deduction in kraken_engine.find_kraken(state):
+        pattern = deduction.fish.pattern
+        payload = deduction.to_dict()
+        technique_name = (
+            "Kraken Fish Type 1"
+            if deduction.technique_id == "kraken.fish.type1"
+            else "Kraken Fish Type 2"
+        )
+        move = _build_move(
+            technique=technique_name,
+            family="Fish",
+            difficulty=_canonical_difficulty(technique_name),
+            description=(
+                f"Il fish di cifra {pattern.digit} conserva "
+                f"{payload['branch_count']} possibilità: ognuna implica "
+                f"l'eliminazione in R{deduction.target[0]+1}"
+                f"C{deduction.target[1]+1}."
+            ),
+            placements=(),
+            eliminations=deduction.eliminations,
+            primary=deduction.primary_cells,
+            extra={
+                "logic": deduction.proof_payload(),
+                "fish_pattern": deduction.fish.to_dict(),
+                "kraken_pattern": payload,
+                "fish_size": pattern.size,
+                "base_set_count": len(pattern.base_sets),
+                "cover_set_count": len(pattern.cover_sets),
+                "fin_count": len(pattern.fins),
+                "endo_fin_count": len(pattern.endo_fins),
+                "cannibalistic_count": len(
+                    pattern.cannibalistic_targets
+                ),
+                "kraken_branch_count": payload["branch_count"],
+            },
+            state=state,
+        )
+        if move is not None:
+            moves.append(move)
+    return moves
+
+
 # -------------------------------------------------------- 5.2 ALS engine
 def _als_description(deduction):
     count = len(deduction.als_nodes)
@@ -1049,6 +1096,36 @@ def als(state):
             if (move := _als_move(state, deduction)) is not None
         ],
     )
+
+
+def templates(state):
+    """Pattern Overlay Method: configurazioni complete di una sola cifra."""
+    moves = []
+    for deduction in template_engine.find_templates(state):
+        payload = deduction.to_dict()
+        move = _build_move(
+            technique="Templates",
+            family=technique_family("Templates"),
+            difficulty=_canonical_difficulty("Templates"),
+            description=(
+                f"Le {payload['template_count']} configurazioni valide "
+                f"della cifra {deduction.digit} condividono le conclusioni "
+                "indicate. Non sono state esplorate soluzioni complete."
+            ),
+            placements=deduction.placements,
+            eliminations=deduction.eliminations,
+            primary=deduction.primary_cells,
+            extra={
+                "logic": deduction.proof_payload(),
+                "template_pattern": payload,
+                "template_count": payload["template_count"],
+                "template_digit": deduction.digit,
+            },
+            state=state,
+        )
+        if move is not None:
+            moves.append(move)
+    return moves
 
 
 # --------------------------------------------------------------- 4.0 coloring
@@ -2958,6 +3035,23 @@ def dynamic_forcing_chain_plus(state):
         "logic:Dynamic Forcing Chain Plus",
         produce,
     )
+
+
+def forcing_net(state):
+    """Forcing candidate-only classificati dal DAG non lineare reale."""
+    def produce():
+        excluded = _effects_from_functions(
+            state,
+            (
+                cell_forcing_chain,
+                region_forcing_chain,
+                dynamic_forcing_chain,
+                dynamic_forcing_chain_plus,
+            ),
+        )
+        return _logic_moves(state, "Forcing Net", excluded)
+
+    return _cached_moves(state, "logic:Forcing Net", produce)
 
 
 def nested_forcing_chain(state):

@@ -17,11 +17,11 @@ Non è necessario includere ogni nome mai inventato nella comunità Sudoku. La c
 
 ## Baseline acquisito
 
-Le patch P01-P14.1, inclusa P06.5, sono applicate e non fanno più parte della roadmap operativa. Il progetto dispone già di:
+Le patch P01-P15, inclusa P06.5, sono applicate e non fanno più parte della roadmap operativa. Il progetto dispone già di:
 
 * catalogo centrale e identificatori stabili;
-* `TASSIONOMIA.txt` come fonte normativa e catalogo come sua proiezione
-  eseguibile P14.1;
+* `TASSIONOMIA.md` come fonte normativa e catalogo come sua proiezione
+  eseguibile P15;
 * separazione fra `inference_engine` semantico ed `engine_type` esecutivo;
 * registro dichiarativo dei detector;
 * pipeline ordinary, Nested e Complete Tree separata;
@@ -56,6 +56,8 @@ Le patch P01-P14.1, inclusa P06.5, sono applicate e non fanno più parte della r
   context, senza riclassificare le normali XY-Chain come ALS-AIC;
 * metriche specifiche `group_node_count`, `max_group_size`, `als_node_count`,
   `als_cell_count` e `rcc_count`;
+* classificazione P15 chain/net dal DAG e metriche di fork, merge e parent;
+* Templates per singola cifra e Kraken Fish Type 1/2 sopra Fish e grafo AIC;
 * versionamento esplicito di prove e analisi archiviate.
 
 Le patch future devono estendere queste strutture, non crearne copie parallele.
@@ -80,7 +82,7 @@ La taratura di rating, soglie e carico risolutivo resta deliberatamente P18.
 
 # Blocco E: forcing avanzato
 
-## P15. Classificazione dei Proof DAG non lineari e Forcing Net
+## P15. Classificazione dei Proof DAG non lineari e Forcing Net — completata
 
 ### Obiettivo
 
@@ -133,6 +135,11 @@ conclusione comune
 * Kraken conserva sia la struttura fish sia le sottoprove.
 * Tutte le fins o possibilità richieste implicano realmente il target.
 * Le prove restano finite e spiegabili.
+
+Contratto acquisito: `ProofDAG` è la fonte della forma chain/net; le viste
+lineari restano derivate. Templates non emette conclusioni dopo un
+troncamento. Kraken conserva il `FishPattern`, tutte le possibilità richieste,
+i percorsi AIC e i supporti degli archi.
 
 ---
 
@@ -572,11 +579,9 @@ La versione 1.0 è pronta quando:
 
 # Dipendenze principali
 
-Le fondamenta P01-P13 sono già acquisite.
+Le fondamenta P01-P15 sono già acquisite.
 
 ```text
-P14 -> P15, P16 e profilo Nested
-P15 -> P16
 P16 -> P17
 P17 -> checkpoint P17.1
 P17.1 -> P17.2
@@ -588,8 +593,6 @@ P19 -> P20
 # Ordine pratico restante
 
 ```text
-P14 ALS e generalized wings
-P15 Forcing Net, Templates e Kraken
 P16 Vere Nested
 P17 Profili Dynamic, Plus e Nested
 CHECKPOINT obbligatorio prima di P16.5

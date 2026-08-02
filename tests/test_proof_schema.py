@@ -65,6 +65,11 @@ class ProofMetricNormalizationTests(unittest.TestCase):
             "als_node_count": 0,
             "als_cell_count": 0,
             "rcc_count": 0,
+            "fork_node_count": 0,
+            "merge_node_count": 0,
+            "max_parent_count": 0,
+            "template_count": 0,
+            "kraken_branch_count": 0,
         })
 
     def test_explicit_engine_metrics_are_authoritative(self):
@@ -268,6 +273,11 @@ class ProofPipelineTests(unittest.TestCase):
             "als_node_count": 0,
             "als_cell_count": 0,
             "rcc_count": 0,
+            "fork_node_count": 0,
+            "merge_node_count": 0,
+            "max_parent_count": 0,
+            "template_count": 0,
+            "kraken_branch_count": 0,
         })
 
     def test_proof_metrics_survive_compact_archive_round_trip(self):
