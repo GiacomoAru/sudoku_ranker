@@ -307,6 +307,11 @@ _DECLARED_RUNNERS = (
     _local("xyz_wing", ("wing.xyz",), techniques.xyz_wing),
     _local("w_wing", ("wing.w",), techniques.w_wing),
     _local(
+        "als",
+        technique_catalog.TECHNIQUE_IDS_BY_DETECTOR["als"],
+        techniques.als,
+    ),
+    _local(
         "ur_type_1",
         ("unique.ur.1",),
         techniques.unique_rectangle_type1,

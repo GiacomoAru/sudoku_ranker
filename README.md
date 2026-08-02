@@ -14,6 +14,8 @@ Repository: [github.com/GiacomoAru/sudoku_ranker](https://github.com/GiacomoAru/
 - motore Fish parametrico per varianti Basic, Franken e Mutant;
 - Simple e Multi Colors sul grafo delle coppie coniugate;
 - X-Chain, XY-Chain, AIC, Nice Loop e varianti Grouped sul grafo d'implicazione condiviso;
+- motore ALS/RCC comune per ALS-XZ, ALS-XY-Wing, ALS Chain, Death Blossom
+  e generalized wings fino a TUVWXYZ-Wing;
 - ordinamento delle tecniche secondo difficoltà crescente;
 - tre metriche complementari di difficoltà;
 - riconoscimento locale da foto, senza servizi esterni;
@@ -141,6 +143,19 @@ La classificazione mantiene separati `Grouped X-Chain`, `Grouped AIC`,
 `Grouped Nice Loop` e `Grouped Continuous Nice Loop`. Le prove serializzate e
 le evidenze candidate-level conservano il gruppo come nodo distinto: una
 catena composta soltanto da candidati singoli non riceve mai il nome Grouped.
+
+## Almost Locked Sets
+
+I moduli `sudoku_app.core.als` e `sudoku_app.core.als_graph` enumerano una sola
+volta gli Almost Locked Sets e costruiscono il grafo dei Restricted Common
+Candidates. Gli ALS equivalenti sono deduplicati e un RCC esiste soltanto se
+ogni sua occorrenza in un ALS vede ogni occorrenza nell'altro.
+
+Lo stesso motore produce Singly e Doubly Linked ALS-XZ, ALS-XY-Wing, ALS
+Chain, Death Blossom e ALS-AIC. WXYZ, VWXYZ, UVWXYZ e TUVWXYZ-Wing sono
+classificazioni strutturali delle corrispondenti deduzioni ALS-XZ; il payload
+mantiene sia il nome specifico sia il parent ALS che ne giustifica la logica.
+Le prove conservano ogni ALS come nodo strutturato nel `ProofDAG`.
 
 ## Riconoscimento da foto
 

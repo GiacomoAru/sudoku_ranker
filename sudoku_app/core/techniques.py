@@ -61,6 +61,7 @@ from itertools import combinations
 
 from .data_structure import *
 from . import logic_engine
+from . import als as als_engine
 from . import difficulty as difficulty_model
 from . import exclusion as exclusion_patterns
 from . import fish as fish_engine
@@ -955,6 +956,81 @@ def generalized_fish(state):
         for deduction in fish_engine.find_all_fish(state)
         if (move := _fish_move(state, deduction)) is not None
     ]
+
+
+# -------------------------------------------------------- 5.2 ALS engine
+def _als_description(deduction):
+    count = len(deduction.als_nodes)
+    rcc_digits = sorted({rcc.digit for rcc in deduction.rccs})
+    if deduction.technique_id == "als.death_blossom":
+        return (
+            f"La stem cell è collegata a {count} petal ALS, uno per ogni "
+            f"proprio candidato. Tutti i petals condividono la cifra "
+            f"{deduction.endpoint_digit}, eliminabile dai target che ne "
+            "vedono tutte le occorrenze."
+        )
+    if deduction.technique_id in {"als.chain", "chain.als_aic"}:
+        endpoint_digits = (
+            [deduction.endpoint_digit]
+            if deduction.endpoint_digit is not None
+            else sorted({digit for _, _, digit in deduction.eliminations})
+        )
+        return (
+            f"Un cammino di {count} ALS usa RCC adiacenti distinti "
+            f"({', '.join(map(str, rcc_digits))}). La cifra terminale "
+            f"{', '.join(map(str, endpoint_digits))} è quindi presente in almeno uno "
+            "dei due ALS estremi."
+        )
+    if deduction.technique_id == "als.xy_wing":
+        return (
+            f"Tre ALS sono collegati da due RCC distinti "
+            f"({', '.join(map(str, rcc_digits))}); la cifra comune "
+            f"{deduction.endpoint_digit} è forzata in uno degli ALS estremi."
+        )
+    link_label = "due RCC" if len(deduction.rccs) > 1 else "un RCC"
+    return (
+        f"I due ALS sono collegati da {link_label} "
+        f"({', '.join(map(str, rcc_digits))}). I target indicati vedono "
+        "tutte le occorrenze che supportano la conclusione."
+    )
+
+
+def _als_move(state, deduction):
+    definition = technique_catalog.technique_definition(
+        deduction.technique_id
+    )
+    payload = deduction.to_dict()
+    return _build_move(
+        technique=definition.canonical_name,
+        family=technique_catalog.FAMILY_DISPLAY_NAMES_IT[definition.family_id],
+        difficulty=definition.base_difficulty,
+        description=_als_description(deduction),
+        placements=(),
+        eliminations=deduction.eliminations,
+        primary=deduction.primary_cells,
+        proof_count=deduction.equivalent_pattern_count,
+        extra={
+            "logic": deduction.proof_payload(),
+            "als_pattern": payload,
+            "als_parent_technique_id": deduction.als_parent_technique_id,
+            "als_node_count": len(deduction.als_nodes),
+            "rcc_count": len(deduction.rccs) + len(deduction.stem_links),
+        },
+        state=state,
+    )
+
+
+def als(state):
+    """Adattatore unico P14 per ALS e generalized wings."""
+    return _cached_moves(
+        state,
+        "als",
+        lambda: [
+            move
+            for deduction in als_engine.find_all_als(state)
+            if (move := _als_move(state, deduction)) is not None
+        ],
+    )
 
 
 # --------------------------------------------------------------- 4.0 coloring

@@ -99,6 +99,10 @@ ACTIVE_TECHNIQUE_BINDINGS = {
     "0800": TechniqueBinding("y_wing", "wing.xy"),
     "0801": TechniqueBinding("xyz_wing", "wing.xyz"),
     "0803": TechniqueBinding("w_wing", "wing.w"),
+    "0901": TechniqueBinding("als", "als.xz.single"),
+    "0902": TechniqueBinding("als", "als.xy_wing"),
+    "0903": TechniqueBinding("als", "als.chain"),
+    "0904": TechniqueBinding("als", "als.death_blossom"),
     "1101": TechniqueBinding(
         "sue_de_coq",
         "intersection.sue_de_coq.extended",
@@ -112,7 +116,7 @@ PLANNED_HODOKU_CODES = frozenset({
     "0341",
     "0502",
     "0706", "0707", "0711",
-    "0901", "0902", "0903", "0904", "1201", "1202",
+    "1201", "1202",
 })
 
 

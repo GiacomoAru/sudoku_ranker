@@ -38,3 +38,6 @@ rimuove il codice da `PLANNED_HODOKU_CODES`.
 
 P13 attiva inoltre i casi `0709` e `0710`: verificano rispettivamente una
 conclusione esatta di Grouped Continuous Nice Loop e di Grouped Nice Loop.
+
+P14 attiva i casi `0901`-`0904`: coprono rispettivamente Singly Linked
+ALS-XZ, ALS-XY-Wing, ALS Chain e Death Blossom con conclusioni gold esatte.

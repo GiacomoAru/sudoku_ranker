@@ -17,7 +17,7 @@ Non è necessario includere ogni nome mai inventato nella comunità Sudoku. La c
 
 ## Baseline acquisito
 
-Le patch P01-P13, inclusa P06.5, sono applicate e non fanno più parte della roadmap operativa. Il progetto dispone già di:
+Le patch P01-P14, inclusa P06.5, sono applicate e non fanno più parte della roadmap operativa. Il progetto dispone già di:
 
 * catalogo centrale e identificatori stabili;
 * registro dichiarativo dei detector;
@@ -45,78 +45,13 @@ Le patch P01-P13, inclusa P06.5, sono applicate e non fanno più parte della roa
   visibilità whole-set, strong link come partizione esatta di casa e un unico
   grafo candidato/gruppo per Grouped X-Chain, Grouped AIC, Grouped Nice Loop e
   Grouped Continuous Nice Loop;
+* motore ALS comune con enumerazione deduplicata, grafo RCC a visibilità
+  completa, overlap validati, ALS-XZ, ALS-XY-Wing, ALS Chain, Death Blossom e
+  ALS-AIC; WXYZ/VWXYZ/UVWXYZ/TUVWXYZ-Wing sono classificazioni del parent ALS
+  e non detector paralleli;
 * versionamento esplicito di prove e analisi archiviate.
 
 Le patch future devono estendere queste strutture, non crearne copie parallele.
-
----
-
-# Blocco D: motori parametrici
-
-## P14. ALS engine e generalized wings
-
-### Obiettivo
-
-Creare un motore comune per Almost Locked Sets, RCC e generalized wings.
-
-### Moduli
-
-```text
-techniques/als.py
-techniques/als_graph.py
-```
-
-### Primitive
-
-```python
-@dataclass(frozen=True)
-class ALS:
-    id: int
-    house_id: int
-    cells: frozenset[Cell]
-    candidates: frozenset[int]
-
-
-@dataclass(frozen=True)
-class RCC:
-    digit: int
-    left_als_id: int
-    right_als_id: int
-```
-
-Validazione fondamentale:
-
-```python
-len(als.candidates) == len(als.cells) + 1
-```
-
-### Tecniche
-
-```text
-Singly Linked ALS-XZ
-Doubly Linked ALS-XZ
-ALS-XY-Wing
-ALS Chain
-Death Blossom
-ALS-AIC
-WXYZ-Wing
-Double-Linked WXYZ-Wing
-VWXYZ-Wing
-Double-Linked VWXYZ-Wing
-UVWXYZ-Wing
-Double-Linked UVWXYZ-Wing
-TUVWXYZ-Wing
-```
-
-Le generalized wings devono essere classificazioni specifiche prodotte dal motore ALS, non detector completamente separati.
-
-### Criteri di completamento
-
-* Gli ALS equivalenti vengono deduplicati.
-* Gli RCC richiedono visibilità completa tra tutte le occorrenze.
-* Gli overlap sono accettati soltanto nei casi logicamente validi.
-* Gli RCC adiacenti di una ALS Chain rispettano le regole di compatibilità.
-* Una generalized wing conserva il proprio ALS parent.
 
 ---
 

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import math
 
 
-TECHNIQUE_CATALOG_VERSION = "1.7.0"
+TECHNIQUE_CATALOG_VERSION = "1.8.0"
 
 LEGACY_TECHNIQUE_ALIASES = {
     "Nested Forcing Chain": "Complete Forcing Tree",
@@ -81,6 +81,7 @@ FAMILY_DISPLAY_NAMES_IT = {
     "subsets": "Sottoinsiemi bloccati",
     "fish": "Fish",
     "wings": "Wings",
+    "als": "Almost Locked Sets",
     "uniqueness": "Unicita",
     "exclusion": "Exclusion",
     "single_digit_patterns": "Pattern a cifra singola",
@@ -99,6 +100,7 @@ STRATEGY_DISPLAY_NAMES_IT = {
     "elementary": "Tecniche elementari",
     "subsets_intersections": "Sottoinsiemi e intersezioni",
     "fish_wings": "Fish e wings",
+    "almost_locked_sets": "Almost Locked Sets",
     "uniqueness_exclusion": "Unicita ed esclusione",
     "single_digit_patterns": "Pattern a cifra singola",
     "static_chains": "Catene statiche",
@@ -136,6 +138,10 @@ CHAIN_METRICS = (
     "proof_edge_count",
     "chain_count",
     "max_chain_length",
+)
+ALS_METRICS = CHAIN_METRICS + (
+    "als_node_count",
+    "rcc_count",
 )
 COLORING_METRICS = CHAIN_METRICS + (
     "color_component_count",
@@ -534,6 +540,51 @@ _CATALOG_ROWS = (
         proof_metric_profile=CHAIN_METRICS,
     ),
     _entry(
+        "wing.wxyz", "WXYZ-Wing", 5.5,
+        "wings", "fish_wings", "als",
+        parent_id="als.xz.single",
+        rating_kind="se", proof_metric_profile=ALS_METRICS,
+    ),
+    _entry(
+        "wing.wxyz.double", "Double-Linked WXYZ-Wing", 5.6,
+        "wings", "fish_wings", "als",
+        parent_id="als.xz.double",
+        rating_kind="se", proof_metric_profile=ALS_METRICS,
+    ),
+    _entry(
+        "wing.vwxyz", "VWXYZ-Wing", 6.2,
+        "wings", "fish_wings", "als",
+        aliases=_aliases("Generalized Wing Size 5"),
+        parent_id="als.xz.single",
+        rating_kind="se", proof_metric_profile=ALS_METRICS,
+    ),
+    _entry(
+        "wing.vwxyz.double", "Double-Linked VWXYZ-Wing", 6.4,
+        "wings", "fish_wings", "als",
+        parent_id="als.xz.double",
+        rating_kind="se", proof_metric_profile=ALS_METRICS,
+    ),
+    _entry(
+        "wing.uvwxyz", "UVWXYZ-Wing", 6.6,
+        "wings", "fish_wings", "als",
+        aliases=_aliases("Generalized Wing Size 6"),
+        parent_id="als.xz.single",
+        rating_kind="se", proof_metric_profile=ALS_METRICS,
+    ),
+    _entry(
+        "wing.uvwxyz.double", "Double-Linked UVWXYZ-Wing", 6.8,
+        "wings", "fish_wings", "als",
+        parent_id="als.xz.double",
+        rating_kind="pseudo_se", proof_metric_profile=ALS_METRICS,
+    ),
+    _entry(
+        "wing.tuvwxyz", "TUVWXYZ-Wing", 7.5,
+        "wings", "fish_wings", "als",
+        aliases=_aliases("Generalized Wing Size 7"),
+        parent_id="als.xz.single",
+        rating_kind="se", proof_metric_profile=ALS_METRICS,
+    ),
+    _entry(
         "sdp.skyscraper", "Skyscraper", 3.9,
         "single_digit_patterns", "single_digit_patterns", "skyscraper",
         parent_id="se.forcing_x_chain",
@@ -855,6 +906,44 @@ _CATALOG_ROWS = (
         se_equivalent_parent_id="se.bidirectional_cycle",
         rating_kind="pseudo_se", engine_type="logic",
         proof_metric_profile=CHAIN_METRICS,
+    ),
+
+    # Almost Locked Sets e catene ALS. Tutte le classificazioni consumano
+    # lo stesso detector e il medesimo grafo RCC.
+    _entry(
+        "als.xz.single", "Singly Linked ALS-XZ", 5.2,
+        "als", "almost_locked_sets", "als",
+        aliases=_aliases("ALS-XZ"), rating_kind="pseudo_se",
+        proof_metric_profile=ALS_METRICS,
+    ),
+    _entry(
+        "als.xz.double", "Doubly Linked ALS-XZ", 5.4,
+        "als", "almost_locked_sets", "als",
+        aliases=_aliases("Double-Linked ALS-XZ"), rating_kind="pseudo_se",
+        proof_metric_profile=ALS_METRICS,
+    ),
+    _entry(
+        "als.xy_wing", "ALS-XY-Wing", 5.7,
+        "als", "almost_locked_sets", "als",
+        rating_kind="pseudo_se", proof_metric_profile=ALS_METRICS,
+    ),
+    _entry(
+        "als.chain", "ALS Chain", 6.2,
+        "als", "almost_locked_sets", "als",
+        aliases=_aliases("ALS-XY-Chain"), rating_kind="pseudo_se",
+        proof_metric_profile=ALS_METRICS,
+    ),
+    _entry(
+        "als.death_blossom", "Death Blossom", 6.7,
+        "als", "almost_locked_sets", "als",
+        rating_kind="pseudo_se", proof_metric_profile=ALS_METRICS,
+    ),
+    _entry(
+        "chain.als_aic", "ALS-AIC", 7.7,
+        "als", "almost_locked_sets", "als",
+        aliases=_aliases("AIC with ALS Nodes"),
+        parent_id="se.forcing_chain",
+        rating_kind="pseudo_se", proof_metric_profile=ALS_METRICS,
     ),
     _entry(
         "intersection.sue_de_coq", "Sue de Coq", 5.0,
