@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import math
 
 
-TECHNIQUE_CATALOG_VERSION = "1.4.0"
+TECHNIQUE_CATALOG_VERSION = "1.5.0"
 
 LEGACY_TECHNIQUE_ALIASES = {
     "Nested Forcing Chain": "Complete Forcing Tree",
@@ -84,6 +84,7 @@ FAMILY_DISPLAY_NAMES_IT = {
     "uniqueness": "Unicita",
     "exclusion": "Exclusion",
     "single_digit_patterns": "Pattern a cifra singola",
+    "coloring": "Coloring",
     "bivalue_chains": "Catene bivalue",
     "bidirectional_cycles": "Cicli bidirezionali",
     "forcing_chains": "Catene forzanti",
@@ -135,6 +136,11 @@ CHAIN_METRICS = (
     "proof_edge_count",
     "chain_count",
     "max_chain_length",
+)
+COLORING_METRICS = CHAIN_METRICS + (
+    "color_component_count",
+    "color_node_count",
+    "color_link_count",
 )
 FORCING_METRICS = (
     "proof_node_count",
@@ -559,6 +565,44 @@ _CATALOG_ROWS = (
         se_equivalent_parent_id="se.forcing_x_chain",
         rating_kind="pseudo_se",
         proof_metric_profile=CHAIN_METRICS,
+    ),
+
+    # Coloring: classificazioni esplicite del grafo X a cifra singola.
+    _entry(
+        "color.simple.trap", "Simple Colors: Color Trap", 4.0,
+        "coloring", "static_chains", "coloring",
+        aliases=_aliases("Color Trap", "Simple Coloring Trap"),
+        parent_id="se.forcing_x_chain",
+        se_equivalent_parent_id="se.forcing_x_chain",
+        rating_kind="pseudo_se", engine_type="logic",
+        proof_metric_profile=COLORING_METRICS,
+    ),
+    _entry(
+        "color.simple.wrap", "Simple Colors: Color Wrap", 4.1,
+        "coloring", "static_chains", "coloring",
+        aliases=_aliases("Color Wrap", "Simple Coloring Wrap"),
+        parent_id="se.forcing_x_chain",
+        se_equivalent_parent_id="se.forcing_x_chain",
+        rating_kind="pseudo_se", engine_type="logic",
+        proof_metric_profile=COLORING_METRICS,
+    ),
+    _entry(
+        "color.multi.type1", "Multi Colors Type 1", 4.4,
+        "coloring", "static_chains", "coloring",
+        aliases=_aliases("Multi Coloring Type 1"),
+        parent_id="se.forcing_x_chain",
+        se_equivalent_parent_id="se.forcing_x_chain",
+        rating_kind="pseudo_se", engine_type="logic",
+        proof_metric_profile=COLORING_METRICS,
+    ),
+    _entry(
+        "color.multi.type2", "Multi Colors Type 2", 4.5,
+        "coloring", "static_chains", "coloring",
+        aliases=_aliases("Multi Coloring Type 2"),
+        parent_id="se.forcing_x_chain",
+        se_equivalent_parent_id="se.forcing_x_chain",
+        rating_kind="pseudo_se", engine_type="logic",
+        proof_metric_profile=COLORING_METRICS,
     ),
 
     # Unicità ed exclusion.

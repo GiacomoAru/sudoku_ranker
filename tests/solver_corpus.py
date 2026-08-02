@@ -74,6 +74,9 @@ ACTIVE_TECHNIQUE_BINDINGS = {
     "0400": TechniqueBinding("skyscraper", "sdp.skyscraper"),
     "0401": TechniqueBinding("two_string_kite", "sdp.two_string_kite"),
     "0402": TechniqueBinding("empty_rectangle", "sdp.empty_rectangle"),
+    "0500": TechniqueBinding("coloring", "color.simple.trap"),
+    "0501": TechniqueBinding("coloring", "color.simple.wrap"),
+    "0503": TechniqueBinding("coloring", "color.multi.type2"),
     "0600": TechniqueBinding("ur_type_1", "unique.ur.1"),
     "0601": TechniqueBinding("ur_type_2", "unique.ur.2"),
     "0602": TechniqueBinding("ur_type_3", "unique.ur.3"),
@@ -103,7 +106,7 @@ ACTIVE_TECHNIQUE_BINDINGS = {
 # stabile il suo codice si sposta nella mappa ACTIVE_TECHNIQUE_BINDINGS.
 PLANNED_HODOKU_CODES = frozenset({
     "0341",
-    "0500", "0501", "0502", "0503",
+    "0502",
     "0701", "0706", "0707", "0708", "0709", "0710", "0711",
     "0901", "0902", "0903", "0904", "1201", "1202",
 })

@@ -12,6 +12,7 @@ Repository: [github.com/GiacomoAru/sudoku_ranker](https://github.com/GiacomoAru/
 
 - analisi logica passo per passo;
 - motore Fish parametrico per varianti Basic, Franken e Mutant;
+- Simple e Multi Colors sul grafo delle coppie coniugate;
 - ordinamento delle tecniche secondo difficoltà crescente;
 - tre metriche complementari di difficoltà;
 - riconoscimento locale da foto, senza servizi esterni;
@@ -103,6 +104,17 @@ prima di essere consegnate al solver.
 La ricerca procede per livelli Basic, Franken e Mutant e applica limiti
 espliciti alle configurazioni complesse, così il costo delle varianti avanzate
 resta controllato durante l’analisi ordinaria.
+
+## Coloring
+
+Il modulo `sudoku_app.core.coloring` riusa gli archi X forti dello
+`StaticImplicationGraph`. Per ogni cifra separa le componenti connesse delle
+coppie coniugate, ne verifica la bipartizione e assegna due colori opposti.
+
+Il detector distingue esplicitamente Color Trap, Color Wrap e Multi Colors
+Type 1/2. Le varianti Multi operano soltanto fra componenti scollegate; ogni
+conclusione conserva il pattern colorato e una prova `ProofDAG` con archi
+alternati `peer`/`x`.
 
 ## Riconoscimento da foto
 

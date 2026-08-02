@@ -17,7 +17,7 @@ Non è necessario includere ogni nome mai inventato nella comunità Sudoku. La c
 
 ## Baseline acquisito
 
-Le patch P01-P10, inclusa P06.5, sono applicate e non fanno più parte della roadmap operativa. Il progetto dispone già di:
+Le patch P01-P11, inclusa P06.5, sono applicate e non fanno più parte della roadmap operativa. Il progetto dispone già di:
 
 * catalogo centrale e identificatori stabili;
 * registro dichiarativo dei detector;
@@ -36,6 +36,8 @@ Le patch P01-P10, inclusa P06.5, sono applicate e non fanno più parte della roa
 * Sue de Coq classica ed estesa, Aligned Pair/Triplet Exclusion e subset generalizzati fino al Sextuple;
 * motore Fish parametrico per X-Wing, Swordfish e Jellyfish Basic, Franken e Mutant,
   con varianti Finned, Sashimi, Siamese, Endo-Finned e Cannibalistic;
+* Coloring sul grafo condiviso delle conjugate pair, con componenti bipartite,
+  Color Trap, Color Wrap e Multi Colors Type 1/2;
 * versionamento esplicito di prove e analisi archiviate.
 
 Le patch future devono estendere queste strutture, non crearne copie parallele.
@@ -43,33 +45,6 @@ Le patch future devono estendere queste strutture, non crearne copie parallele.
 ---
 
 # Blocco D: motori parametrici
-
-## P11. Coloring
-
-### Obiettivo
-
-Aggiungere la famiglia coloring come classificazione esplicita delle conjugate pair.
-
-### Tecniche
-
-```text
-Simple Colors: Color Trap
-Simple Colors: Color Wrap
-Multi Colors Type 1
-Multi Colors Type 2
-```
-
-Il grafo esistente delle strong link a cifra singola e i `chain_links` possono essere riutilizzati.
-
-### Criteri di completamento
-
-* Ogni componente viene colorata in modo bipartito.
-* Color Wrap elimina l’intero colore contraddittorio.
-* Color Trap elimina soltanto candidati che vedono entrambi i colori.
-* Multi Colors opera su componenti distinte.
-* Il parent SE resta una X-Chain o Bidirectional X-Cycle compatibile.
-
----
 
 ## P12. Grafo AIC e Nice Loop completo
 

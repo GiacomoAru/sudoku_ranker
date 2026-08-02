@@ -64,6 +64,7 @@ from . import logic_engine
 from . import difficulty as difficulty_model
 from . import exclusion as exclusion_patterns
 from . import fish as fish_engine
+from . import coloring as coloring_engine
 from . import move_presentation
 from . import proof_schema
 from . import sue_de_coq as sue_de_coq_patterns
@@ -954,6 +955,75 @@ def generalized_fish(state):
         for deduction in fish_engine.find_all_fish(state)
         if (move := _fish_move(state, deduction)) is not None
     ]
+
+
+# --------------------------------------------------------------- 4.0 coloring
+def _coloring_description(deduction):
+    pattern = deduction.pattern
+    digit = pattern.digit
+    if pattern.technique_id == "color.simple.trap":
+        return (
+            f"Nella componente bipartita del candidato {digit}, ogni cella "
+            "eliminata vede almeno un candidato di ciascuno dei due colori. "
+            "Uno dei due colori deve essere vero."
+        )
+    if pattern.technique_id == "color.simple.wrap":
+        return (
+            f"Nella componente del candidato {digit}, due candidati dello "
+            "stesso colore si vedono. Quel colore non può essere vero e "
+            "viene eliminato per intero."
+        )
+    if pattern.technique_id == "color.multi.type1":
+        return (
+            f"Due componenti distinte del candidato {digit} hanno colori "
+            "collegati debolmente. I colori opposti forzano le eliminazioni "
+            "nelle celle che li vedono entrambi."
+        )
+    return (
+        f"Due candidati dello stesso colore in una componente del candidato "
+        f"{digit} vedono i due colori opposti di un'altra componente. Il "
+        "primo colore è quindi falso per intero."
+    )
+
+
+def _coloring_move(state, deduction):
+    pattern = deduction.pattern
+    nodes = set().union(*(component.nodes for component in pattern.components))
+    strong_link_count = sum(
+        len(component.links) for component in pattern.components
+    )
+    return _build_move(
+        technique=deduction.technique_name,
+        family="Coloring",
+        difficulty=_canonical_difficulty(deduction.technique_name),
+        description=_coloring_description(deduction),
+        placements=(),
+        eliminations=deduction.eliminations,
+        primary=sorted({candidate[:2] for candidate in nodes}),
+        proof_count=deduction.equivalent_pattern_count,
+        extra={
+            "logic": deduction.proof_payload(),
+            "coloring_pattern": deduction.to_dict(),
+            "color_digit": pattern.digit,
+            "color_component_count": len(pattern.components),
+            "color_node_count": len(nodes),
+            "color_link_count": strong_link_count + len(pattern.weak_links),
+        },
+        state=state,
+    )
+
+
+def coloring(state):
+    """Adatta Simple e Multi Colors dal grafo X condiviso a Move."""
+    return _cached_moves(
+        state,
+        "coloring",
+        lambda: [
+            move
+            for deduction in coloring_engine.find_all_coloring(state)
+            if (move := _coloring_move(state, deduction)) is not None
+        ],
+    )
 
 
 # ------------------------------------------------------------------ 6. wings

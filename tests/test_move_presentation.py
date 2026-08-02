@@ -162,10 +162,11 @@ class CandidateSnapshotTests(unittest.TestCase):
             "candidates_before",
             "candidates_after",
             "fish_pattern",
+            "coloring_pattern",
         ):
             self.assertIn(field, archive._STORED_MOVE_FIELDS)
-        self.assertEqual(archive.ANALYSIS_VERSION, 27)
-        self.assertEqual(archive.ANALYSIS_SCHEMA_VERSION, 15)
+        self.assertEqual(archive.ANALYSIS_VERSION, 28)
+        self.assertEqual(archive.ANALYSIS_SCHEMA_VERSION, 16)
 
 
 if __name__ == "__main__":

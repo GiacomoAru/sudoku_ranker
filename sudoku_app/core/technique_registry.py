@@ -283,6 +283,11 @@ _DECLARED_RUNNERS = (
         technique_catalog.TECHNIQUE_IDS_BY_DETECTOR["fish"],
         techniques.generalized_fish,
     ),
+    _logic(
+        "coloring",
+        technique_catalog.TECHNIQUE_IDS_BY_DETECTOR["coloring"],
+        techniques.coloring,
+    ),
     _local(
         "skyscraper",
         ("sdp.skyscraper",),

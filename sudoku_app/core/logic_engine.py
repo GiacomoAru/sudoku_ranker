@@ -357,6 +357,34 @@ class StaticImplicationGraph:
             if edge.reason in allowed
         )
 
+    def conjugate_pairs(self, digit: int):
+        """Restituisce gli archi X forti non orientati per una cifra.
+
+        Coloring usa questa vista invece di ricostruire una seconda volta le
+        coppie coniugate dalle case. Gli archi duplicati fra due celle che
+        condividono più case vengono consolidati dal grafo autorevole.
+        """
+        digit = int(digit)
+        if digit not in range(1, 10):
+            raise ValueError("digit deve essere compreso tra 1 e 9.")
+
+        pairs = set()
+        for source, edges in self.adjacency.items():
+            if source[2] != digit or source[3]:
+                continue
+            for edge in edges:
+                target = edge.target
+                if (
+                    edge.reason != "x"
+                    or target[2] != digit
+                    or not target[3]
+                ):
+                    continue
+                first = _candidate(source)
+                second = _candidate(target)
+                pairs.add(tuple(sorted((first, second))))
+        return tuple(sorted(pairs))
+
     def shortest_path(
         self,
         source: Literal,
@@ -2459,6 +2487,11 @@ def find_logic_deductions(
     )
 
 
+def static_implication_graph(state):
+    """Vista pubblica e condivisa del grafo statico dello stato."""
+    return _engine_for(state).graph
+
+
 def clear_logic_cache(state=None):
     """Svuota tutta la cache o soltanto la firma dello stato indicato."""
     global _ENGINE_CACHE_HITS, _ENGINE_CACHE_MISSES
@@ -2517,4 +2550,5 @@ __all__ = [
     "get_cached_logic_deductions",
     "logic_cache_info",
     "prepare_logic_cache",
+    "static_implication_graph",
 ]
