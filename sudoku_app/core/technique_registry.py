@@ -215,13 +215,13 @@ _DECLARED_RUNNERS = (
     ),
     _local(
         "direct_hidden_subset:2",
-        ("direct.hidden.2",),
+        ("direct.hidden_pair",),
         techniques.direct_hidden_subset,
         2,
     ),
     _local(
         "direct_hidden_subset:3",
-        ("direct.hidden.3",),
+        ("direct.hidden_triple",),
         techniques.direct_hidden_subset,
         3,
     ),
@@ -385,8 +385,8 @@ _DECLARED_RUNNERS = (
     _local(
         "sue_de_coq",
         (
-            "intersection.sue_de_coq",
-            "intersection.sue_de_coq.extended",
+            "misc.sue_de_coq.basic",
+            "misc.sue_de_coq.extended",
         ),
         techniques.sue_de_coq,
     ),
@@ -397,7 +397,7 @@ _DECLARED_RUNNERS = (
     ),
     _local(
         "aligned_triplet_exclusion",
-        ("exclusion.aligned_triplet",),
+        ("exclusion.aligned_triple",),
         techniques.aligned_triplet_exclusion,
     ),
     _logic(

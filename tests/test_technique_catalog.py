@@ -11,6 +11,10 @@ from sudoku_app.core.data_structure import SudokuState
 
 
 class TechniqueCatalogStructureTests(unittest.TestCase):
+    def test_catalog_declares_the_authoritative_taxonomy_contract(self):
+        self.assertEqual(catalog.TAXONOMY_SOURCE, "TASSIONOMIA.txt")
+        self.assertEqual(catalog.TAXONOMY_CONTRACT_VERSION, "P14.1")
+
     def test_catalog_is_internally_valid(self):
         self.assertEqual(
             catalog.validate_catalog(),
@@ -34,8 +38,14 @@ class TechniqueCatalogStructureTests(unittest.TestCase):
     def test_representative_ids_are_stable(self):
         expected = {
             "Last Value": "single.last_value",
+            "Direct Hidden Pair": "direct.hidden_pair",
+            "Direct Hidden Triplet": "direct.hidden_triple",
             "X-Wing": "fish.basic.2",
+            "XY-Wing": "wing.xy",
             "Skyscraper": "sdp.skyscraper",
+            "Sue de Coq": "misc.sue_de_coq.basic",
+            "Extended Sue de Coq": "misc.sue_de_coq.extended",
+            "Aligned Triplet Exclusion": "exclusion.aligned_triple",
             "Unique Rectangle Type 1": "unique.ur.1",
             "Forcing Chain": "se.forcing_chain",
             "Nested Forcing Chain": "nested.forcing_chain",
@@ -102,6 +112,44 @@ class TechniqueCatalogStructureTests(unittest.TestCase):
             catalog.resolve_technique("ur1").id,
             "unique.ur.1",
         )
+        self.assertEqual(
+            catalog.resolve_technique("Y-Wing").id,
+            "wing.xy",
+        )
+
+    def test_legacy_ids_migrate_to_taxonomy_ids(self):
+        expected = {
+            "direct.hidden.2": "direct.hidden_pair",
+            "direct.hidden.3": "direct.hidden_triple",
+            "intersection.sue_de_coq": "misc.sue_de_coq.basic",
+            "intersection.sue_de_coq.extended": (
+                "misc.sue_de_coq.extended"
+            ),
+            "exclusion.aligned_triplet": "exclusion.aligned_triple",
+        }
+        for legacy_id, current_id in expected.items():
+            with self.subTest(legacy_id=legacy_id):
+                self.assertEqual(
+                    catalog.resolve_legacy_technique_id(legacy_id).id,
+                    current_id,
+                )
+
+    def test_semantic_inference_engine_is_separate_from_execution_tier(self):
+        expected = {
+            "fish.basic.2": ("fish", "local"),
+            "color.simple.trap": ("coloring", "logic"),
+            "chain.grouped.aic": ("group", "logic"),
+            "chain.als_aic": ("als", "local"),
+            "forcing.dynamic": ("dynamic", "logic"),
+            "forcing.complete_tree": ("complete_tree", "complete_tree"),
+        }
+        for technique_id, engines in expected.items():
+            with self.subTest(technique_id=technique_id):
+                definition = catalog.technique_definition(technique_id)
+                self.assertEqual(
+                    (definition.inference_engine, definition.engine_type),
+                    engines,
+                )
 
     def test_complete_tree_has_its_own_taxonomy_and_legacy_aliases(self):
         definition = catalog.technique_definition("forcing.complete_tree")
@@ -192,6 +240,7 @@ class TechniqueCatalogRegistryTests(unittest.TestCase):
         self.assertEqual(move["technique_id"], "single.naked")
         self.assertIsNone(move["parent_id"])
         self.assertEqual(move["rating_kind"], "se")
+        self.assertEqual(move["inference_engine"], "local")
 
 
 if __name__ == "__main__":

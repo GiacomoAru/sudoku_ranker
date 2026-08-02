@@ -1,4 +1,8 @@
-"""Catalogo autorevole delle tecniche attualmente supportate.
+"""Proiezione eseguibile della tassonomia autorevole del progetto.
+
+La fonte normativa e' ``TASSIONOMIA.txt``; questo modulo ne applica il
+contratto P14.1 a ID, famiglie, motori e profili metrici. Le mappe generate in
+fondo al file sono soltanto viste di compatibilita'.
 
 Il modulo non importa il solver né i detector: in questo modo difficoltà,
 tassonomia e registro possono dipendere dal catalogo senza creare cicli di
@@ -16,7 +20,17 @@ from dataclasses import dataclass
 import math
 
 
-TECHNIQUE_CATALOG_VERSION = "1.8.0"
+TAXONOMY_SOURCE = "TASSIONOMIA.txt"
+TAXONOMY_CONTRACT_VERSION = "P14.1"
+TECHNIQUE_CATALOG_VERSION = "1.9.0"
+
+LEGACY_TECHNIQUE_ID_ALIASES = {
+    "direct.hidden.2": "direct.hidden_pair",
+    "direct.hidden.3": "direct.hidden_triple",
+    "intersection.sue_de_coq": "misc.sue_de_coq.basic",
+    "intersection.sue_de_coq.extended": "misc.sue_de_coq.extended",
+    "exclusion.aligned_triplet": "exclusion.aligned_triple",
+}
 
 LEGACY_TECHNIQUE_ALIASES = {
     "Nested Forcing Chain": "Complete Forcing Tree",
@@ -25,6 +39,18 @@ LEGACY_TECHNIQUE_ALIASES = {
 
 RATING_KINDS = frozenset({"se", "pseudo_se", "project"})
 ENGINE_TYPES = frozenset({"local", "logic", "nested", "complete_tree"})
+INFERENCE_ENGINES = frozenset({
+    "local",
+    "fish",
+    "coloring",
+    "chain",
+    "group",
+    "als",
+    "forcing",
+    "dynamic",
+    "nested",
+    "complete_tree",
+})
 IMPLEMENTATION_STATUSES = frozenset({
     "implemented",
     "disabled",
@@ -60,6 +86,7 @@ class TechniqueDefinition:
     rating_kind: str
 
     engine_type: str
+    inference_engine: str
     fallback_tier: int
     priority: int
 
@@ -139,8 +166,13 @@ CHAIN_METRICS = (
     "chain_count",
     "max_chain_length",
 )
+GROUP_METRICS = CHAIN_METRICS + (
+    "group_node_count",
+    "max_group_size",
+)
 ALS_METRICS = CHAIN_METRICS + (
     "als_node_count",
+    "als_cell_count",
     "rcc_count",
 )
 COLORING_METRICS = CHAIN_METRICS + (
@@ -179,12 +211,43 @@ def _entry(
     se_equivalent_parent_id=None,
     rating_kind="se",
     engine_type="local",
+    inference_engine=None,
     fallback_tier=0,
     implementation_status="implemented",
     abstract=False,
     requires_unique_solution=False,
     proof_metric_profile=LOCAL_METRICS,
 ):
+    if inference_engine is None:
+        if detector_id == "fish":
+            inference_engine = "fish"
+        elif detector_id == "coloring":
+            inference_engine = "coloring"
+        elif detector_id == "als":
+            inference_engine = "als"
+        elif detector_id == "grouped_chain":
+            inference_engine = "group"
+        elif detector_id in {
+            "skyscraper", "two_string_kite", "empty_rectangle", "w_wing",
+            "unique_loop", "bidirectional_x_cycle", "xy_chain",
+            "bidirectional_y_cycle", "forcing_x_chain", "forcing_chain",
+            "aic", "bidirectional_cycle",
+        }:
+            inference_engine = "chain"
+        elif detector_id in {
+            "nishio", "cell_forcing_chain", "region_forcing_chain",
+        }:
+            inference_engine = "forcing"
+        elif detector_id in {
+            "dynamic_forcing_chain", "dynamic_forcing_chain_plus",
+        }:
+            inference_engine = "dynamic"
+        elif engine_type == "nested":
+            inference_engine = "nested"
+        elif engine_type == "complete_tree":
+            inference_engine = "complete_tree"
+        else:
+            inference_engine = "local"
     return {
         "id": technique_id,
         "canonical_name": canonical_name,
@@ -197,6 +260,7 @@ def _entry(
         "base_difficulty": float(base_difficulty),
         "rating_kind": rating_kind,
         "engine_type": engine_type,
+        "inference_engine": inference_engine,
         "fallback_tier": int(fallback_tier),
         "detector_id": detector_id,
         "implementation_status": implementation_status,
@@ -259,7 +323,7 @@ _CATALOG_ROWS = (
         proof_metric_profile=SUBSET_METRICS,
     ),
     _entry(
-        "direct.hidden.2", "Direct Hidden Pair", 3.0,
+        "direct.hidden_pair", "Direct Hidden Pair", 3.0,
         "subsets", "subsets_intersections", "direct_hidden_subset:2",
         proof_metric_profile=SUBSET_METRICS,
     ),
@@ -275,7 +339,7 @@ _CATALOG_ROWS = (
         proof_metric_profile=SUBSET_METRICS,
     ),
     _entry(
-        "direct.hidden.3", "Direct Hidden Triplet", 3.4,
+        "direct.hidden_triple", "Direct Hidden Triplet", 3.4,
         "subsets", "subsets_intersections", "direct_hidden_subset:3",
         proof_metric_profile=SUBSET_METRICS,
     ),
@@ -520,9 +584,9 @@ _CATALOG_ROWS = (
         proof_metric_profile=FISH_METRICS,
     ),
     _entry(
-        "wing.xy", "Y-Wing", 4.2,
+        "wing.xy", "XY-Wing", 4.2,
         "wings", "fish_wings", "y_wing",
-        aliases=_aliases("XY-Wing"),
+        aliases=_aliases("Y-Wing"),
         proof_metric_profile=CHAIN_METRICS,
     ),
     _entry(
@@ -880,7 +944,7 @@ _CATALOG_ROWS = (
         parent_id="se.forcing_x_chain",
         se_equivalent_parent_id="se.forcing_x_chain",
         rating_kind="pseudo_se", engine_type="logic",
-        proof_metric_profile=CHAIN_METRICS,
+        proof_metric_profile=GROUP_METRICS,
     ),
     _entry(
         "loop.grouped.dnl", "Grouped Nice Loop", 7.3,
@@ -889,7 +953,7 @@ _CATALOG_ROWS = (
         parent_id="se.forcing_chain",
         se_equivalent_parent_id="se.forcing_chain",
         rating_kind="pseudo_se", engine_type="logic",
-        proof_metric_profile=CHAIN_METRICS,
+        proof_metric_profile=GROUP_METRICS,
     ),
     _entry(
         "chain.grouped.aic", "Grouped AIC", 7.4,
@@ -897,7 +961,7 @@ _CATALOG_ROWS = (
         parent_id="se.forcing_chain",
         se_equivalent_parent_id="se.forcing_chain",
         rating_kind="pseudo_se", engine_type="logic",
-        proof_metric_profile=CHAIN_METRICS,
+        proof_metric_profile=GROUP_METRICS,
     ),
     _entry(
         "loop.grouped.cnl", "Grouped Continuous Nice Loop", 7.6,
@@ -905,7 +969,7 @@ _CATALOG_ROWS = (
         parent_id="se.bidirectional_cycle",
         se_equivalent_parent_id="se.bidirectional_cycle",
         rating_kind="pseudo_se", engine_type="logic",
-        proof_metric_profile=CHAIN_METRICS,
+        proof_metric_profile=GROUP_METRICS,
     ),
 
     # Almost Locked Sets e catene ALS. Tutte le classificazioni consumano
@@ -946,13 +1010,13 @@ _CATALOG_ROWS = (
         rating_kind="pseudo_se", proof_metric_profile=ALS_METRICS,
     ),
     _entry(
-        "intersection.sue_de_coq", "Sue de Coq", 5.0,
+        "misc.sue_de_coq.basic", "Sue de Coq", 5.0,
         "exclusion", "uniqueness_exclusion", "sue_de_coq",
         aliases=_aliases("SdC"), rating_kind="pseudo_se",
         proof_metric_profile=SUBSET_METRICS,
     ),
     _entry(
-        "intersection.sue_de_coq.extended", "Extended Sue de Coq", 5.2,
+        "misc.sue_de_coq.extended", "Extended Sue de Coq", 5.2,
         "exclusion", "uniqueness_exclusion", "sue_de_coq",
         aliases=_aliases("Extended SdC"), rating_kind="pseudo_se",
         proof_metric_profile=SUBSET_METRICS,
@@ -969,7 +1033,7 @@ _CATALOG_ROWS = (
         aliases=_aliases("APE"), proof_metric_profile=FORCING_METRICS,
     ),
     _entry(
-        "exclusion.aligned_triplet", "Aligned Triplet Exclusion", 7.5,
+        "exclusion.aligned_triple", "Aligned Triplet Exclusion", 7.5,
         "exclusion", "uniqueness_exclusion", "aligned_triplet_exclusion",
         aliases=_aliases("ATE"), rating_kind="pseudo_se",
         proof_metric_profile=FORCING_METRICS,
@@ -1202,6 +1266,10 @@ def validate_catalog(definitions=TECHNIQUE_DEFINITIONS):
             raise CatalogValidationError(
                 f"Engine non valido per {definition.id!r}."
             )
+        if definition.inference_engine not in INFERENCE_ENGINES:
+            raise CatalogValidationError(
+                f"Inference engine non valido per {definition.id!r}."
+            )
         if definition.fallback_tier not in (0, 1, 2):
             raise CatalogValidationError(
                 f"Fallback tier non valido per {definition.id!r}."
@@ -1354,6 +1422,14 @@ def technique_definition(technique_id):
         return TECHNIQUE_BY_ID[str(technique_id)]
     except KeyError as error:
         raise KeyError(f"ID tecnica sconosciuto: {technique_id!r}.") from error
+
+
+def resolve_legacy_technique_id(technique_id):
+    """Migra esplicitamente gli ID pre-P14.1 senza accettarli nel catalogo."""
+    current_id = LEGACY_TECHNIQUE_ID_ALIASES.get(
+        str(technique_id), str(technique_id)
+    )
+    return technique_definition(current_id)
 
 
 def resolve_technique(name, *, namespace=None):
@@ -1515,6 +1591,8 @@ __all__ = [
     "FAMILY_TO_STRATEGY",
     "FAMILY_DISPLAY_NAMES_IT",
     "IMPLEMENTATION_STATUSES",
+    "INFERENCE_ENGINES",
+    "LEGACY_TECHNIQUE_ID_ALIASES",
     "LEGACY_TECHNIQUE_ALIASES",
     "MODERN_TECHNIQUE_PARENT",
     "RATING_KINDS",
@@ -1523,6 +1601,8 @@ __all__ = [
     "TECHNIQUE_BY_ID",
     "TECHNIQUE_CATALOG",
     "TECHNIQUE_CATALOG_VERSION",
+    "TAXONOMY_CONTRACT_VERSION",
+    "TAXONOMY_SOURCE",
     "TECHNIQUE_DEFINITIONS",
     "TECHNIQUE_DIFFICULTY",
     "TECHNIQUE_FAMILY",
@@ -1535,6 +1615,7 @@ __all__ = [
     "TechniqueDefinition",
     "resolve_technique",
     "resolve_legacy_technique",
+    "resolve_legacy_technique_id",
     "technique_definition",
     "validate_catalog",
     "validate_detector_registry",

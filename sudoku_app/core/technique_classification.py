@@ -28,6 +28,70 @@ _STATIC_TECHNIQUES = frozenset({
 })
 
 
+def classify_als_aic(logic, *, eliminations=()):
+    """Valida una ALS-AIC dal ``ProofDAG`` tipizzato, non dal nome."""
+    if not isinstance(logic, Mapping):
+        return None
+    try:
+        dag = proof_model.proof_dag(logic.get("proof_dag"))
+    except (KeyError, TypeError, ValueError):
+        return None
+    if (
+        dag is None
+        or proof_model.proof_structural_family(dag) != "als"
+        or proof_model.dependency_shape(dag) != "chain"
+    ):
+        return None
+    wanted = _triplets(eliminations)
+    represented = set()
+    for chain in dag.derived_chains():
+        if len(chain) < 6:
+            continue
+        als_literals = [
+            literal for literal in chain
+            if proof_model.is_als_literal(literal)
+        ]
+        candidate_literals = [
+            literal for literal in chain
+            if not proof_model.is_als_literal(literal)
+            and not proof_model.is_group_literal(literal)
+        ]
+        if (
+            not als_literals
+            or not candidate_literals
+            or not any(len(literal[0].cells) >= 2 for literal in als_literals)
+            or not all(
+                proof_model.literal_state(first)
+                != proof_model.literal_state(second)
+                for first, second in zip(chain, chain[1:])
+            )
+        ):
+            continue
+        first, last = chain[0], chain[-1]
+        if (
+            proof_model.is_als_literal(first)
+            or proof_model.is_group_literal(first)
+            or proof_model.is_als_literal(last)
+            or proof_model.is_group_literal(last)
+            or first[:3] != last[:3]
+            or not first[3]
+            or last[3]
+        ):
+            continue
+        reasons = {
+            node.reason for node in dag.nodes.values()
+            if node.conclusion in chain
+        }
+        if "als-strong" not in reasons or not reasons & {
+            "als-weak", "als-rcc"
+        }:
+            continue
+        represented.add(first[:3])
+    if not wanted or not wanted <= represented:
+        return None
+    return "chain.als_aic"
+
+
 def _literal(value) -> Literal | None:
     if not isinstance(value, Mapping):
         return None

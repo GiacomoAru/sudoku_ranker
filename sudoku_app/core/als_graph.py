@@ -7,12 +7,13 @@ consumer usa la stessa definizione autorevole di Restricted Common Candidate.
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from itertools import combinations
 from typing import Iterable
 
 from .data_structure import peers
+from .als_nodes import ALSNode
 
 
 Cell = tuple[int, int]
@@ -268,8 +269,272 @@ class ALSGraph:
         )
 
 
+class ALSImplicationGraph:
+    """Estensione tipizzata del grafo statico con proposizioni ALS.
+
+    Il grafo candidato di P12 resta autorevole per X/Y. Questa vista aggiunge
+    soltanto i link ALS, senza duplicare o modificare il grafo memorizzato in
+    cache: puo' quindi essere usata da detector diversi con budget propri.
+    """
+
+    WEAK_REASONS = frozenset({"peer", "y", "als-weak", "als-rcc"})
+    ALL_REASONS = frozenset({
+        "peer", "x", "y", "als-weak", "als-rcc", "als-strong",
+    })
+
+    def __init__(
+        self,
+        graph: ALSGraph,
+        *,
+        require_multicell: bool = True,
+        max_alses: int = 64,
+    ):
+        from . import logic_engine
+
+        self.als_graph = graph
+        self.state = graph.state
+        self.base_graph = logic_engine.static_implication_graph(graph.state)
+        eligible_alses = tuple(sorted((
+            als
+            for als in graph.als_nodes
+            if not require_multicell or len(als.cells) >= 2
+        ), key=lambda als: (
+            len(als.cells),
+            tuple(sorted(als.cells)),
+            tuple(sorted(als.candidates)),
+        )))
+        max_alses = max(1, int(max_alses))
+        selected_alses = eligible_alses[:max_alses]
+        self.search_truncated = len(selected_alses) < len(eligible_alses)
+        self.als_nodes = tuple(
+            ALSNode.from_als(als, graph.state, digit)
+            for als in selected_alses
+            for digit in sorted(als.candidates)
+        )
+        self.by_als_digit = {
+            (node.als_id, node.digit): node for node in self.als_nodes
+        }
+
+        raw = defaultdict(dict)
+
+        def add_edge(
+            source,
+            target,
+            reason,
+            *,
+            support_candidates=(),
+            support_house_ids=(),
+        ):
+            support = raw[source].setdefault(
+                (target, reason),
+                {"candidates": set(), "houses": set()},
+            )
+            support["candidates"].update(support_candidates)
+            support["houses"].update(support_house_ids)
+
+        for source, edges in self.base_graph.adjacency.items():
+            for edge in edges:
+                add_edge(
+                    source,
+                    edge.target,
+                    edge.reason,
+                    support_candidates=edge.support_candidates,
+                    support_house_ids=edge.support_house_ids,
+                )
+
+        # Se una cifra dell'ALS e' falsa, tutte le altre cifre dell'ALS sono
+        # vere almeno una volta: N celle rimangono con esattamente N cifre.
+        for als in selected_alses:
+            support = tuple(sorted(
+                (row, column, digit)
+                for row, column in als.cells
+                for digit in self.state.candidates[row][column]
+                if digit in als.candidates
+            ))
+            for first_digit in sorted(als.candidates):
+                first = self.by_als_digit[(als.id, first_digit)]
+                for second_digit in sorted(als.candidates - {first_digit}):
+                    second = self.by_als_digit[(als.id, second_digit)]
+                    add_edge(
+                        logic_engine._node_literal(first, False),
+                        logic_engine._node_literal(second, True),
+                        "als-strong",
+                        support_candidates=support,
+                        support_house_ids=(als.house_id,),
+                    )
+
+        # Gli RCC sono weak link fra due proposizioni ALS della stessa cifra.
+        for rcc in graph.rccs:
+            first = self.by_als_digit.get((rcc.left_als_id, rcc.digit))
+            second = self.by_als_digit.get((rcc.right_als_id, rcc.digit))
+            if first is None or second is None:
+                continue
+            house_ids = self.base_graph._visibility_house_ids(first, second)
+            add_edge(
+                logic_engine._node_literal(first, True),
+                logic_engine._node_literal(second, False),
+                "als-rcc",
+                support_candidates=rcc.support_candidates,
+                support_house_ids=house_ids,
+            )
+            add_edge(
+                logic_engine._node_literal(second, True),
+                logic_engine._node_literal(first, False),
+                "als-rcc",
+                support_candidates=rcc.support_candidates,
+                support_house_ids=house_ids,
+            )
+
+        candidates_by_digit = defaultdict(list)
+        for candidate in self.base_graph.all_candidates:
+            candidates_by_digit[candidate[2]].append(candidate)
+        for node in self.als_nodes:
+            for candidate in candidates_by_digit[node.digit]:
+                if not self.base_graph._node_visibility(node, candidate):
+                    continue
+                support = (*node.candidates, candidate)
+                house_ids = self.base_graph._visibility_house_ids(
+                    node, candidate
+                )
+                add_edge(
+                    logic_engine._node_literal(node, True),
+                    logic_engine._node_literal(candidate, False),
+                    "als-weak",
+                    support_candidates=support,
+                    support_house_ids=house_ids,
+                )
+                add_edge(
+                    logic_engine._node_literal(candidate, True),
+                    logic_engine._node_literal(node, False),
+                    "als-weak",
+                    support_candidates=support,
+                    support_house_ids=house_ids,
+                )
+
+        self.adjacency = {
+            source: tuple(
+                logic_engine.Edge(
+                    target=target,
+                    reason=reason,
+                    support_candidates=tuple(sorted(support["candidates"])),
+                    support_house_ids=tuple(sorted(support["houses"])),
+                )
+                for (target, reason), support in sorted(
+                    targets.items(),
+                    key=lambda item: (
+                        logic_engine._graph_literal_key(item[0][0]),
+                        item[0][1],
+                    ),
+                )
+            )
+            for source, targets in raw.items()
+        }
+        self.nodes = tuple(sorted(
+            (*self.base_graph.all_candidates, *self.als_nodes),
+            key=logic_engine._node_key,
+        ))
+
+    def edges(self, source, allowed=ALL_REASONS):
+        allowed = frozenset(allowed)
+        return tuple(
+            edge for edge in self.adjacency.get(source, ())
+            if edge.reason in allowed
+        )
+
+    def edge(self, source, target, reason):
+        return next((
+            edge
+            for edge in self.adjacency.get(source, ())
+            if edge.target == target and edge.reason == reason
+        ), None)
+
+    def weak_reason(self, first, second):
+        from . import logic_engine
+        source = logic_engine._node_literal(first, True)
+        target = logic_engine._node_literal(second, False)
+        for reason in sorted(self.WEAK_REASONS):
+            if self.edge(source, target, reason) is not None:
+                return reason
+        return None
+
+    def shortest_path(
+        self,
+        source,
+        target,
+        *,
+        allowed=ALL_REASONS,
+        minimum_edges=1,
+        maximum_edges=14,
+        require_als=True,
+        require_candidate=True,
+        max_states=32_768,
+    ):
+        from . import logic_engine
+
+        self.last_search_truncated = False
+        start_node = logic_engine._literal_node(source)
+        start_state = (
+            source,
+            isinstance(start_node, ALSNode),
+            not isinstance(start_node, ALSNode),
+        )
+        queue = deque([(start_state, 0)])
+        parent = {start_state: None}
+        parent_reason = {}
+
+        while queue and len(parent) <= max_states:
+            (current, used_als, used_candidate), depth = queue.popleft()
+            if (
+                current == target
+                and depth >= minimum_edges
+                and (used_als or not require_als)
+                and (used_candidate or not require_candidate)
+            ):
+                states = []
+                cursor = (current, used_als, used_candidate)
+                while cursor is not None:
+                    states.append(cursor)
+                    cursor = parent[cursor]
+                states.reverse()
+                return (
+                    [state[0] for state in states],
+                    [parent_reason[state] for state in states[1:]],
+                )
+            if maximum_edges is not None and depth >= maximum_edges:
+                continue
+            for edge in self.edges(current, allowed):
+                node = logic_engine._literal_node(edge.target)
+                next_state = (
+                    edge.target,
+                    used_als or isinstance(node, ALSNode),
+                    used_candidate or not isinstance(node, ALSNode),
+                )
+                if next_state in parent:
+                    continue
+                parent[next_state] = (current, used_als, used_candidate)
+                parent_reason[next_state] = edge.reason
+                queue.append((next_state, depth + 1))
+        self.last_search_truncated = bool(queue)
+        return None
+
+    def chain_supports(self, literals, reasons):
+        if len(reasons) != len(literals) - 1:
+            raise ValueError("Numero di archi ALS-AIC incoerente.")
+        result = []
+        for source, target, reason in zip(literals, literals[1:], reasons):
+            edge = self.edge(source, target, reason)
+            if edge is None:
+                raise ValueError("La ALS-AIC contiene un arco non validato.")
+            result.append({
+                "support_candidates": edge.support_candidates,
+                "support_house_ids": edge.support_house_ids,
+            })
+        return tuple(result)
+
+
 __all__ = [
     "ALSGraph",
+    "ALSImplicationGraph",
     "Candidate",
     "Cell",
     "RCC",

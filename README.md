@@ -15,7 +15,8 @@ Repository: [github.com/GiacomoAru/sudoku_ranker](https://github.com/GiacomoAru/
 - Simple e Multi Colors sul grafo delle coppie coniugate;
 - X-Chain, XY-Chain, AIC, Nice Loop e varianti Grouped sul grafo d'implicazione condiviso;
 - motore ALS/RCC comune per ALS-XZ, ALS-XY-Wing, ALS Chain, Death Blossom
-  e generalized wings fino a TUVWXYZ-Wing;
+  e generalized wings fino a TUVWXYZ-Wing, più ALS-AIC reali con nodi ALS
+  tipizzati;
 - ordinamento delle tecniche secondo difficoltà crescente;
 - tre metriche complementari di difficoltà;
 - riconoscimento locale da foto, senza servizi esterni;
@@ -152,10 +153,17 @@ Candidates. Gli ALS equivalenti sono deduplicati e un RCC esiste soltanto se
 ogni sua occorrenza in un ALS vede ogni occorrenza nell'altro.
 
 Lo stesso motore produce Singly e Doubly Linked ALS-XZ, ALS-XY-Wing, ALS
-Chain, Death Blossom e ALS-AIC. WXYZ, VWXYZ, UVWXYZ e TUVWXYZ-Wing sono
+Chain, Death Blossom e ALS-AIC. Queste ultime attraversano un grafo misto di
+candidati e `ALSNode` multicella; una normale XY-Chain non viene rinominata
+ALS-AIC. WXYZ, VWXYZ, UVWXYZ e TUVWXYZ-Wing sono
 classificazioni strutturali delle corrispondenti deduzioni ALS-XZ; il payload
 mantiene sia il nome specifico sia il parent ALS che ne giustifica la logica.
 Le prove conservano ogni ALS come nodo strutturato nel `ProofDAG`.
+
+`TASSIONOMIA.txt` è la fonte normativa di ID, famiglie e precedenze. Il
+catalogo Python ne è la proiezione eseguibile: `inference_engine` descrive il
+motore logico (`fish`, `group`, `als`, ecc.), mentre `engine_type` descrive il
+livello esecutivo (`local`, `logic`, `nested`, `complete_tree`).
 
 ## Riconoscimento da foto
 

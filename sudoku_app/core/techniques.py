@@ -132,6 +132,7 @@ def technique_metadata(technique):
         "rating_kind": definition.rating_kind,
         "detector_id": definition.detector_id,
         "engine_type": definition.engine_type,
+        "inference_engine": definition.inference_engine,
         "fallback_tier": definition.fallback_tier,
     }
 
@@ -234,6 +235,7 @@ def _build_move(
         "rating_kind": definition.rating_kind,
         "detector_id": definition.detector_id,
         "engine_type": definition.engine_type,
+        "inference_engine": definition.inference_engine,
         "fallback_tier": definition.fallback_tier,
         "base_difficulty": base_difficulty,
         "difficulty": max(base_difficulty, float(difficulty)),
@@ -969,7 +971,14 @@ def _als_description(deduction):
             f"{deduction.endpoint_digit}, eliminabile dai target che ne "
             "vedono tutte le occorrenze."
         )
-    if deduction.technique_id in {"als.chain", "chain.als_aic"}:
+    if deduction.technique_id == "chain.als_aic":
+        return (
+            f"Una AIC mista collega CandidateNode e {count} ALSNode tramite "
+            "link strong interni agli ALS e weak link a visibilita' completa. "
+            f"L'ipotesi sul candidato {deduction.endpoint_digit} implica la "
+            "propria negazione."
+        )
+    if deduction.technique_id == "als.chain":
         endpoint_digits = (
             [deduction.endpoint_digit]
             if deduction.endpoint_digit is not None
@@ -1000,6 +1009,15 @@ def _als_move(state, deduction):
         deduction.technique_id
     )
     payload = deduction.to_dict()
+    logic = deduction.proof_payload()
+    if (
+        deduction.technique_id == "chain.als_aic"
+        and technique_classification.classify_als_aic(
+            logic,
+            eliminations=deduction.eliminations,
+        ) != "chain.als_aic"
+    ):
+        return None
     return _build_move(
         technique=definition.canonical_name,
         family=technique_catalog.FAMILY_DISPLAY_NAMES_IT[definition.family_id],
@@ -1010,7 +1028,7 @@ def _als_move(state, deduction):
         primary=deduction.primary_cells,
         proof_count=deduction.equivalent_pattern_count,
         extra={
-            "logic": deduction.proof_payload(),
+            "logic": logic,
             "als_pattern": payload,
             "als_parent_technique_id": deduction.als_parent_technique_id,
             "als_node_count": len(deduction.als_nodes),
@@ -1129,7 +1147,7 @@ def y_wing(state):
             targets.discard((pr, pc))
             elim = [(r, c, z) for (r, c) in targets if state.grid[r, c] == 0]
             mv = _elim_move(
-                'Y-Wing', 'Wings', 4,
+                'XY-Wing', 'Wings', 4,
                 f'Pivot R{pr+1}C{pc+1}{sorted(pcand)} con ali R{w1r+1}C{w1c+1}{sorted(c1)} '
                 f'e R{w2r+1}C{w2c+1}{sorted(c2)}: il candidato {z} eliminato dalle celle che vedono entrambe le ali.',
                 elim, [(pr, pc), (w1r, w1c), (w2r, w2c)], state)

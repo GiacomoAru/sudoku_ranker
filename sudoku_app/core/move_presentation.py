@@ -201,7 +201,10 @@ def _visual_literal(literal):
         normalized = proof_model.normalize_literal(literal)
     except (KeyError, TypeError, ValueError):
         return None
-    if normalized is not None and proof_model.is_group_literal(normalized):
+    if normalized is not None and (
+        proof_model.is_group_literal(normalized)
+        or proof_model.is_als_literal(normalized)
+    ):
         return proof_model.literal_record(normalized)
     parts = _literal_parts(normalized)
     if parts is None:
@@ -304,6 +307,17 @@ def build_visual_evidence(
                 )
                 cell_roles[(row, column)].add("group")
             return normalized
+        if proof_model.is_als_literal(normalized):
+            als, is_on = normalized
+            state_label = "on" if is_on else "off"
+            als_roles = {"als", *roles}
+            for row, column, value in als.candidates:
+                add_candidate(
+                    row, column, value, *als_roles,
+                    literal_state=state_label,
+                )
+                cell_roles[(row, column)].add("als")
+            return normalized
         row, column, value, is_on = normalized
         add_candidate(
             row, column, value, *roles,
@@ -353,7 +367,10 @@ def build_visual_evidence(
             if source is None or target is None:
                 continue
             target_roles = set()
-            if not proof_model.is_group_literal(target):
+            if (
+                not proof_model.is_group_literal(target)
+                and not proof_model.is_als_literal(target)
+            ):
                 target_roles = candidate_roles[_candidate_key(*target[:3])]
             visual_link = _normalise_visual_link({
                 "source": link.get("source"),
@@ -365,6 +382,8 @@ def build_visual_evidence(
                         "grouped-implication"
                         if proof_model.is_group_literal(source)
                         or proof_model.is_group_literal(target)
+                        or proof_model.is_als_literal(source)
+                        or proof_model.is_als_literal(target)
                         else "implication"
                     )
                 ),

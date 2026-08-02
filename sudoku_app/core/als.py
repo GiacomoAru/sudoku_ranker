@@ -12,7 +12,8 @@ from dataclasses import dataclass, replace
 from itertools import combinations
 from typing import Iterable
 
-from .als_graph import ALSGraph, RCC
+from .als_graph import ALSGraph, ALSImplicationGraph, RCC
+from .als_nodes import ALSNode
 from .data_structure import UNITS, peers
 
 
@@ -22,6 +23,9 @@ Candidate = tuple[int, int, int]
 DEFAULT_MAX_ALS_CELLS = 8
 DEFAULT_MAX_CHAIN_ALSES = 8
 DEFAULT_MAX_RAW_RESULTS = 512
+DEFAULT_MAX_AIC_ALSES = 64
+DEFAULT_MAX_AIC_SEARCH_ATTEMPTS = 256
+DEFAULT_MAX_AIC_PATH_STATES = 2_048
 
 GENERALIZED_WING_IDS = {
     (3, False): "wing.wxyz",
@@ -354,11 +358,123 @@ class ALSDeduction:
             conclusions=tuple(conclusion_ids),
             edge_supports=tuple(supports),
         )
+        if evidence_id is not None:
+            dag.nodes[evidence_id].payload["rcc_count"] = (
+                len(self.rccs) + len(self.stem_links)
+            )
         return {
             "kind": self.technique_id,
             "proof_dag": dag.to_dict(),
             "als_node_count": len(self.als_nodes),
             "rcc_count": len(self.rccs) + len(self.stem_links),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ALSAICDeduction:
+    """AIC mista costruita sul grafo CandidateNode/ALSNode."""
+
+    technique_id: str
+    als_nodes: tuple[ALS, ...]
+    rccs: tuple[RCC, ...]
+    eliminations: frozenset[Candidate]
+    chains: tuple[tuple[object, ...], ...]
+    chain_reasons: tuple[tuple[str, ...], ...]
+    chain_supports: tuple[tuple[dict, ...], ...]
+    equivalent_pattern_count: int = 1
+    endpoint_digit: int | None = None
+    stem_cell: Cell | None = None
+    stem_links: tuple = ()
+    stem_link_occurrences: tuple = ()
+    parent_technique_id: str | None = "se.forcing_chain"
+    search_truncated: bool = False
+    search_attempt_count: int = 0
+    search_budget: tuple[int, int, int] = (
+        DEFAULT_MAX_AIC_ALSES,
+        DEFAULT_MAX_AIC_SEARCH_ATTEMPTS,
+        DEFAULT_MAX_AIC_PATH_STATES,
+    )
+
+    def __post_init__(self):
+        if self.technique_id != "chain.als_aic":
+            raise ValueError("ALSAICDeduction richiede chain.als_aic.")
+        if not self.als_nodes or not any(
+            len(als.cells) >= 2 for als in self.als_nodes
+        ):
+            raise ValueError("Una ALS-AIC richiede almeno un ALS multicella.")
+        if not self.eliminations or not self.chains:
+            raise ValueError("Una ALS-AIC deve avere prova e conclusione.")
+        if len(self.chains) != len(self.chain_reasons):
+            raise ValueError("Catene e motivi ALS-AIC non coincidono.")
+        for chain, reasons in zip(self.chains, self.chain_reasons):
+            if len(reasons) != len(chain) - 1:
+                raise ValueError("Numero di archi ALS-AIC non valido.")
+            structured = [
+                literal[0]
+                for literal in chain
+                if isinstance(literal, tuple)
+                and len(literal) == 2
+                and isinstance(literal[0], ALSNode)
+            ]
+            candidates = [
+                literal for literal in chain
+                if isinstance(literal, tuple) and len(literal) == 4
+            ]
+            if not structured or not candidates:
+                raise ValueError("Una ALS-AIC deve essere realmente mista.")
+
+    @property
+    def primary_cells(self) -> tuple[Cell, ...]:
+        cells = set().union(*(als.cells for als in self.als_nodes))
+        cells.update((row, column) for row, column, _ in self.eliminations)
+        return tuple(sorted(cells))
+
+    @property
+    def als_parent_technique_id(self) -> str:
+        return "se.forcing_chain"
+
+    def to_dict(self) -> dict:
+        from .proof import literal_record
+        return {
+            "technique_id": self.technique_id,
+            "als_parent_technique_id": self.als_parent_technique_id,
+            "als_nodes": [als.to_dict() for als in self.als_nodes],
+            "rccs": [rcc.to_dict() for rcc in self.rccs],
+            "eliminations": [list(item) for item in sorted(self.eliminations)],
+            "chains": [
+                [literal_record(literal) for literal in chain]
+                for chain in self.chains
+            ],
+            "equivalent_pattern_count": self.equivalent_pattern_count,
+            "search": {
+                "truncated": self.search_truncated,
+                "attempt_count": self.search_attempt_count,
+                "max_alses": self.search_budget[0],
+                "max_endpoint_attempts": self.search_budget[1],
+                "max_path_states": self.search_budget[2],
+            },
+        }
+
+    def proof_payload(self) -> dict:
+        from .proof import ProofDAG
+        dag = ProofDAG.from_chains(
+            assumptions=tuple(chain[0] for chain in self.chains),
+            chains=self.chains,
+            chain_reasons=self.chain_reasons,
+            chain_supports=self.chain_supports,
+            proof_kind="als-endpoint-aic",
+            eliminations=self.eliminations,
+        )
+        return {
+            "kind": "als-endpoint-aic",
+            "proof_dag": dag.to_dict(),
+            "search": {
+                "truncated": self.search_truncated,
+                "attempt_count": self.search_attempt_count,
+                "max_alses": self.search_budget[0],
+                "max_endpoint_attempts": self.search_budget[1],
+                "max_path_states": self.search_budget[2],
+            },
         }
 
 
@@ -508,7 +624,7 @@ def find_als_chains(
     max_alses: int = DEFAULT_MAX_CHAIN_ALSES,
     max_results: int = DEFAULT_MAX_RAW_RESULTS,
 ) -> tuple[ALSDeduction, ...]:
-    """Cammini ALS-RCC compatibili; distingue ALS Chain e ALS-AIC."""
+    """Cammini ALS-RCC puri, classificati sempre come ALS Chain."""
 
     from collections import deque
 
@@ -549,13 +665,7 @@ def find_als_chains(
             links[0].digit,
             links[-1].digit,
         }
-        has_multi_rcc_link = any(
-            len(graph.between(left, right)) > 1
-            for left, right in zip(path, path[1:])
-        )
-        technique_id = (
-            "chain.als_aic" if has_multi_rcc_link else "als.chain"
-        )
+        technique_id = "als.chain"
         eliminations = set()
         used_endpoint_digits = []
         for digit in sorted(endpoint_digits):
@@ -626,6 +736,158 @@ def find_als_chains(
             break
 
     return _deduplicate(results)[:max_results]
+
+
+def find_als_aics(
+    graph,
+    *,
+    max_results: int = 32,
+    max_alses: int = DEFAULT_MAX_AIC_ALSES,
+    max_search_attempts: int = DEFAULT_MAX_AIC_SEARCH_ATTEMPTS,
+    max_path_states: int = DEFAULT_MAX_AIC_PATH_STATES,
+) -> tuple[ALSAICDeduction, ...]:
+    """Cerca AIC miste con almeno un vero ALSNode multicella."""
+
+    from . import logic_engine
+
+    max_results = max(1, int(max_results))
+    implication = ALSImplicationGraph(
+        graph,
+        require_multicell=True,
+        max_alses=max_alses,
+    )
+    if not implication.als_nodes:
+        return ()
+
+    results = []
+    seen = set()
+    allowed = implication.ALL_REASONS
+    search_attempts = 0
+    path_search_truncated = False
+
+    def finalized(*, truncated=False):
+        budget = (max_alses, max_search_attempts, max_path_states)
+        return _deduplicate(
+            replace(
+                deduction,
+                search_truncated=bool(
+                    truncated
+                    or implication.search_truncated
+                    or path_search_truncated
+                ),
+                search_attempt_count=search_attempts,
+                search_budget=budget,
+            )
+            for deduction in results
+        )
+
+    for target in implication.base_graph.all_candidates:
+        target_on = logic_engine._node_literal(target, True)
+        weak_nodes = tuple(sorted({
+            logic_engine._literal_node(edge.target)
+            for edge in implication.edges(
+                target_on, implication.WEAK_REASONS
+            )
+            if not logic_engine.proof_model.literal_state(edge.target)
+        }, key=logic_engine._node_key))
+        if len(weak_nodes) < 2:
+            continue
+
+        for unordered in combinations(weak_nodes, 2):
+            if not any(isinstance(node, ALSNode) for node in unordered):
+                continue
+            for first, second in (unordered, tuple(reversed(unordered))):
+                if search_attempts >= max_search_attempts:
+                    return finalized(truncated=True)
+                search_attempts += 1
+                path_data = implication.shortest_path(
+                    logic_engine._node_literal(first, False),
+                    logic_engine._node_literal(second, True),
+                    allowed=allowed,
+                    minimum_edges=3,
+                    maximum_edges=12,
+                    require_als=True,
+                    require_candidate=True,
+                    max_states=max_path_states,
+                )
+                path_search_truncated = (
+                    path_search_truncated
+                    or implication.last_search_truncated
+                )
+                if path_data is None:
+                    continue
+                central, central_reasons = path_data
+                central_nodes = [
+                    logic_engine._literal_node(literal)
+                    for literal in central
+                ]
+                if len(set(central_nodes)) != len(central_nodes):
+                    continue
+                if not any(isinstance(node, ALSNode) for node in central_nodes):
+                    continue
+                if not any(
+                    not isinstance(node, ALSNode) for node in central_nodes
+                ):
+                    continue
+
+                left_reason = implication.weak_reason(target, first)
+                right_reason = implication.weak_reason(second, target)
+                if left_reason is None or right_reason is None:
+                    continue
+                chain = (
+                    logic_engine._node_literal(target, True),
+                    *central,
+                    logic_engine._node_literal(target, False),
+                )
+                reasons = (
+                    left_reason,
+                    *central_reasons,
+                    right_reason,
+                )
+                try:
+                    supports = implication.chain_supports(chain, reasons)
+                except ValueError:
+                    continue
+
+                als_ids = tuple(dict.fromkeys(
+                    node.als_id
+                    for node in central_nodes
+                    if isinstance(node, ALSNode)
+                ))
+                alses = tuple(graph.by_id[als_id] for als_id in als_ids)
+                rccs = []
+                for source, destination, reason in zip(
+                    central, central[1:], central_reasons
+                ):
+                    if reason != "als-rcc":
+                        continue
+                    left = logic_engine._literal_node(source)
+                    right = logic_engine._literal_node(destination)
+                    rccs.extend(
+                        rcc for rcc in graph.between(left.als_id, right.als_id)
+                        if rcc.digit == left.digit == right.digit
+                    )
+
+                signature = target, tuple(
+                    logic_engine._graph_literal_key(item) for item in central
+                )
+                if signature in seen:
+                    continue
+                seen.add(signature)
+                results.append(ALSAICDeduction(
+                    technique_id="chain.als_aic",
+                    als_nodes=alses,
+                    rccs=tuple(dict.fromkeys(rccs)),
+                    eliminations=frozenset({target}),
+                    chains=(tuple(chain),),
+                    chain_reasons=(tuple(reasons),),
+                    chain_supports=(tuple(supports),),
+                    endpoint_digit=target[2],
+                ))
+                if len(results) >= max_results:
+                    return finalized(truncated=True)
+
+    return finalized()
 
 
 def _petals_for_stem(graph, stem: Cell, digit: int) -> tuple[ALS, ...]:
@@ -737,7 +999,7 @@ def find_death_blossoms(
     return _deduplicate(results)
 
 
-def _deduplicate(deductions: Iterable[ALSDeduction]) -> tuple[ALSDeduction, ...]:
+def _deduplicate(deductions: Iterable) -> tuple:
     buckets = {}
     for deduction in deductions:
         signature = (
@@ -774,7 +1036,7 @@ def find_all_als(
     max_cells: int = DEFAULT_MAX_ALS_CELLS,
     max_chain_alses: int = DEFAULT_MAX_CHAIN_ALSES,
     max_results: int = DEFAULT_MAX_RAW_RESULTS,
-) -> tuple[ALSDeduction, ...]:
+) -> tuple:
     """Esegue una sola enumerazione e condivide il medesimo grafo RCC."""
 
     graph = ALSGraph(state, enumerate_als(state, max_cells=max_cells))
@@ -785,6 +1047,10 @@ def find_all_als(
             graph,
             max_alses=max_chain_alses,
             max_results=max_results,
+        ),
+        find_als_aics(
+            graph,
+            max_results=min(max_results, 32),
         ),
         find_death_blossoms(graph, max_results=max_results),
     )
@@ -797,6 +1063,7 @@ def find_all_als(
 
 __all__ = [
     "ALS",
+    "ALSAICDeduction",
     "ALSDeduction",
     "Candidate",
     "Cell",
@@ -807,6 +1074,7 @@ __all__ = [
     "enumerate_als",
     "find_all_als",
     "find_als_chains",
+    "find_als_aics",
     "find_als_xy_wings",
     "find_als_xz",
     "find_death_blossoms",

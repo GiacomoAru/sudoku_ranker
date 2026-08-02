@@ -11,12 +11,14 @@ from collections.abc import Mapping, Sequence
 import hashlib
 import json
 
+from .als_nodes import ALSNode, als_node
 from .group_nodes import GroupNode, group_node
 
 
 Literal = tuple[int, int, int, bool]
 GroupLiteral = tuple[GroupNode, bool]
-ProofLiteral = Literal | GroupLiteral
+ALSLiteral = tuple[ALSNode, bool]
+ProofLiteral = Literal | GroupLiteral | ALSLiteral
 Candidate = tuple[int, int, int]
 
 PROOF_DAG_SCHEMA_VERSION = "1.2.0"
@@ -44,6 +46,9 @@ def normalize_literal(value) -> ProofLiteral | None:
         if value.get("node_type") == "group" or "group" in value:
             raw_group = value.get("group", value)
             return group_node(raw_group), is_on
+        if value.get("node_type") == "als" or "als_node" in value:
+            raw_als = value.get("als_node", value)
+            return als_node(raw_als), is_on
         literal = (
             int(value["row"]),
             int(value["column"]),
@@ -51,8 +56,16 @@ def normalize_literal(value) -> ProofLiteral | None:
             is_on,
         )
     elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        if len(value) == 2 and isinstance(value[0], (GroupNode, Mapping)):
-            return group_node(value[0]), bool(value[1])
+        if len(value) == 2 and isinstance(
+            value[0], (GroupNode, ALSNode, Mapping)
+        ):
+            raw_node = value[0]
+            if isinstance(raw_node, ALSNode) or (
+                isinstance(raw_node, Mapping)
+                and raw_node.get("node_type") == "als"
+            ):
+                return als_node(raw_node), bool(value[1])
+            return group_node(raw_node), bool(value[1])
         if len(value) != 4:
             raise ValueError("Un letterale deve contenere quattro valori.")
         row, column, digit, state = value
@@ -75,21 +88,38 @@ def is_group_literal(literal) -> bool:
     )
 
 
+def is_als_literal(literal) -> bool:
+    return (
+        isinstance(literal, Sequence)
+        and not isinstance(literal, (str, bytes))
+        and len(literal) == 2
+        and isinstance(literal[0], ALSNode)
+    )
+
+
 def literal_state(literal: ProofLiteral) -> bool:
     literal = normalize_literal(literal)
-    return literal[1] if is_group_literal(literal) else literal[3]
+    return (
+        literal[1]
+        if is_group_literal(literal) or is_als_literal(literal)
+        else literal[3]
+    )
 
 
 def literal_cells(literal: ProofLiteral) -> tuple[tuple[int, int], ...]:
     literal = normalize_literal(literal)
-    if is_group_literal(literal):
+    if is_group_literal(literal) or is_als_literal(literal):
         return tuple(sorted(literal[0].cells))
     return ((literal[0], literal[1]),)
 
 
 def literal_digit(literal: ProofLiteral) -> int:
     literal = normalize_literal(literal)
-    return literal[0].digit if is_group_literal(literal) else literal[2]
+    return (
+        literal[0].digit
+        if is_group_literal(literal) or is_als_literal(literal)
+        else literal[2]
+    )
 
 
 def literal_sort_key(literal: ProofLiteral):
@@ -102,6 +132,15 @@ def literal_sort_key(literal: ProofLiteral):
             tuple(sorted(node.cells)),
             node.house_ids,
             node.role,
+            int(is_on),
+        )
+    if is_als_literal(literal):
+        node, is_on = literal
+        return (
+            2,
+            node.als_key,
+            node.digit,
+            tuple(sorted(node.occurrences)),
             int(is_on),
         )
     row, column, digit, is_on = literal
@@ -117,6 +156,13 @@ def literal_record(literal: ProofLiteral | None):
         return {
             "node_type": "group",
             "group": node.to_dict(),
+            "state": "on" if is_on else "off",
+        }
+    if is_als_literal(literal):
+        node, is_on = literal
+        return {
+            "node_type": "als",
+            "als_node": node.to_dict(),
             "state": "on" if is_on else "off",
         }
     row, column, value, is_on = literal
@@ -545,6 +591,48 @@ class ProofDAG:
             node.kind == "contradiction" for node in self.nodes.values()
         )
         nested_metrics = [proof.metrics() for proof in self.nested_proofs.values()]
+        group_nodes = {
+            node.conclusion[0]
+            for node in self.nodes.values()
+            if (
+                node.conclusion is not None
+                and is_group_literal(node.conclusion)
+            )
+        }
+        als_nodes_by_key = {
+            node.conclusion[0].als_key: node.conclusion[0]
+            for node in self.nodes.values()
+            if (
+                node.conclusion is not None
+                and is_als_literal(node.conclusion)
+            )
+        }
+        payload_alses = {}
+        for proof_node in self.nodes.values():
+            raw_als = proof_node.payload.get("als")
+            if not isinstance(raw_als, Mapping):
+                continue
+            cells = tuple(sorted(
+                tuple(cell) for cell in raw_als.get("cells", ())
+            ))
+            digits = tuple(sorted(int(value) for value in raw_als.get(
+                "candidates", raw_als.get("digits", ())
+            )))
+            key = (int(raw_als.get("id", -1)), cells, digits)
+            payload_alses[key] = cells
+        local_rcc_count = max(
+            sum(
+                node.reason in {"als-rcc", "als-stem-rcc"}
+                for node in self.nodes.values()
+            ),
+            max(
+                (
+                    int(node.payload.get("rcc_count", 0))
+                    for node in self.nodes.values()
+                ),
+                default=0,
+            ),
+        )
         nested_depth = (
             1 + max(
                 (metrics["nested_depth"] for metrics in nested_metrics),
@@ -578,6 +666,34 @@ class ProofDAG:
             "nested_depth": nested_depth,
             "nested_subproof_count": len(self.nested_proofs) + sum(
                 metrics["nested_subproof_count"] for metrics in nested_metrics
+            ),
+            "group_node_count": len(group_nodes) + sum(
+                metrics.get("group_node_count", 0)
+                for metrics in nested_metrics
+            ),
+            "max_group_size": max(
+                [len(node.cells) for node in group_nodes]
+                + [
+                    metrics.get("max_group_size", 0)
+                    for metrics in nested_metrics
+                ],
+                default=0,
+            ),
+            "als_node_count": (
+                len(als_nodes_by_key) + len(payload_alses)
+            ) + sum(
+                metrics.get("als_node_count", 0)
+                for metrics in nested_metrics
+            ),
+            "als_cell_count": sum(
+                len(node.cells) for node in als_nodes_by_key.values()
+            ) + sum(len(cells) for cells in payload_alses.values()) + sum(
+                metrics.get("als_cell_count", 0)
+                for metrics in nested_metrics
+            ),
+            "rcc_count": local_rcc_count + sum(
+                metrics.get("rcc_count", 0)
+                for metrics in nested_metrics
             ),
         }
 
@@ -798,7 +914,15 @@ class ProofDAG:
                         if index > 0 and ordered_reasons
                         else (sorted(reason_set)[0] if reason_set else proof_kind)
                     )
-                    if any(
+                    if (
+                        is_als_literal(literal)
+                        or (
+                            index > 0
+                            and is_als_literal(literals[index - 1])
+                        )
+                    ):
+                        kind = "advanced-rule"
+                    elif any(
                         reason.startswith("advanced")
                         for reason in (edge_reason,)
                     ):
@@ -845,6 +969,8 @@ class ProofDAG:
                 proof_kind in {"endpoint-aic", "grouped-endpoint-aic"}
                 and not is_group_literal(literals[0])
                 and not is_group_literal(literals[-1])
+                and not is_als_literal(literals[0])
+                and not is_als_literal(literals[-1])
                 and literals[0][:3] == literals[-1][:3]
                 and literals[0][3] != literals[-1][3]
             ):
@@ -936,7 +1062,55 @@ def proof_dag(value) -> ProofDAG | None:
     return ProofDAG.from_dict(value)
 
 
+def proof_structural_family(value) -> str:
+    """Famiglia piu' specifica presente nella prova, in ordine tassonomico."""
+    dag = proof_dag(value)
+    if dag is None:
+        return "candidate"
+    if any(
+        (
+            node.conclusion is not None
+            and is_als_literal(node.conclusion)
+        )
+        or node.payload.get("node_type") in {"als", "als-stem"}
+        for node in dag.nodes.values()
+    ):
+        return "als"
+    if any(
+        (
+            node.conclusion is not None
+            and is_group_literal(node.conclusion)
+        )
+        or node.payload.get("node_type") == "group"
+        for node in dag.nodes.values()
+    ):
+        return "group"
+    return "candidate"
+
+
+def dependency_shape(value) -> str:
+    """Distingue una catena lineare da un DAG con merge/fork riconvergente."""
+    dag = proof_dag(value)
+    if dag is None:
+        return "chain"
+    return (
+        "net"
+        if any(len(node.parents) > 1 for node in dag.nodes.values())
+        else "chain"
+    )
+
+
+def classify_proof_structure(value, *, forcing_context: bool = False) -> str:
+    """Applica la precedenza P14.1 prima della futura chain/net di P15."""
+    family = proof_structural_family(value)
+    if not forcing_context and family != "candidate":
+        return family
+    return dependency_shape(value)
+
+
 __all__ = [
+    "ALSLiteral",
+    "ALSNode",
     "Candidate",
     "GroupLiteral",
     "GroupNode",
@@ -949,6 +1123,7 @@ __all__ = [
     "ProofLiteral",
     "ProofNode",
     "is_group_literal",
+    "is_als_literal",
     "literal_cells",
     "literal_digit",
     "literal_record",
@@ -956,4 +1131,7 @@ __all__ = [
     "literal_state",
     "normalize_literal",
     "proof_dag",
+    "proof_structural_family",
+    "dependency_shape",
+    "classify_proof_structure",
 ]

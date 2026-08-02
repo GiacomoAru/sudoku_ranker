@@ -17,9 +17,12 @@ Non è necessario includere ogni nome mai inventato nella comunità Sudoku. La c
 
 ## Baseline acquisito
 
-Le patch P01-P14, inclusa P06.5, sono applicate e non fanno più parte della roadmap operativa. Il progetto dispone già di:
+Le patch P01-P14.1, inclusa P06.5, sono applicate e non fanno più parte della roadmap operativa. Il progetto dispone già di:
 
 * catalogo centrale e identificatori stabili;
+* `TASSIONOMIA.txt` come fonte normativa e catalogo come sua proiezione
+  eseguibile P14.1;
+* separazione fra `inference_engine` semantico ed `engine_type` esecutivo;
 * registro dichiarativo dei detector;
 * pipeline ordinary, Nested e Complete Tree separata;
 * `ProofDAG` autorevole e viste lineari derivate;
@@ -47,11 +50,31 @@ Le patch P01-P14, inclusa P06.5, sono applicate e non fanno più parte della roa
   Grouped Continuous Nice Loop;
 * motore ALS comune con enumerazione deduplicata, grafo RCC a visibilità
   completa, overlap validati, ALS-XZ, ALS-XY-Wing, ALS Chain, Death Blossom e
-  ALS-AIC; WXYZ/VWXYZ/UVWXYZ/TUVWXYZ-Wing sono classificazioni del parent ALS
-  e non detector paralleli;
+  ALS-AIC reale con nodi ALS tipizzati; WXYZ/VWXYZ/UVWXYZ/TUVWXYZ-Wing sono
+  classificazioni del parent ALS e non detector paralleli;
+* precedenza strutturale ALS/Grouped sulla forma chain/net fuori dal forcing
+  context, senza riclassificare le normali XY-Chain come ALS-AIC;
+* metriche specifiche `group_node_count`, `max_group_size`, `als_node_count`,
+  `als_cell_count` e `rcc_count`;
 * versionamento esplicito di prove e analisi archiviate.
 
 Le patch future devono estendere queste strutture, non crearne copie parallele.
+
+## P14.1. Unificazione tassonomia/codice — completata
+
+Contratto acquisito:
+
+* ID moderni e migrazione degli ID legacy per Direct Hidden subset, Sue de Coq
+  e Aligned Triplet Exclusion;
+* nome canonico `XY-Wing`, con `Y-Wing` conservato come alias;
+* `ALSNode` serializzabile con semantica OR per cifra e ALS multicella
+  obbligatorio nelle ALS-AIC;
+* ALS-AIC ricercata nel grafo misto candidate/ALS con link `als-strong`,
+  `als-weak` e `als-rcc`;
+* persistenza del motore semantico e versioni prova `3.4.0` / metriche `3.1.0`;
+* budget ordinario ALS-AIC: 64 ALS, 256 endpoint, 2048 stati per percorso.
+
+La taratura di rating, soglie e carico risolutivo resta deliberatamente P18.
 
 ---
 

@@ -697,6 +697,7 @@ def _migrate_legacy_complete_tree_move(move):
         "rating_kind": definition.rating_kind,
         "detector_id": definition.detector_id,
         "engine_type": definition.engine_type,
+        "inference_engine": definition.inference_engine,
         "fallback_tier": definition.fallback_tier,
         "base_difficulty": definition.base_difficulty,
     })
@@ -706,9 +707,47 @@ def _migrate_legacy_complete_tree_move(move):
     return migrated
 
 
+def _migrate_catalog_identity(move):
+    """Allinea ID e assi strutturali senza ritarare i valori storici."""
+    migrated = dict(move)
+    technique_id = migrated.get("technique_id")
+    try:
+        if technique_id:
+            definition = technique_catalog.resolve_legacy_technique_id(
+                technique_id
+            )
+        else:
+            definition = technique_catalog.resolve_technique(
+                migrated["technique"]
+            )
+    except (KeyError, TypeError, ValueError):
+        return migrated
+
+    migrated.update({
+        "technique_id": definition.id,
+        "technique": definition.canonical_name,
+        "family": technique_catalog.TECHNIQUE_FAMILY[
+            definition.canonical_name
+        ],
+        "strategy": technique_catalog.TECHNIQUE_STRATEGY[
+            definition.canonical_name
+        ],
+        "parent_id": definition.parent_id,
+        "se_equivalent_parent_id": definition.se_equivalent_parent_id,
+        "rating_kind": definition.rating_kind,
+        "detector_id": definition.detector_id,
+        "engine_type": definition.engine_type,
+        "inference_engine": definition.inference_engine,
+        "fallback_tier": definition.fallback_tier,
+    })
+    return migrated
+
+
 def _restore_move(move):
     """Ripristina i tipi usati dalle funzioni di visualizzazione."""
-    restored = _migrate_legacy_complete_tree_move(move)
+    restored = _migrate_catalog_identity(
+        _migrate_legacy_complete_tree_move(move)
+    )
 
     restored["placements"] = [
         tuple(int(value) for value in placement)
@@ -770,6 +809,7 @@ _STORED_MOVE_FIELDS = (
     "rating_kind",
     "detector_id",
     "engine_type",
+    "inference_engine",
     "fallback_tier",
     "base_difficulty",
     "difficulty_extra",
@@ -850,7 +890,9 @@ def _compact_analysis_for_storage(analysis):
 
     migrated_chain = []
     for source_move in compact.get("chain", []):
-        move = _migrate_legacy_complete_tree_move(source_move)
+        move = _migrate_catalog_identity(
+            _migrate_legacy_complete_tree_move(source_move)
+        )
         if "technical_difficulty" in move:
             technical_difficulty = float(
                 move["technical_difficulty"]

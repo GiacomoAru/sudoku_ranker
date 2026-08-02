@@ -390,6 +390,7 @@ def _validate_runner_move(runner, move):
         )
     move["detector_id"] = runner.detector_id
     move["engine_type"] = runner.engine_type
+    move["inference_engine"] = definition.inference_engine
     move["fallback_tier"] = runner.fallback_tier
     return move
 
@@ -1054,6 +1055,7 @@ def solve_and_log(
                 "rating_kind",
                 "detector_id",
                 "engine_type",
+                "inference_engine",
                 "fallback_tier",
                 "description",
                 "explanation",

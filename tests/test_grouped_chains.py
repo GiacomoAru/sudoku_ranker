@@ -106,6 +106,10 @@ class GroupedProofTests(unittest.TestCase):
         restored = proof.ProofDAG.from_dict(dag.to_dict())
 
         self.assertEqual(restored.derived_chains(), [list(chain)])
+        metrics = restored.metrics()
+        self.assertEqual(metrics["group_node_count"], 1)
+        self.assertEqual(metrics["max_group_size"], 2)
+        self.assertEqual(metrics["als_node_count"], 0)
         self.assertTrue(any(
             node.kind == "grouped-implication"
             for node in restored.nodes.values()

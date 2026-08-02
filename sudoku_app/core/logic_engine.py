@@ -28,6 +28,7 @@ from itertools import chain, combinations
 from threading import RLock
 
 from .data_structure import UNITS, UNIT_KINDS, peers
+from .als_nodes import ALSNode
 from .group_nodes import GroupNode
 from . import proof as proof_model
 from . import proof_schema
@@ -35,9 +36,10 @@ from . import proof_schema
 
 Candidate = tuple[int, int, int]
 Literal = tuple[int, int, int, bool]
-ImplicationNode = Candidate | GroupNode
+ImplicationNode = Candidate | GroupNode | ALSNode
 GroupLiteral = tuple[GroupNode, bool]
-GraphLiteral = Literal | GroupLiteral
+ALSLiteral = tuple[ALSNode, bool]
+GraphLiteral = Literal | GroupLiteral | ALSLiteral
 
 # Limiti espliciti di output e delle viste lineari.
 MAX_DEDUCTIONS_PER_TECHNIQUE = 16 # limite massimo non valicabile
@@ -157,13 +159,13 @@ def _opposite(literal: Literal) -> Literal:
 
 
 def _node_literal(node: ImplicationNode, is_on: bool) -> GraphLiteral:
-    if isinstance(node, GroupNode):
+    if isinstance(node, (GroupNode, ALSNode)):
         return node, bool(is_on)
     return _literal(node, is_on)
 
 
 def _literal_node(literal: GraphLiteral) -> ImplicationNode:
-    if proof_model.is_group_literal(literal):
+    if proof_model.is_group_literal(literal) or proof_model.is_als_literal(literal):
         return literal[0]
     return _candidate(literal)
 
@@ -173,11 +175,11 @@ def _graph_opposite(literal: GraphLiteral) -> GraphLiteral:
 
 
 def _node_candidates(node: ImplicationNode) -> tuple[Candidate, ...]:
-    return node.candidates if isinstance(node, GroupNode) else (node,)
+    return node.candidates if isinstance(node, (GroupNode, ALSNode)) else (node,)
 
 
 def _node_digit(node: ImplicationNode) -> int:
-    return node.digit if isinstance(node, GroupNode) else node[2]
+    return node.digit if isinstance(node, (GroupNode, ALSNode)) else node[2]
 
 
 def _node_key(node: ImplicationNode):
@@ -188,6 +190,13 @@ def _node_key(node: ImplicationNode):
             tuple(sorted(node.cells)),
             node.house_ids,
             node.role,
+        )
+    if isinstance(node, ALSNode):
+        return (
+            2,
+            node.als_key,
+            node.digit,
+            tuple(sorted(node.occurrences)),
         )
     return 0, *node
 

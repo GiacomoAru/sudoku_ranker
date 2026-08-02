@@ -150,7 +150,7 @@ class SueDeCoqTests(unittest.TestCase):
         moves = techniques.sue_de_coq(state)
         move = next(
             item for item in moves
-            if item["technique_id"] == "intersection.sue_de_coq"
+            if item["technique_id"] == "misc.sue_de_coq.basic"
             and set(item["eliminations"]) == {(0, 4, 1), (1, 1, 3)}
         )
         pattern = move["sue_de_coq"]
@@ -176,7 +176,7 @@ class SueDeCoqTests(unittest.TestCase):
         move = next(
             item for item in moves
             if item["technique_id"]
-            == "intersection.sue_de_coq.extended"
+            == "misc.sue_de_coq.extended"
             and set(item["eliminations"]) == {(0, 5, 1), (1, 1, 3)}
         )
         pattern = move["sue_de_coq"]

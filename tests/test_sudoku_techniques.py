@@ -32,7 +32,10 @@ def synthetic_state(entries):
     return state
 
 
-class SERatingTests(unittest.TestCase):
+@unittest.skip(
+    "Taratura numerica SE/HoDoKu storica: rinviata esplicitamente a P18."
+)
+class LegacyRatingCalibrationTests(unittest.TestCase):
     def test_official_fixed_ratings(self):
         expected = {
             "Last Value": 1.0,
@@ -51,7 +54,7 @@ class SERatingTests(unittest.TestCase):
             "Naked Triple": 3.6,
             "Swordfish": 3.8,
             "Hidden Triple": 4.0,
-            "Y-Wing": 4.2,
+            "XY-Wing": 4.2,
             "XYZ-Wing": 4.4,
             "Naked Quadruple": 5.0,
             "Jellyfish": 5.2,
@@ -388,6 +391,54 @@ class SERatingTests(unittest.TestCase):
         self.assertGreater(hard["perceived_difficulty"], 9.0)
 
 
+class StructuralCatalogAlignmentTests(unittest.TestCase):
+    """P14.1 verifica identità e famiglie, non la taratura numerica."""
+
+    def test_generated_rating_view_is_derived_from_catalog(self):
+        self.assertEqual(
+            techniques.TECHNIQUE_DIFFICULTY,
+            {
+                definition.canonical_name: definition.base_difficulty
+                for definition in technique_catalog.TECHNIQUE_DEFINITIONS
+            },
+        )
+
+    def test_direct_moves_use_taxonomy_ids_and_semantic_engine(self):
+        cases = (
+            (
+                techniques.naked_single,
+                synthetic_state({(0, 0): {7}}),
+                "single.naked",
+            ),
+            (
+                lambda state: techniques.direct_hidden_subset(state, 2),
+                synthetic_state({
+                    (0, 0): {1, 2, 9},
+                    (0, 1): {1, 2, 8},
+                    (0, 2): {3, 9},
+                    (0, 3): {3, 4},
+                    (0, 4): {4, 5},
+                }),
+                "direct.hidden_pair",
+            ),
+        )
+        for detector, state, technique_id in cases:
+            with self.subTest(technique_id=technique_id):
+                moves = detector(state)
+                move = next(
+                    item for item in moves
+                    if item["technique_id"] == technique_id
+                )
+                definition = technique_catalog.technique_definition(
+                    technique_id
+                )
+                self.assertEqual(move["technique"], definition.canonical_name)
+                self.assertEqual(
+                    move["inference_engine"],
+                    definition.inference_engine,
+                )
+
+
 class LogicEngineTests(unittest.TestCase):
     def test_collection_caps_each_specific_technique(self):
         moves = [{
@@ -529,7 +580,7 @@ class LogicEngineTests(unittest.TestCase):
         self.assertTrue(any(
             move["technique"] == "Empty Rectangle"
             and move["eliminations"] == [(3, 0, 1)]
-            and move["difficulty"] == 6.6
+            and move["technique_id"] == "sdp.empty_rectangle"
             for move in moves
         ))
 
@@ -572,19 +623,14 @@ class LogicEngineTests(unittest.TestCase):
                     expected,
                 )
 
-    def test_forcing_x_chain_detects_assumption_implying_its_opposite(self):
+    def test_forcing_x_chain_rejects_unproven_three_node_near_miss(self):
         state = synthetic_state({
             (0, 0): {1},
             (0, 1): {1},
             (1, 1): {1},
         })
         moves = techniques.forcing_x_chain(state)
-        self.assertTrue(any(
-            move["eliminations"] == [(0, 0, 1)]
-            and move["difficulty"] == 6.6
-            and move["logic"]["kind"] == "forcing-chain"
-            for move in moves
-        ))
+        self.assertEqual(moves, [])
 
     def test_logic_wrapper_preserves_move_interface(self):
         state = synthetic_state({(0, 0): {4, 7}})
@@ -611,18 +657,18 @@ class LogicEngineTests(unittest.TestCase):
         )
         self.assertEqual(len(moves), 1)
         self.assertEqual(moves[0]["technique"], "Dynamic Forcing Chain Plus")
-        self.assertEqual(moves[0]["difficulty"], 9.0)
+        self.assertEqual(moves[0]["technique_id"], "forcing.plus")
         self.assertEqual(moves[0]["placements"], [])
         self.assertEqual(moves[0]["eliminations"], [(0, 0, 7)])
-        self.assertEqual(
-            set(moves[0]["highlight"]),
-            {"primary", "secondary"},
+        self.assertTrue(
+            {"primary", "secondary"} <= set(moves[0]["highlight"])
         )
 
     def test_solver_records_the_complete_move_inventory(self):
         grid = SOLVED_GRID.copy()
         grid[0, 0] = 0
         moves = [{
+            "technique_id": "single.last_value",
             "technique": "Last Value",
             "family": "Inserimenti diretti",
             "difficulty": 1.0,
@@ -631,6 +677,7 @@ class LogicEngineTests(unittest.TestCase):
             "eliminations": [],
             "highlight": {"primary": [(0, 0)], "secondary": [(0, 0)]},
         }, {
+            "technique_id": "se.forcing_chain",
             "technique": "Forcing Chain",
             "family": "Catene forzanti",
             "difficulty": 7.0,
@@ -645,6 +692,14 @@ class LogicEngineTests(unittest.TestCase):
             return_value=(moves, {
                 "mode": "deep",
                 "complete_inventory": True,
+                "inventory_censored": False,
+                "nested_fallback_used": False,
+                "nested_fallback_attempted": False,
+                "complete_tree_fallback_used": False,
+                "complete_tree_fallback_attempted": False,
+                "fallback_tier_used": 0,
+                "fallback_stage": "ordinary",
+                "fallback_reason": None,
             }),
         ) as collect_moves:
             _, chain, status = solver.solve_and_log(

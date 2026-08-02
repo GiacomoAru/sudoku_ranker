@@ -13,8 +13,8 @@ from collections.abc import Mapping, Sequence
 from . import proof as proof_model
 
 
-PROOF_SCHEMA_VERSION = "3.3.0"
-PROOF_METRICS_VERSION = "3.0.0"
+PROOF_SCHEMA_VERSION = "3.4.0"
+PROOF_METRICS_VERSION = "3.1.0"
 
 PROOF_METRIC_FIELDS = (
     "proof_node_count",
@@ -28,6 +28,11 @@ PROOF_METRIC_FIELDS = (
     "leaf_count",
     "nested_depth",
     "nested_subproof_count",
+    "group_node_count",
+    "max_group_size",
+    "als_node_count",
+    "als_cell_count",
+    "rcc_count",
 )
 
 
@@ -116,6 +121,11 @@ def _derive_metrics_from_display(logic):
         "leaf_count": 0,
         "nested_depth": 0,
         "nested_subproof_count": 0,
+        "group_node_count": 0,
+        "max_group_size": 0,
+        "als_node_count": 0,
+        "als_cell_count": 0,
+        "rcc_count": 0,
     }
 
 

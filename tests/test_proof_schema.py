@@ -23,6 +23,20 @@ def literal(row, column, value, state="on"):
 
 
 class ProofMetricNormalizationTests(unittest.TestCase):
+    def test_archive_migrates_p14_legacy_identity_without_recalibration(self):
+        restored = archive._restore_move({
+            "technique_id": "direct.hidden.2",
+            "technique": "Direct Hidden Pair",
+            "base_difficulty": 2.0,
+            "placements": [[0, 0, 7]],
+            "eliminations": [],
+            "highlight": {},
+        })
+
+        self.assertEqual(restored["technique_id"], "direct.hidden_pair")
+        self.assertEqual(restored["inference_engine"], "local")
+        self.assertEqual(restored["base_difficulty"], 2.0)
+
     def test_displayed_chains_are_a_complete_fallback(self):
         first = literal(0, 0, 1)
         second = literal(0, 1, 1, "off")
@@ -46,6 +60,11 @@ class ProofMetricNormalizationTests(unittest.TestCase):
             "leaf_count": 0,
             "nested_depth": 0,
             "nested_subproof_count": 0,
+            "group_node_count": 0,
+            "max_group_size": 0,
+            "als_node_count": 0,
+            "als_cell_count": 0,
+            "rcc_count": 0,
         })
 
     def test_explicit_engine_metrics_are_authoritative(self):
@@ -244,6 +263,11 @@ class ProofPipelineTests(unittest.TestCase):
             "leaf_count": 2,
             "nested_depth": 0,
             "nested_subproof_count": 0,
+            "group_node_count": 0,
+            "max_group_size": 0,
+            "als_node_count": 0,
+            "als_cell_count": 0,
+            "rcc_count": 0,
         })
 
     def test_proof_metrics_survive_compact_archive_round_trip(self):
@@ -277,6 +301,7 @@ class ProofPipelineTests(unittest.TestCase):
             "rating_kind": definition.rating_kind,
             "detector_id": definition.detector_id,
             "engine_type": definition.engine_type,
+            "inference_engine": definition.inference_engine,
             "fallback_tier": definition.fallback_tier,
             "base_difficulty": definition.base_difficulty,
             "difficulty_extra": 0.4,

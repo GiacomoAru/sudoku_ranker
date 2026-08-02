@@ -105,7 +105,7 @@ ACTIVE_TECHNIQUE_BINDINGS = {
     "0904": TechniqueBinding("als", "als.death_blossom"),
     "1101": TechniqueBinding(
         "sue_de_coq",
-        "intersection.sue_de_coq.extended",
+        "misc.sue_de_coq.extended",
     ),
 }
 

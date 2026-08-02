@@ -35,6 +35,100 @@ La priorità finale raccomandata è:
 | Sesto | Vere Nested Forcing Chains |
 | Ultimo | Complete Forcing Tree |
 
+## Contratto implementativo autorevole P14.1
+
+Da P14.1 questo documento e' la fonte normativa della struttura del solver.
+`sudoku_app/core/technique_catalog.py` ne e' la proiezione eseguibile e
+versionata (`TAXONOMY_CONTRACT_VERSION = "P14.1"`, catalogo `1.9.0`). Le mappe
+di compatibilita' esportate da `techniques.py` non costituiscono fonti
+alternative.
+
+Il contratto P14.1 rende autorevoli ora:
+
+| Asse | Regola |
+|---|---|
+| Identita' | ID stabile, nome canonico, alias, parent e parent SE |
+| Famiglia | `family_id` e `strategy_id` provengono dal catalogo |
+| Motore semantico | `inference_engine`: `local`, `fish`, `coloring`, `chain`, `group`, `als`, `forcing`, `dynamic`, `nested`, `complete_tree` |
+| Livello esecutivo | `engine_type`: `local`, `logic`, `nested`, `complete_tree`; resta separato dal motore semantico |
+| Prova | `ProofDAG` e nodi tipizzati sono autorevoli; viste lineari e presentazione sono derivate |
+| Metriche strutturali | Profili separati per candidate, GroupNode e ALSNode |
+| Precedenza | La famiglia strutturale specifica prevale sulla forma generica chain/net fuori dal forcing context |
+
+La taratura numerica di `base_difficulty`, `rating_kind`, carico risolutivo e
+soglie resta provvisoria fino alla patch di calibrazione P18. P14.1 non usa
+questi numeri per ridefinire la tassonomia e i test strutturali non congelano
+come ufficiali i vecchi valori storici.
+
+Le migrazioni di identita' applicate sono:
+
+```text
+direct.hidden.2                       -> direct.hidden_pair
+direct.hidden.3                       -> direct.hidden_triple
+intersection.sue_de_coq               -> misc.sue_de_coq.basic
+intersection.sue_de_coq.extended      -> misc.sue_de_coq.extended
+exclusion.aligned_triplet             -> exclusion.aligned_triple
+Y-Wing                                -> XY-Wing (alias conservato)
+```
+
+### Nodi logici e precedenza di classificazione
+
+`GroupNode(digit, cells, house_ids, role)` rappresenta la proposizione OR
+"la cifra compare in una delle celle del gruppo". `ALSNode` ha granularita'
+per cifra e rappresenta la proposizione OR "questa cifra compare in una delle
+sue occorrenze nell'ALS":
+
+```python
+ALSNode(
+    als_id: int,
+    house_id: int,
+    cells: frozenset[Cell],
+    digits: frozenset[int],
+    digit: int,
+    occurrences: frozenset[Cell],
+    role: str = "als-digit",
+)
+```
+
+Un ALS-AIC e' tale soltanto se il percorso alternato contiene almeno un
+`ALSNode` multicella e almeno un candidato ordinario. I link strong interni
+collegano cifre diverse dello stesso ALS; i weak link sono RCC o visibilita'
+completa. Una normale XY-Chain composta da celle bivalue non viene quindi
+riclassificata come ALS-AIC tramite ALS monocella.
+
+La precedenza e' applicata dopo la validazione della prova:
+
+```text
+ALSNode presente       -> famiglia ALS
+altrimenti GroupNode   -> famiglia Grouped
+altrimenti             -> famiglia candidate
+
+fuori dal forcing context: ALS/Grouped prevalgono su chain/net
+nel forcing context: la dipendenza del DAG determina chain oppure net
+```
+
+Death Blossom resta una tecnica ALS anche quando il suo DAG contiene una
+riconvergenza; la stessa forma viene chiamata net soltanto quando e' usata
+come prova di forcing. P15 estendera' la classificazione delle net senza
+sovrascrivere questi casi specifici.
+
+### Budget ALS-AIC e versioni della prova
+
+La ricerca ALS-AIC ordinaria e' esplicitamente limitata a 64 ALS multicella,
+256 tentativi di endpoint e 2048 stati di percorso per tentativo. Il flag di
+troncamento deve rimanere distinguibile da una ricerca esaustiva. Le versioni
+attuali sono:
+
+```text
+TECHNIQUE_CATALOG_VERSION = 1.9.0
+PROOF_SCHEMA_VERSION      = 3.4.0
+PROOF_METRICS_VERSION     = 3.1.0
+```
+
+Le metriche P14.1 aggiungono `group_node_count`, `max_group_size`,
+`als_node_count`, `als_cell_count` e `rcc_count` ai conteggi generali del
+ProofDAG.
+
 ## Fondamenti formali e architettura del motore
 
 Si assuma uno stato Sudoku composto da:
@@ -829,13 +923,22 @@ StrategyTier = Literal[
     "last-resort",
 ]
 
-EngineType = Literal[
+ExecutionEngine = Literal[
     "local",
+    "logic",
+    "nested",
+    "complete_tree",
+]
+
+InferenceEngine = Literal[
+    "local",
+    "fish",
+    "coloring",
     "chain",
     "group",
     "als",
-    "fish",
-    "coloring",
+    "forcing",
+    "dynamic",
     "nested",
     "complete_tree",
 ]
@@ -873,7 +976,8 @@ class TechniqueDefinition:
 
     family_id: str
     strategy_tier: StrategyTier
-    engine_type: EngineType
+    engine_type: ExecutionEngine
+    inference_engine: InferenceEngine
 
     parent_id: str | None
     se_equivalent_parent_id: str | None
@@ -904,7 +1008,7 @@ Esempio serializzato:
 
 ```json
 {
-  "catalog_version": "1.0.0",
+  "catalog_version": "1.9.0",
   "id": "sdp.skyscraper",
   "canonical_name": "Skyscraper",
   "display_name_it": "Skyscraper",
@@ -917,7 +1021,8 @@ Esempio serializzato:
   ],
   "family_id": "single_digit_patterns",
   "strategy_tier": "intermediate",
-  "engine_type": "chain",
+  "engine_type": "local",
+  "inference_engine": "chain",
   "parent_id": "chain.x",
   "se_equivalent_parent_id": "se.forcing_x_chain",
   "base_difficulty": 4.0,
@@ -963,8 +1068,8 @@ Le validazioni obbligatorie sono:
 | Rating `se` | Richiede `rating_source_version` e source key ufficiale |
 | Rating pseudo | Non può essere esportato come “SE ufficiale” |
 | Unicità | `requires_unique_solution=True` per UR, UL, AR e BUG |
-| Nested | `engine_type=nested`, `fallback_tier=1`, `nested_depth>=1` nelle prove |
-| Complete tree | `engine_type=complete_tree`, `fallback_tier=2` |
+| Nested | `engine_type=nested`, `inference_engine=nested`, `fallback_tier=1`, `nested_depth>=1` nelle prove |
+| Complete tree | entrambi i motori `complete_tree`, `fallback_tier=2` |
 | Parent generico | Un parent astratto non deve produrre mosse direttamente, salvo fallback esplicito |
 | Esito | Ogni mossa contiene almeno un placement o una eliminazione reale |
 | Metriche | Tutti i nomi delle metriche appartengono a uno schema versionato |
@@ -975,9 +1080,9 @@ Le validazioni obbligatorie sono:
 Le versioni da salvare in ogni analisi sono:
 
 ```python
-TECHNIQUE_CATALOG_VERSION = "1.0.0"
-PROOF_SCHEMA_VERSION = "2.0.0"
-PROOF_METRICS_VERSION = "2.0.0"
+TECHNIQUE_CATALOG_VERSION = "1.9.0"
+PROOF_SCHEMA_VERSION = "3.4.0"
+PROOF_METRICS_VERSION = "3.1.0"
 DIFFICULTY_MODEL_VERSION = "3.0.0"
 ```
 
@@ -1246,7 +1351,9 @@ La suite automatica deve includere:
 
 ## Piano incrementale di migrazione
 
-La migrazione consigliata comprende sedici patch piccole, ciascuna integrabile e reversibile.
+La sequenza seguente e' il piano operativo autorevole. Le righe completate
+descrivono l'architettura realmente presente; quelle future devono estenderla
+senza introdurre motori paralleli.
 
 | Patch | Obiettivo | Modifiche principali | Test e safety check |
 |---|---|---|---|
@@ -1259,15 +1366,19 @@ La migrazione consigliata comprende sedici patch piccole, ciascuna integrabile e
 | P06 | Introdurre ProofDAG | Convertire propagazioni e catene esistenti in DAG; mantenere renderer legacy | Round trip, dedup dei nodi, parent aciclici, rendering invariato |
 | P07 | Correggere tassonomia esistente | Validare Turbot, XY-Chain, Remote Pair, AIC e Continuous Nice Loop strutturalmente | Near-miss fixture per ogni classificazione; nessun nome basato sulla sola lunghezza |
 | P08 | Completare tecniche locali | UR6, Hidden Rectangle, AR1/2, Unique Loop, Sue de Coq, ATE opzionale | Uniqueness gate; fixture positivi e negativi; confronto HoDoKu |
-| P09 | Generalizzare fish e coloring | Fish engine parametrico; finned, sashimi, Franken, Mutant, Siamese; Simple/Multi Colors | Simmetrie, fin visibility, classificazione del fish, no duplicati |
-| P10 | Introdurre GroupNode | Costruire grouped links e classificatore AIC/Nice Loop | Test di alternanza, group visibility e canonicalizzazione |
-| P11 | Introdurre ALS engine | Enumerazione ALS, RCC graph, ALS-XZ, ALS-XY-Wing, ALS Chain, Death Blossom | Validazione `N+1`; overlap; RCC; benchmark sull’esplosione combinatoria |
-| P12 | Forcing avanzato | ProofDAG non lineari, Forcing Net, Templates, Kraken Fish | Chain versus net; template intersection; tutte le fins implicano il target |
-| P13 | Implementare vere Nested | Nested inference come sottoprova, memoizzazione, cycle guard, budget depth 1-2 | `nested_subproof_count >= 1`; nessuna ricerca fino alla soluzione completa |
-| P14 | Arricchire il profilo Plus/Nested | Rendere configurabili le regole interne: locking, subsets, fish, grouped, ALS | Ogni inferenza avanzata conserva il detector e il proprio subproof |
-| P15 | Calibrare e pubblicare | Ricalibrare pseudo-SE, migrare archivi, rimuovere mappe legacy e congelare v1 | Holdout corpus, benchmark, compatibility report, schema migration test |
+| P09 | Solidificare prova e presentazione | Contratto candidate-level e `ProofDAG` autorevole | Le viste di presentazione non ricostruiscono la logica |
+| P10 | Generalizzare Fish | Fish engine parametrico; Finned, Sashimi, Franken, Mutant, Siamese, endo-fin e cannibalismo | Simmetrie, fin visibility, classificazione e deduplica |
+| P11 | Generalizzare Coloring | Simple Colors e Multi Colors sul grafo condiviso | Componenti bipartite, near miss, supporti degli archi |
+| P12 | Generalizzare AIC e Nice Loop | Grafo statico, alternanza, endpoint e chiusure strutturali | X/XY-Chain, AIC 1/2, DNL e CNL separati |
+| P13 | Introdurre GroupNode | Group link, whole-set visibility e classificatore grouped | Alternanza, group visibility e canonicalizzazione |
+| P14 | Introdurre ALS engine | Enumerazione ALS, RCC graph, ALS-XZ, ALS-XY-Wing, ALS Chain e Death Blossom | Validazione `N+1`, overlap, RCC e budget |
+| P14.1 | Unificare tassonomia e codice | ID moderni, `inference_engine`, `ALSNode`, vera ALS-AIC, precedenza specifica, metriche Group/ALS | Round trip, near miss, classificazione e persistenza |
+| P15 | Classificare ProofDAG non lineari | Forcing Net, Templates e Kraken Fish sopra i motori esistenti | Chain versus net; nessuna sovrascrittura di ALS/Grouped |
+| P16 | Implementare vere Nested | Nested inference come sottoprova, memoizzazione, cycle guard, budget depth 1-2 | `nested_subproof_count >= 1`; nessuna ricerca fino alla soluzione completa |
+| P17 | Esplicitare profili Dynamic/Plus/Nested | Regole interne configurabili per local, fish, grouped e ALS | Ogni inferenza avanzata conserva detector e subproof |
+| P18 | Calibrare e pubblicare | Ricalibrare rating e metriche, migrare archivi, congelare v1 | Holdout corpus, benchmark, compatibility report, schema migration test |
 
-Le correzioni concrete da applicare subito nella pipeline sono:
+La pipeline applica il seguente contratto di normalizzazione:
 
 ```python
 def normalize_proof_metrics(logic: dict) -> dict:
@@ -1290,17 +1401,17 @@ def normalize_proof_metrics(logic: dict) -> dict:
         else:
             metrics[key] = value
 
-    metrics["metrics_version"] = "2.0.0"
+    metrics["metrics_version"] = "3.1.0"
     return metrics
 ```
 
-`techniques.py` non deve più eseguire:
+`techniques.py` non esegue:
 
 ```python
 proof["metrics"] = _proof_metrics(deduction)
 ```
 
-se `_proof_metrics()` considera soltanto le catene visualizzate. Deve invece fare:
+per ricostruire una prova dalle sole catene visualizzate. Applica invece:
 
 ```python
 proof["metrics"] = normalize_proof_metrics(proof)
@@ -1317,6 +1428,11 @@ nested_depth = metrics["nested_depth"]
 nested_subproof_count = metrics["nested_subproof_count"]
 ```
 
-L’attuale codice distingue già difficoltà base ed extra strutturale, ma lega il comportamento Nested al nome della tecnica e considera l’attuale ricerca completa come Nested. fileciteturn0file0 Il logic engine dichiara esplicitamente che la ricerca Nested corrente è ricorsiva completa e non limitata internamente, confermando che la rinomina in Complete Forcing Tree è una correzione semantica, non soltanto estetica. fileciteturn0file1 La libreria delle tecniche, infine, possiede già parent, family e strategy, ma tali mappe devono confluire nel catalogo unico e la classificazione deve essere prodotta dai detector strutturali anziché da conversioni nominali. fileciteturn0file2
+P14.1 ha completato l'unificazione strutturale: catalogo e registro usano ID
+stabili, ogni mossa espone il motore semantico separatamente dal livello
+esecutivo, GroupNode e ALSNode sopravvivono al round trip del ProofDAG e le
+metriche autorevoli non vengono ricostruite da una vista parziale.
 
-La migrazione è completa quando nessuna tecnica è identificata cercando sottostringhe nel nome, nessuna metrica autorevole viene ricostruita da una vista parziale, ogni mossa possiede un ID stabile del catalogo, le vere Nested contengono almeno una sottoprova e il Complete Forcing Tree viene invocato esclusivamente dopo il fallimento di tutti i livelli logici precedenti.
+La roadmap complessiva sarà completa quando P15-P18 avranno aggiunto le net,
+le vere Nested e la calibrazione senza violare questo contratto. Il Complete
+Forcing Tree resta l'ultimo fallback dopo i livelli logici precedenti.
