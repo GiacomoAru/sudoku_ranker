@@ -13,7 +13,7 @@ Repository: [github.com/GiacomoAru/sudoku_ranker](https://github.com/GiacomoAru/
 - analisi logica passo per passo;
 - motore Fish parametrico per varianti Basic, Franken e Mutant;
 - Simple e Multi Colors sul grafo delle coppie coniugate;
-- X-Chain, XY-Chain, AIC e Nice Loop sul grafo d'implicazione condiviso;
+- X-Chain, XY-Chain, AIC, Nice Loop e varianti Grouped sul grafo d'implicazione condiviso;
 - ordinamento delle tecniche secondo difficoltà crescente;
 - tre metriche complementari di difficoltà;
 - riconoscimento locale da foto, senza servizi esterni;
@@ -128,6 +128,19 @@ Loop, AIC Type 1/2 e Continuous Nice Loop. Ogni percorso deve alternare
 realmente strong e weak link: le AIC derivano le conclusioni dalla polarità
 degli endpoint, mentre un loop continuo elimina soltanto attraverso i supporti
 delle weak link rese strong dal resto del ciclo.
+
+## Group Nodes
+
+Il medesimo grafo accetta `GroupNode` che rappresentano la proposizione OR
+«la cifra occupa una di queste celle» in un segmento linea-box. Un weak link
+verso un gruppo richiede visibilità su tutti i suoi membri; un strong link
+esiste soltanto quando due nodi partizionano esattamente le posizioni della
+cifra in una casa.
+
+La classificazione mantiene separati `Grouped X-Chain`, `Grouped AIC`,
+`Grouped Nice Loop` e `Grouped Continuous Nice Loop`. Le prove serializzate e
+le evidenze candidate-level conservano il gruppo come nodo distinto: una
+catena composta soltanto da candidati singoli non riceve mai il nome Grouped.
 
 ## Riconoscimento da foto
 

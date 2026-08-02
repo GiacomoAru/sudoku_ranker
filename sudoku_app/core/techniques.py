@@ -2739,6 +2739,15 @@ def bidirectional_cycle(state):
     return _cached_moves(state, "logic:Bidirectional Cycle", produce)
 
 
+def grouped_chain(state):
+    """Catene e loop statici che contengono almeno un vero GroupNode."""
+    return _cached_moves(
+        state,
+        "logic:Grouped Chain",
+        lambda: _logic_moves(state, "Grouped Chain"),
+    )
+
+
 def nishio(state):
     def produce():
         excluded = _effects_from_functions(
@@ -2751,6 +2760,7 @@ def nishio(state):
                 forcing_chain,
                 aic,
                 bidirectional_cycle,
+                grouped_chain,
             ),
         )
         return _logic_moves(state, "Nishio", excluded)
@@ -2770,6 +2780,7 @@ def cell_forcing_chain(state):
                 forcing_chain,
                 aic,
                 bidirectional_cycle,
+                grouped_chain,
                 nishio,
             ),
         )
@@ -2790,6 +2801,7 @@ def region_forcing_chain(state):
                 forcing_chain,
                 aic,
                 bidirectional_cycle,
+                grouped_chain,
                 nishio,
                 cell_forcing_chain,
             ),
@@ -2811,6 +2823,7 @@ def dynamic_forcing_chain(state):
                 forcing_chain,
                 aic,
                 bidirectional_cycle,
+                grouped_chain,
                 nishio,
                 cell_forcing_chain,
                 region_forcing_chain,
@@ -2833,6 +2846,7 @@ def dynamic_forcing_chain_plus(state):
                 forcing_chain,
                 aic,
                 bidirectional_cycle,
+                grouped_chain,
                 nishio,
                 cell_forcing_chain,
                 region_forcing_chain,

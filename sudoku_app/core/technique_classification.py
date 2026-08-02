@@ -10,6 +10,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from .data_structure import UNITS, peers
+from .group_nodes import GroupNode
+from . import proof as proof_model
 
 
 Literal = tuple[int, int, int, bool]
@@ -22,6 +24,7 @@ _STATIC_TECHNIQUES = frozenset({
     "Forcing Chain",
     "AIC",
     "Bidirectional Cycle",
+    "Grouped Chain",
 })
 
 
@@ -108,6 +111,113 @@ def _parsed_chains(logic):
                 or strength not in {"strong", "weak"}
                 or "support_candidates" not in raw_link
                 or "support_house_ids" not in raw_link
+            ):
+                return None
+            links.append((
+                source,
+                target,
+                reason,
+                strength,
+                support_candidates,
+                support_house_ids,
+            ))
+        result.append((chain, tuple(links)))
+    return tuple(result)
+
+
+def _proof_literal(value):
+    """Parse a candidate or group literal without accepting an unknown state."""
+    if not isinstance(value, Mapping):
+        return None
+    if value.get("state") not in {
+        True, False, 1, 0, "on", "off", "true", "false", "True", "False",
+    }:
+        return None
+    try:
+        return proof_model.normalize_literal(value)
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _parsed_grouped_chains(state, logic):
+    """Valida le catene P13 contro il grafo grouped autorevole."""
+    if not isinstance(logic, Mapping):
+        return None
+    chains = logic.get("chains")
+    chain_links = logic.get("chain_links")
+    if (
+        not isinstance(chains, Sequence)
+        or isinstance(chains, (str, bytes))
+        or not isinstance(chain_links, Sequence)
+        or isinstance(chain_links, (str, bytes))
+        or not chains
+        or len(chains) != len(chain_links)
+    ):
+        return None
+
+    # Import locale: la classificazione e' caricata da techniques, che carica
+    # a sua volta il motore. Evita una dipendenza circolare all'import.
+    from . import logic_engine
+
+    graph = logic_engine.static_implication_graph(state)
+    result = []
+    for raw_chain, raw_links in zip(chains, chain_links):
+        if (
+            not isinstance(raw_chain, Sequence)
+            or isinstance(raw_chain, (str, bytes))
+            or not isinstance(raw_links, Sequence)
+            or isinstance(raw_links, (str, bytes))
+        ):
+            return None
+        chain = tuple(_proof_literal(item) for item in raw_chain)
+        if (
+            len(chain) < 4
+            or any(item is None for item in chain)
+            or len(raw_links) != len(chain) - 1
+        ):
+            return None
+
+        links = []
+        for index, raw_link in enumerate(raw_links):
+            if not isinstance(raw_link, Mapping):
+                return None
+            source = _proof_literal(raw_link.get("source"))
+            target = _proof_literal(raw_link.get("target"))
+            reason = raw_link.get("reason")
+            strength = raw_link.get("strength")
+            support_candidates = _triplets(
+                raw_link.get("support_candidates")
+            )
+            try:
+                support_house_ids = tuple(sorted({
+                    int(item)
+                    for item in raw_link.get("support_house_ids", ())
+                }))
+            except (TypeError, ValueError):
+                return None
+            if source is None or target is None:
+                return None
+            expected_strength = (
+                "weak" if proof_model.literal_state(source) else "strong"
+            )
+            if (
+                source != chain[index]
+                or target != chain[index + 1]
+                or reason not in {
+                    "peer", "x", "y", "group-weak", "group-strong",
+                }
+                or strength != expected_strength
+                or proof_model.literal_state(source)
+                == proof_model.literal_state(target)
+                or "support_candidates" not in raw_link
+                or "support_house_ids" not in raw_link
+            ):
+                return None
+            edge = graph.grouped_edge(source, target, reason)
+            if (
+                edge is None
+                or support_candidates != set(edge.support_candidates)
+                or support_house_ids != edge.support_house_ids
             ):
                 return None
             links.append((
@@ -420,6 +530,147 @@ def _continuous_loop_eliminations(state, links):
     return allowed
 
 
+def _proof_node(literal):
+    if proof_model.is_group_literal(literal):
+        return literal[0]
+    return literal[:3]
+
+
+def _proof_node_candidates(literal):
+    node = _proof_node(literal)
+    if isinstance(node, GroupNode):
+        return set(node.candidates)
+    return {node}
+
+
+def _grouped_loop_eliminations(state, graph, chain, links):
+    """Conclusioni consentite dai weak link di un continuous grouped loop."""
+    allowed = set()
+    all_candidates = tuple(graph.all_candidates)
+    for source, target, _, strength, *_ in links:
+        if strength != "weak":
+            continue
+        first = _proof_node(source)
+        second = _proof_node(target)
+        members = _proof_node_candidates(source) | _proof_node_candidates(target)
+        if (
+            not isinstance(first, GroupNode)
+            and not isinstance(second, GroupNode)
+            and first[:2] == second[:2]
+            and first[2] != second[2]
+        ):
+            for digit in state.candidates[first[0]][first[1]]:
+                candidate = (first[0], first[1], int(digit))
+                if candidate not in members:
+                    allowed.add(candidate)
+            continue
+        for candidate in all_candidates:
+            if candidate in members:
+                continue
+            if (
+                graph.grouped_weak_reason(candidate, first)
+                and graph.grouped_weak_reason(candidate, second)
+            ):
+                allowed.add(candidate)
+    return allowed
+
+
+def _classify_grouped_chain(state, deduction, logic):
+    parsed = _parsed_grouped_chains(state, logic)
+    if parsed is None:
+        return None
+    if not any(
+        proof_model.is_group_literal(literal)
+        for chain, _ in parsed
+        for literal in chain
+    ):
+        return None
+    if not all(_alternates(links) for _, links in parsed):
+        return None
+
+    kind = logic.get("kind")
+    eliminations = _triplets(deduction.get("eliminations"))
+    placements = _triplets(deduction.get("placements"))
+
+    if kind == "grouped-endpoint-aic":
+        common_central = None
+        represented = set()
+        for chain, links in parsed:
+            if (
+                len(chain) < 6
+                or links[0][3] != "weak"
+                or links[-1][3] != "weak"
+                or not proof_model.literal_state(chain[0])
+                or proof_model.literal_state(chain[-1])
+                or _proof_node(chain[0]) != _proof_node(chain[-1])
+            ):
+                return None
+            central = chain[1:-1]
+            if (
+                proof_model.literal_state(central[0])
+                or not proof_model.literal_state(central[-1])
+                or len({_proof_node(item) for item in central}) != len(central)
+                or not any(
+                    proof_model.is_group_literal(item) for item in central
+                )
+            ):
+                return None
+            signature = tuple(central)
+            if common_central is None:
+                common_central = signature
+            elif common_central != signature:
+                return None
+            represented.update(_proof_node_candidates(chain[0]))
+        if placements or not eliminations or not eliminations <= represented:
+            return None
+        digits = {proof_model.literal_digit(item) for item in common_central}
+        return "Grouped X-Chain" if len(digits) == 1 else "Grouped AIC"
+
+    if kind == "grouped-forcing-chain":
+        if len(parsed) != 1:
+            return None
+        chain, _ = parsed[0]
+        first, last = chain[0], chain[-1]
+        if (
+            isinstance(_proof_node(first), GroupNode)
+            or _proof_node(first) != _proof_node(last)
+            or proof_model.literal_state(first)
+            == proof_model.literal_state(last)
+            or len(set(chain)) != len(chain)
+        ):
+            return None
+        candidate = _proof_node(first)
+        if proof_model.literal_state(first):
+            allowed_eliminations = {candidate}
+            allowed_placements = set()
+        else:
+            allowed_eliminations = {
+                (candidate[0], candidate[1], int(digit))
+                for digit in state.candidates[candidate[0]][candidate[1]]
+                if int(digit) != candidate[2]
+            }
+            allowed_placements = {candidate}
+        if (
+            (not eliminations and not placements)
+            or not eliminations <= allowed_eliminations
+            or not placements <= allowed_placements
+        ):
+            return None
+        return "Grouped Nice Loop"
+
+    if kind != "grouped-cycle" or len(parsed) != 1 or placements:
+        return None
+    chain, links = parsed[0]
+    if chain[0] != chain[-1] or len(set(chain[:-1])) != len(chain) - 1:
+        return None
+    from . import logic_engine
+    graph = logic_engine.static_implication_graph(state)
+    allowed = _grouped_loop_eliminations(state, graph, chain, links)
+    if not eliminations or not eliminations <= allowed:
+        return None
+    return "Grouped Continuous Nice Loop"
+
+
 def classify_logic_technique(
     state,
     parent,
@@ -446,6 +697,8 @@ def classify_logic_technique(
 
     if parent not in _STATIC_TECHNIQUES:
         return parent
+    if parent == "Grouped Chain":
+        return _classify_grouped_chain(state, deduction, logic)
     parsed_chains = _parsed_chains(logic)
     if parsed_chains is None:
         return None

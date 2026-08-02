@@ -165,8 +165,8 @@ class CandidateSnapshotTests(unittest.TestCase):
             "coloring_pattern",
         ):
             self.assertIn(field, archive._STORED_MOVE_FIELDS)
-        self.assertEqual(archive.ANALYSIS_VERSION, 29)
-        self.assertEqual(archive.ANALYSIS_SCHEMA_VERSION, 17)
+        self.assertEqual(archive.ANALYSIS_VERSION, 30)
+        self.assertEqual(archive.ANALYSIS_SCHEMA_VERSION, 18)
 
 
 if __name__ == "__main__":

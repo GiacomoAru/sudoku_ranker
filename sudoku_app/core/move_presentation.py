@@ -12,7 +12,7 @@ from collections.abc import Mapping, Sequence
 from . import proof as proof_model
 
 
-VISUAL_EVIDENCE_SCHEMA_VERSION = "1.1.0"
+VISUAL_EVIDENCE_SCHEMA_VERSION = "1.2.0"
 EXPLANATION_SCHEMA_VERSION = "1.0.0"
 
 LINK_RELATIONS = frozenset({
@@ -77,11 +77,11 @@ def proof_primary_cells(logic):
     cells = set()
     for literal in logic.get("assumptions", ()) or ():
         normalized = proof_model.normalize_literal(literal)
-        cells.add((normalized[0], normalized[1]))
+        cells.update(proof_model.literal_cells(normalized))
     for chain in logic.get("chains", ()) or ():
         for literal in chain:
             normalized = proof_model.normalize_literal(literal)
-            cells.add((normalized[0], normalized[1]))
+            cells.update(proof_model.literal_cells(normalized))
     return sorted(cells)
 
 
@@ -150,8 +150,13 @@ def _candidate_key(row, column, value):
 
 
 def _literal_parts(literal):
-    normalized = proof_model.normalize_literal(literal)
+    try:
+        normalized = proof_model.normalize_literal(literal)
+    except (KeyError, TypeError, ValueError):
+        return None
     if normalized is None:
+        return None
+    if proof_model.is_group_literal(normalized):
         return None
     row, column, value, is_on = normalized
     return row, column, value, "on" if is_on else "off"
@@ -170,6 +175,18 @@ def _visual_literal(literal):
     if (
         isinstance(literal, Sequence)
         and not isinstance(literal, (str, bytes))
+        and len(literal) == 3
+    ):
+        row, column, value = literal
+        return {
+            "row": int(row),
+            "column": int(column),
+            "value": int(value),
+            "state": "candidate",
+        }
+    if (
+        isinstance(literal, Sequence)
+        and not isinstance(literal, (str, bytes))
         and len(literal) == 4
         and isinstance(literal[3], str)
     ):
@@ -180,7 +197,13 @@ def _visual_literal(literal):
             "value": value,
             "state": state,
         }
-    parts = _literal_parts(literal)
+    try:
+        normalized = proof_model.normalize_literal(literal)
+    except (KeyError, TypeError, ValueError):
+        return None
+    if normalized is not None and proof_model.is_group_literal(normalized):
+        return proof_model.literal_record(normalized)
+    parts = _literal_parts(normalized)
     if parts is None:
         return None
     return {
@@ -243,11 +266,50 @@ def build_visual_evidence(
     candidate_states = {}
     cell_roles = defaultdict(set)
     links = []
+    groups = {}
 
     def add_candidate(row, column, value, *roles, literal_state="candidate"):
         key = _candidate_key(row, column, value)
         candidate_roles[key].update(role for role in roles if role)
         candidate_states.setdefault(key, literal_state)
+
+    def add_literal(literal, *roles):
+        try:
+            normalized = proof_model.normalize_literal(literal)
+        except (KeyError, TypeError, ValueError):
+            return None
+        if normalized is None:
+            return None
+        if proof_model.is_group_literal(normalized):
+            group, is_on = normalized
+            state_label = "on" if is_on else "off"
+            key = (
+                group.digit,
+                tuple(sorted(group.cells)),
+                group.house_ids,
+                group.role,
+                state_label,
+            )
+            group_roles = {"group", *roles}
+            record = groups.setdefault(key, {
+                **group.to_dict(),
+                "state": state_label,
+                "roles": [],
+            })
+            record["roles"] = sorted(set(record["roles"]) | group_roles)
+            for row, column, value in group.candidates:
+                add_candidate(
+                    row, column, value, *group_roles,
+                    literal_state=state_label,
+                )
+                cell_roles[(row, column)].add("group")
+            return normalized
+        row, column, value, is_on = normalized
+        add_candidate(
+            row, column, value, *roles,
+            literal_state="on" if is_on else "off",
+        )
+        return normalized
 
     for row, column in primary:
         key = (int(row), int(column))
@@ -278,36 +340,39 @@ def build_visual_evidence(
             for node in dag.nodes.values():
                 if node.conclusion is None:
                     continue
-                row, column, value, is_on = node.conclusion
                 roles = ["link"]
                 if node.kind == "assumption":
                     roles.append("assumption")
                 if node.kind == "contradiction":
                     roles.append("contradiction")
-                add_candidate(
-                    row, column, value, *roles,
-                    literal_state="on" if is_on else "off",
-                )
+                add_literal(node.conclusion, *roles)
 
         for link in _iter_chain_links(logic):
-            source = _literal_parts(link.get("source"))
-            target = _literal_parts(link.get("target"))
+            source = add_literal(link.get("source"), "link")
+            target = add_literal(link.get("target"), "link")
             if source is None or target is None:
                 continue
-            add_candidate(*source[:3], "link", literal_state=source[3])
-            add_candidate(*target[:3], "link", literal_state=target[3])
-            target_roles = candidate_roles[_candidate_key(*target[:3])]
+            target_roles = set()
+            if not proof_model.is_group_literal(target):
+                target_roles = candidate_roles[_candidate_key(*target[:3])]
             visual_link = _normalise_visual_link({
                 "source": link.get("source"),
                 "target": link.get("target"),
                 "relation": (
                     "contradiction"
                     if "contradiction" in target_roles
-                    else "implication"
+                    else (
+                        "grouped-implication"
+                        if proof_model.is_group_literal(source)
+                        or proof_model.is_group_literal(target)
+                        else "implication"
+                    )
                 ),
                 "direction": "forward",
                 "strength": str(link.get("strength") or "unspecified"),
                 "reason": str(link.get("reason") or "unspecified"),
+                "support_candidates": link.get("support_candidates", ()),
+                "support_house_ids": link.get("support_house_ids", ()),
             })
             if visual_link is not None:
                 links.append(visual_link)
@@ -322,6 +387,19 @@ def build_visual_evidence(
                 *(candidate.get("roles", ()) or ()),
                 literal_state=str(candidate.get("state") or "candidate"),
             )
+        for group in explicit.get("groups", ()) or ():
+            literal = group
+            if "node_type" not in group and "group" not in group:
+                literal = {
+                    "node_type": "group",
+                    "group": {
+                        key: value
+                        for key, value in group.items()
+                        if key in {"digit", "cells", "house_ids", "role"}
+                    },
+                    "state": group.get("state", "on"),
+                }
+            add_literal(literal, *(group.get("roles", ()) or ()))
         for link in explicit.get("links", ()) or ():
             normalized = _normalise_visual_link(link)
             if normalized is not None:
@@ -341,6 +419,7 @@ def build_visual_evidence(
             }
             for (row, column, value), roles in sorted(candidate_roles.items())
         ],
+        "groups": [groups[key] for key in sorted(groups)],
         "links": links,
     }
 

@@ -17,7 +17,7 @@ Non è necessario includere ogni nome mai inventato nella comunità Sudoku. La c
 
 ## Baseline acquisito
 
-Le patch P01-P12, inclusa P06.5, sono applicate e non fanno più parte della roadmap operativa. Il progetto dispone già di:
+Le patch P01-P13, inclusa P06.5, sono applicate e non fanno più parte della roadmap operativa. Il progetto dispone già di:
 
 * catalogo centrale e identificatori stabili;
 * registro dichiarativo dei detector;
@@ -41,6 +41,10 @@ Le patch P01-P12, inclusa P06.5, sono applicate e non fanno più parte della roa
 * grafo AIC completo con supporti autorevoli degli archi nel `ProofDAG`,
   X-Chain, XY-Chain, Discontinuous Nice Loop, AIC Type 1/2 e Continuous Nice
   Loop classificati da alternanza, chiusura ed endpoint;
+* `GroupNode` come proposizione OR confinata in un segmento linea-box,
+  visibilità whole-set, strong link come partizione esatta di casa e un unico
+  grafo candidato/gruppo per Grouped X-Chain, Grouped AIC, Grouped Nice Loop e
+  Grouped Continuous Nice Loop;
 * versionamento esplicito di prove e analisi archiviate.
 
 Le patch future devono estendere queste strutture, non crearne copie parallele.
@@ -48,42 +52,6 @@ Le patch future devono estendere queste strutture, non crearne copie parallele.
 ---
 
 # Blocco D: motori parametrici
-
-## P13. Group Nodes
-
-### Obiettivo
-
-Estendere il grafo delle catene a nodi formati da gruppi di candidati.
-
-### Struttura
-
-```python
-@dataclass(frozen=True)
-class GroupNode:
-    digit: int
-    cells: frozenset[Cell]
-    house_ids: tuple[int, ...]
-    role: str
-```
-
-### Tecniche
-
-```text
-Grouped X-Chain
-Grouped AIC
-Grouped Continuous Nice Loop
-Grouped Nice Loop
-```
-
-### Criteri di completamento
-
-* Un gruppo rappresenta soltanto candidati logicamente equivalenti.
-* La visibilità del gruppo viene calcolata come insieme, non cella per cella in modo indipendente.
-* L’alternanza strong/weak resta valida.
-* Una catena senza veri GroupNode non viene chiamata Grouped.
-* La prova visualizzata distingue i gruppi dai candidati singoli.
-
----
 
 ## P14. ALS engine e generalized wings
 
@@ -646,13 +614,9 @@ La versione 1.0 è pronta quando:
 
 # Dipendenze principali
 
-Le fondamenta P01-P12 sono già acquisite.
+Le fondamenta P01-P13 sono già acquisite.
 
 ```text
-P10 -> P15 e profilo Plus
-P11 -> profilo Plus
-P12 -> P13, P15 e P16
-P13 -> P14 e profilo Nested
 P14 -> P15, P16 e profilo Nested
 P15 -> P16
 P16 -> P17
@@ -666,7 +630,6 @@ P19 -> P20
 # Ordine pratico restante
 
 ```text
-P13 Group Nodes
 P14 ALS e generalized wings
 P15 Forcing Net, Templates e Kraken
 P16 Vere Nested

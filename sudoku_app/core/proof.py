@@ -11,16 +11,21 @@ from collections.abc import Mapping, Sequence
 import hashlib
 import json
 
+from .group_nodes import GroupNode, group_node
+
 
 Literal = tuple[int, int, int, bool]
+GroupLiteral = tuple[GroupNode, bool]
+ProofLiteral = Literal | GroupLiteral
 Candidate = tuple[int, int, int]
 
-PROOF_DAG_SCHEMA_VERSION = "1.1.0"
+PROOF_DAG_SCHEMA_VERSION = "1.2.0"
 MAX_PRESENTATION_CHAINS = 16
 
 NODE_KINDS = frozenset({
     "assumption",
     "static-implication",
+    "grouped-implication",
     "dynamic-single",
     "advanced-rule",
     "common-conclusion",
@@ -30,12 +35,15 @@ NODE_KINDS = frozenset({
 })
 
 
-def normalize_literal(value) -> Literal | None:
+def normalize_literal(value) -> ProofLiteral | None:
     if value is None:
         return None
     if isinstance(value, Mapping):
         state = value.get("state")
         is_on = state in {True, 1, "on", "true", "True"}
+        if value.get("node_type") == "group" or "group" in value:
+            raw_group = value.get("group", value)
+            return group_node(raw_group), is_on
         literal = (
             int(value["row"]),
             int(value["column"]),
@@ -43,6 +51,8 @@ def normalize_literal(value) -> Literal | None:
             is_on,
         )
     elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        if len(value) == 2 and isinstance(value[0], (GroupNode, Mapping)):
+            return group_node(value[0]), bool(value[1])
         if len(value) != 4:
             raise ValueError("Un letterale deve contenere quattro valori.")
         row, column, digit, state = value
@@ -56,10 +66,59 @@ def normalize_literal(value) -> Literal | None:
     return literal
 
 
-def literal_record(literal: Literal | None):
+def is_group_literal(literal) -> bool:
+    return (
+        isinstance(literal, Sequence)
+        and not isinstance(literal, (str, bytes))
+        and len(literal) == 2
+        and isinstance(literal[0], GroupNode)
+    )
+
+
+def literal_state(literal: ProofLiteral) -> bool:
+    literal = normalize_literal(literal)
+    return literal[1] if is_group_literal(literal) else literal[3]
+
+
+def literal_cells(literal: ProofLiteral) -> tuple[tuple[int, int], ...]:
+    literal = normalize_literal(literal)
+    if is_group_literal(literal):
+        return tuple(sorted(literal[0].cells))
+    return ((literal[0], literal[1]),)
+
+
+def literal_digit(literal: ProofLiteral) -> int:
+    literal = normalize_literal(literal)
+    return literal[0].digit if is_group_literal(literal) else literal[2]
+
+
+def literal_sort_key(literal: ProofLiteral):
+    literal = normalize_literal(literal)
+    if is_group_literal(literal):
+        node, is_on = literal
+        return (
+            1,
+            node.digit,
+            tuple(sorted(node.cells)),
+            node.house_ids,
+            node.role,
+            int(is_on),
+        )
+    row, column, digit, is_on = literal
+    return 0, row, column, digit, int(is_on)
+
+
+def literal_record(literal: ProofLiteral | None):
     literal = normalize_literal(literal)
     if literal is None:
         return None
+    if is_group_literal(literal):
+        node, is_on = literal
+        return {
+            "node_type": "group",
+            "group": node.to_dict(),
+            "state": "on" if is_on else "off",
+        }
     row, column, value, is_on = literal
     return {
         "row": row,
@@ -103,7 +162,7 @@ def _json_payload(payload):
 class ProofNode:
     id: int
     kind: str
-    conclusion: Literal | None
+    conclusion: ProofLiteral | None
     parents: tuple[int, ...]
     reason: str
     depth: int
@@ -417,7 +476,10 @@ class ProofDAG:
             paths,
             key=lambda path: (
                 -len(path),
-                tuple(self.nodes[node_id].conclusion for node_id in path),
+                tuple(
+                    literal_sort_key(self.nodes[node_id].conclusion)
+                    for node_id in path
+                ),
             ),
         )
 
@@ -440,9 +502,11 @@ class ProofDAG:
             for source_id, target_id in zip(path, path[1:]):
                 source = self.nodes[source_id].conclusion
                 target = self.nodes[target_id].conclusion
-                if source[3] and not target[3]:
+                source_state = literal_state(source)
+                target_state = literal_state(target)
+                if source_state and not target_state:
                     strength = "weak"
-                elif not source[3] and target[3]:
+                elif not source_state and target_state:
                     strength = "strong"
                 else:
                     strength = "non-alternating"
@@ -518,12 +582,15 @@ class ProofDAG:
         }
 
     def primary_cells(self):
-        return sorted({
-            (node.conclusion[0], node.conclusion[1])
-            for node in self.nodes.values()
-            if node.conclusion is not None
-            and node.kind not in {"common-conclusion"}
-        })
+        cells = set()
+        for node in self.nodes.values():
+            if (
+                node.conclusion is None
+                or node.kind == "common-conclusion"
+            ):
+                continue
+            cells.update(literal_cells(node.conclusion))
+        return sorted(cells)
 
     def select_conclusions(self, *, placements=(), eliminations=()):
         """Allinea i nodi conclusivi a una Move eventualmente filtrata."""
@@ -738,6 +805,14 @@ class ProofDAG:
                         kind = "advanced-rule"
                     elif edge_reason == "dynamic":
                         kind = "dynamic-single"
+                    elif (
+                        is_group_literal(literal)
+                        or (
+                            index > 0
+                            and is_group_literal(literals[index - 1])
+                        )
+                    ):
+                        kind = "grouped-implication"
                     else:
                         kind = "static-implication"
                     node_id = add(
@@ -767,11 +842,23 @@ class ProofDAG:
             # con lo stesso percorso centrale. Ogni conclusione resta legata
             # al terminale della propria catena di contraddizione esplicita.
             if (
-                proof_kind == "endpoint-aic"
+                proof_kind in {"endpoint-aic", "grouped-endpoint-aic"}
+                and not is_group_literal(literals[0])
+                and not is_group_literal(literals[-1])
                 and literals[0][:3] == literals[-1][:3]
                 and literals[0][3] != literals[-1][3]
             ):
                 dedicated_evidence.setdefault(literals[-1], parent)
+            elif (
+                proof_kind == "grouped-endpoint-aic"
+                and is_group_literal(literals[0])
+                and is_group_literal(literals[-1])
+                and literals[0][0] == literals[-1][0]
+                and literals[0][1]
+                and not literals[-1][1]
+            ):
+                for candidate in literals[0][0].candidates:
+                    dedicated_evidence.setdefault((*candidate, False), parent)
 
         conclusion_specs = []
         for action, items, state in (
@@ -851,14 +938,22 @@ def proof_dag(value) -> ProofDAG | None:
 
 __all__ = [
     "Candidate",
+    "GroupLiteral",
+    "GroupNode",
     "ImplicationEdgeSupport",
     "Literal",
     "MAX_PRESENTATION_CHAINS",
     "NODE_KINDS",
     "PROOF_DAG_SCHEMA_VERSION",
     "ProofDAG",
+    "ProofLiteral",
     "ProofNode",
+    "is_group_literal",
+    "literal_cells",
+    "literal_digit",
     "literal_record",
+    "literal_sort_key",
+    "literal_state",
     "normalize_literal",
     "proof_dag",
 ]

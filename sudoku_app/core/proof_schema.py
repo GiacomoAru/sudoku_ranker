@@ -13,7 +13,7 @@ from collections.abc import Mapping, Sequence
 from . import proof as proof_model
 
 
-PROOF_SCHEMA_VERSION = "3.2.0"
+PROOF_SCHEMA_VERSION = "3.3.0"
 PROOF_METRICS_VERSION = "3.0.0"
 
 PROOF_METRIC_FIELDS = (

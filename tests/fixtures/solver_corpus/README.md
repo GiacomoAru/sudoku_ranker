@@ -35,3 +35,6 @@ Il modulo è inoltre scoperto automaticamente dalla suite ordinaria. Quando una
 nuova tecnica diventa stabile, il suo caso è già presente nella sezione futura:
 si aggiunge il relativo `TechniqueBinding` in `tests/solver_corpus.py` e si
 rimuove il codice da `PLANNED_HODOKU_CODES`.
+
+P13 attiva inoltre i casi `0709` e `0710`: verificano rispettivamente una
+conclusione esatta di Grouped Continuous Nice Loop e di Grouped Nice Loop.

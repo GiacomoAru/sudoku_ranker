@@ -309,9 +309,10 @@ Le tecniche di unicità sono valide soltanto quando il puzzle è stato verificat
 | 890 `chain.aic.type2` | **AIC Type 2** | Endpoint distinti implicano che almeno uno sia vero; eliminare un candidato che vede entrambi o una cifra comune secondo la forma. | A, chain | 7.1 `pseudo_se` | C | 0 |
 | 900 `loop.cnl` | **Continuous Nice Loop**, AIC Loop | Loop perfettamente alternato. Tutte le weak link della chiusura possono produrre eliminazioni esterne. | A, chain | 7.2 `pseudo_se` | C | 0 |
 | 910 `chain.grouped.x` | **Grouped X-Chain** | X-Chain con uno o più nodi rappresentanti gruppi di candidati equivalenti confinati in segmenti di casa. | A, group | 6.9 `pseudo_se` | G | 0 |
-| 920 `chain.grouped.aic` | **Grouped AIC**, Grouped Nice Loop | AIC con CandidateNode e GroupNode, alternanza verificata a livello di gruppi. | A, group | 7.4 `pseudo_se` | G | 0 |
-| 930 `loop.grouped.cnl` | **Grouped Continuous Nice Loop** | Continuous loop contenente group nodes. | A, group | 7.6 `pseudo_se` | G | 0 |
-| 940 `chain.als_aic` | **ALS-AIC**, AIC with ALS Nodes | AIC nella quale uno o più nodi sono ALS collegati tramite RCC. | A, ALS | 7.7 `pseudo_se` | A, G | 0 |
+| 920 `loop.grouped.dnl` | **Grouped Nice Loop**, Grouped Discontinuous Nice Loop | Discontinuous loop contenente almeno un vero GroupNode; la discontinuità rende falso il candidato oppure elimina le alternative al candidato reso vero. | A, group | 7.3 `pseudo_se` | G | 0 |
+| 930 `chain.grouped.aic` | **Grouped AIC** | AIC con CandidateNode e GroupNode, alternanza verificata a livello di gruppi. | A, group | 7.4 `pseudo_se` | G | 0 |
+| 940 `loop.grouped.cnl` | **Grouped Continuous Nice Loop** | Continuous loop contenente group nodes e conclusioni derivate dalle weak link con visibilità sull'intero gruppo. | A, group | 7.6 `pseudo_se` | G | 0 |
+| 950 `chain.als_aic` | **ALS-AIC**, AIC with ALS Nodes | AIC nella quale uno o più nodi sono ALS collegati tramite RCC. | A, ALS | 7.7 `pseudo_se` | A, G | 0 |
 
 HoDoKu definisce Remote Pair, X-Chain, XY-Chain, Nice Loop, AIC Type 1 e 2, Continuous Nice Loop, group nodes e ALS in chains. La distinzione fondamentale è strutturale: una catena ordinaria ha dipendenze lineari, mentre una net contiene dipendenze multiple, biforcazioni o riconvergenze. citeturn0search0 ALS-XZ, ALS-XY-Wing, ALS Chain e Death Blossom seguono il modello ufficiale ALS/RCC di HoDoKu. citeturn7search2
 
@@ -790,7 +791,10 @@ La tabella seguente normalizza le principali differenze terminologiche. Le corri
 | DNL | Discontinuous Nice Loop | Forcing Chain o Forcing X-Chain | Nice Loop/chain | Nome SE |
 | AIC Type 1/2 | AIC Type 1/2 | Forcing Chain | AIC o Forcing Chain | Forcing Chain |
 | Continuous Nice Loop | Continuous Nice Loop | Bidirectional Cycle | Bidirectional Cycle/Nice Loop | Bidirectional Cycle |
-| Grouped AIC | Grouped Nice Loop/AIC | Non distinto nell’SE classico | Dipende dalla versione | Nessuna categoria indipendente stabile |
+| Grouped X-Chain | Grouped X-Chain | Non distinto nell’SE classico | Dipende dalla versione | Parent Forcing X-Chain |
+| Grouped Nice Loop | Grouped Discontinuous Nice Loop | Non distinto nell’SE classico | Dipende dalla versione | Parent Forcing Chain |
+| Grouped AIC | Grouped AIC | Non distinto nell’SE classico | Dipende dalla versione | Parent Forcing Chain |
+| Grouped Continuous Nice Loop | Grouped Continuous Nice Loop | Non distinto nell’SE classico | Dipende dalla versione | Parent Bidirectional Cycle |
 | ALS-XZ | ALS-XZ | Non implementato nell’SE classico | Non parte della tassonomia SE tradizionale | Nessuna etichetta SE |
 | ALS Chain | ALS Chain | Non implementato | Non standard SE | Nessuna etichetta |
 | Bidirectional X-Cycle | X-Cycle, coloring, bilocation cycle | Bidirectional X-Cycle | Identico | Identico al formato SE |
@@ -1125,7 +1129,7 @@ La matrice dei fixture deve coprire tutti i sottotipi:
 | ALS Chain | Cammino di ALS generato | RCC adiacenti distinti |
 | Death Blossom | Stem con un petal per candidato | Un petal mancante invalida il pattern |
 | X/XY/AIC | Grafo sintetico con sequenza strong/weak | Alternanza, endpoint e conclusione |
-| Grouped AIC | Stesso grafo con GroupNode | Nessuna espansione non valida del gruppo |
+| Grouped X/AIC/Nice Loop/CNL | Stesso grafo con GroupNode | Visibilità whole-set, partizioni strong esatte, alternanza valida e nessuna etichetta Grouped senza un gruppo reale |
 | Forcing | Rami sintetici con conclusione comune | Assumption count e branch count esatti |
 | Net | Nodo con più parent o fork-merge | Non classificata come chain |
 | Nested | Inferenza impossibile al livello 0 ma provabile al livello 1 | `nested_subproof_count >= 1` |

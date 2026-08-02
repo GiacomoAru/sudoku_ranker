@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import math
 
 
-TECHNIQUE_CATALOG_VERSION = "1.6.0"
+TECHNIQUE_CATALOG_VERSION = "1.7.0"
 
 LEGACY_TECHNIQUE_ALIASES = {
     "Nested Forcing Chain": "Complete Forcing Tree",
@@ -820,6 +820,39 @@ _CATALOG_ROWS = (
         "forcing_chains", "static_chains", "aic",
         parent_id="se.forcing_chain",
         se_equivalent_parent_id="se.forcing_chain",
+        rating_kind="pseudo_se", engine_type="logic",
+        proof_metric_profile=CHAIN_METRICS,
+    ),
+    _entry(
+        "chain.grouped.x", "Grouped X-Chain", 6.9,
+        "forcing_chains", "static_chains", "grouped_chain",
+        parent_id="se.forcing_x_chain",
+        se_equivalent_parent_id="se.forcing_x_chain",
+        rating_kind="pseudo_se", engine_type="logic",
+        proof_metric_profile=CHAIN_METRICS,
+    ),
+    _entry(
+        "loop.grouped.dnl", "Grouped Nice Loop", 7.3,
+        "forcing_chains", "static_chains", "grouped_chain",
+        aliases=_aliases("Grouped Discontinuous Nice Loop"),
+        parent_id="se.forcing_chain",
+        se_equivalent_parent_id="se.forcing_chain",
+        rating_kind="pseudo_se", engine_type="logic",
+        proof_metric_profile=CHAIN_METRICS,
+    ),
+    _entry(
+        "chain.grouped.aic", "Grouped AIC", 7.4,
+        "forcing_chains", "static_chains", "grouped_chain",
+        parent_id="se.forcing_chain",
+        se_equivalent_parent_id="se.forcing_chain",
+        rating_kind="pseudo_se", engine_type="logic",
+        proof_metric_profile=CHAIN_METRICS,
+    ),
+    _entry(
+        "loop.grouped.cnl", "Grouped Continuous Nice Loop", 7.6,
+        "bidirectional_cycles", "static_chains", "grouped_chain",
+        parent_id="se.bidirectional_cycle",
+        se_equivalent_parent_id="se.bidirectional_cycle",
         rating_kind="pseudo_se", engine_type="logic",
         proof_metric_profile=CHAIN_METRICS,
     ),

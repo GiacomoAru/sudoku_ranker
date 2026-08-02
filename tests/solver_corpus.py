@@ -94,6 +94,8 @@ ACTIVE_TECHNIQUE_BINDINGS = {
     "0702": TechniqueBinding("xy_chain", "chain.xy"),
     "0703": TechniqueBinding("xy_chain", "chain.remote_pair"),
     "0708": TechniqueBinding("aic", "chain.aic.type1"),
+    "0709": TechniqueBinding("grouped_chain", "loop.grouped.cnl"),
+    "0710": TechniqueBinding("grouped_chain", "loop.grouped.dnl"),
     "0800": TechniqueBinding("y_wing", "wing.xy"),
     "0801": TechniqueBinding("xyz_wing", "wing.xyz"),
     "0803": TechniqueBinding("w_wing", "wing.w"),
@@ -109,7 +111,7 @@ ACTIVE_TECHNIQUE_BINDINGS = {
 PLANNED_HODOKU_CODES = frozenset({
     "0341",
     "0502",
-    "0706", "0707", "0709", "0710", "0711",
+    "0706", "0707", "0711",
     "0901", "0902", "0903", "0904", "1201", "1202",
 })
 

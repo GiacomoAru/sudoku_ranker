@@ -431,6 +431,16 @@ _DECLARED_RUNNERS = (
         techniques.bidirectional_cycle,
     ),
     _logic(
+        "grouped_chain",
+        (
+            "chain.grouped.x",
+            "loop.grouped.dnl",
+            "chain.grouped.aic",
+            "loop.grouped.cnl",
+        ),
+        techniques.grouped_chain,
+    ),
+    _logic(
         "nishio",
         ("forcing.nishio",),
         techniques.nishio,

@@ -28,12 +28,16 @@ from itertools import chain, combinations
 from threading import RLock
 
 from .data_structure import UNITS, UNIT_KINDS, peers
+from .group_nodes import GroupNode
 from . import proof as proof_model
 from . import proof_schema
 
 
 Candidate = tuple[int, int, int]
 Literal = tuple[int, int, int, bool]
+ImplicationNode = Candidate | GroupNode
+GroupLiteral = tuple[GroupNode, bool]
+GraphLiteral = Literal | GroupLiteral
 
 # Limiti espliciti di output e delle viste lineari.
 MAX_DEDUCTIONS_PER_TECHNIQUE = 16 # limite massimo non valicabile
@@ -75,6 +79,7 @@ LOGIC_TECHNIQUE_BATCHES = {
         "Forcing Chain",
         "AIC",
         "Bidirectional Cycle",
+        "Grouped Chain",
     ),
     "multiple": (
         "Nishio",
@@ -151,6 +156,48 @@ def _opposite(literal: Literal) -> Literal:
     return literal[0], literal[1], literal[2], not literal[3]
 
 
+def _node_literal(node: ImplicationNode, is_on: bool) -> GraphLiteral:
+    if isinstance(node, GroupNode):
+        return node, bool(is_on)
+    return _literal(node, is_on)
+
+
+def _literal_node(literal: GraphLiteral) -> ImplicationNode:
+    if proof_model.is_group_literal(literal):
+        return literal[0]
+    return _candidate(literal)
+
+
+def _graph_opposite(literal: GraphLiteral) -> GraphLiteral:
+    return _node_literal(_literal_node(literal), not proof_model.literal_state(literal))
+
+
+def _node_candidates(node: ImplicationNode) -> tuple[Candidate, ...]:
+    return node.candidates if isinstance(node, GroupNode) else (node,)
+
+
+def _node_digit(node: ImplicationNode) -> int:
+    return node.digit if isinstance(node, GroupNode) else node[2]
+
+
+def _node_key(node: ImplicationNode):
+    if isinstance(node, GroupNode):
+        return (
+            1,
+            node.digit,
+            tuple(sorted(node.cells)),
+            node.house_ids,
+            node.role,
+        )
+    return 0, *node
+
+
+def _graph_literal_key(literal: GraphLiteral):
+    return _node_key(_literal_node(literal)) + (
+        int(proof_model.literal_state(literal)),
+    )
+
+
 def _candidate_key(candidate: Candidate) -> tuple[int, int, int]:
     return candidate
 
@@ -197,14 +244,8 @@ def _fingerprint(state) -> tuple:
     return grid, tuple(masks)
 
 
-def _literal_record(literal: Literal) -> dict:
-    row, column, value, is_on = literal
-    return {
-        "row": row,
-        "column": column,
-        "value": value,
-        "state": "on" if is_on else "off",
-    }
+def _literal_record(literal: GraphLiteral) -> dict:
+    return proof_model.literal_record(literal)
 
 
 def _proof(
@@ -263,11 +304,14 @@ def _deduction(
     eliminations = sorted(set(eliminations), key=_candidate_key)
     chain_list = [list(chain) for chain in chains if chain]
     primary = sorted({
-        (literal[0], literal[1])
+        cell
         for chain in chain_list
         for literal in chain
+        for cell in proof_model.literal_cells(literal)
     } | {
-        (literal[0], literal[1]) for literal in assumptions
+        cell
+        for literal in assumptions
+        for cell in proof_model.literal_cells(literal)
     })
     return {
         "description": description,
@@ -289,7 +333,7 @@ def _deduction(
 
 @dataclass(frozen=True)
 class Edge:
-    target: Literal
+    target: GraphLiteral
     reason: str  # "peer" (debole), "x" (forte) oppure "y"
     support_candidates: tuple[Candidate, ...] = ()
     support_house_ids: tuple[int, ...] = ()
@@ -424,6 +468,226 @@ class StaticImplicationGraph:
             )
             for source, targets in adjacency.items()
         }
+        self.group_nodes: tuple[GroupNode, ...] = ()
+        self.grouped_adjacency = None
+
+    @staticmethod
+    def _node_visibility(first: ImplicationNode, second: ImplicationNode):
+        if _node_digit(first) != _node_digit(second):
+            return False
+        first_cells = {candidate[:2] for candidate in _node_candidates(first)}
+        second_cells = {
+            candidate[:2] for candidate in _node_candidates(second)
+        }
+        if first_cells & second_cells:
+            return False
+        return all(
+            right in peers(*left)
+            for left in first_cells
+            for right in second_cells
+        )
+
+    @staticmethod
+    def _visibility_house_ids(
+        first: ImplicationNode,
+        second: ImplicationNode,
+    ):
+        house_ids = set()
+        for left in _node_candidates(first):
+            for right in _node_candidates(second):
+                house_ids.update(
+                    set(_UNITS_BY_CELL[left[:2]])
+                    & set(_UNITS_BY_CELL[right[:2]])
+                )
+        return tuple(sorted(house_ids))
+
+    def _ensure_grouped_adjacency(self):
+        if self.grouped_adjacency is not None:
+            return
+
+        potential_groups = {}
+        for digit in range(1, 10):
+            for line_id in range(18):
+                line = set(UNITS[line_id])
+                for box_id in range(18, 27):
+                    segment = line & set(UNITS[box_id])
+                    cells = frozenset(
+                        cell
+                        for cell in segment
+                        if digit in self.candidates.get(cell, ())
+                    )
+                    if len(cells) < 2:
+                        continue
+                    role = (
+                        "row-segment" if line_id < 9 else "column-segment"
+                    )
+                    node = GroupNode(
+                        digit=digit,
+                        cells=cells,
+                        house_ids=tuple(
+                            house_id
+                            for house_id, unit in enumerate(UNITS)
+                            if cells <= set(unit)
+                        ),
+                        role=role,
+                    )
+                    potential_groups[(digit, cells)] = node
+
+        strong_specs = set()
+        for house_id, unit in enumerate(UNITS):
+            unit_cells = set(unit)
+            for digit in range(1, 10):
+                positions = frozenset(
+                    cell
+                    for cell in unit_cells
+                    if digit in self.candidates.get(cell, ())
+                )
+                if len(positions) < 3:
+                    continue
+                for (group_digit, cells), group in potential_groups.items():
+                    if group_digit != digit or not cells < positions:
+                        continue
+                    other_cells = positions - cells
+                    if len(other_cells) == 1:
+                        row, column = next(iter(other_cells))
+                        other: ImplicationNode = (row, column, digit)
+                    else:
+                        other = potential_groups.get((digit, other_cells))
+                        if other is None:
+                            continue
+                    ordered = tuple(sorted((group, other), key=_node_key))
+                    strong_specs.add((ordered[0], ordered[1], house_id))
+
+        raw: dict[
+            GraphLiteral,
+            dict[tuple[GraphLiteral, str], dict[str, set]],
+        ] = defaultdict(dict)
+
+        def add_edge(
+            source,
+            target,
+            reason,
+            *,
+            support_candidates=(),
+            support_house_ids=(),
+        ):
+            support = raw[source].setdefault(
+                (target, reason),
+                {"candidates": set(), "houses": set()},
+            )
+            support["candidates"].update(support_candidates)
+            support["houses"].update(support_house_ids)
+
+        for source, edges in self.adjacency.items():
+            for edge in edges:
+                add_edge(
+                    source,
+                    edge.target,
+                    edge.reason,
+                    support_candidates=edge.support_candidates,
+                    support_house_ids=edge.support_house_ids,
+                )
+
+        for first, second, house_id in strong_specs:
+            support_candidates = (
+                *_node_candidates(first),
+                *_node_candidates(second),
+            )
+            add_edge(
+                _node_literal(first, False),
+                _node_literal(second, True),
+                "group-strong",
+                support_candidates=support_candidates,
+                support_house_ids=(house_id,),
+            )
+            add_edge(
+                _node_literal(second, False),
+                _node_literal(first, True),
+                "group-strong",
+                support_candidates=support_candidates,
+                support_house_ids=(house_id,),
+            )
+
+        # Ogni intersezione linea-box con almeno due candidati e' una vera
+        # proposizione OR e puo' fungere anche da endpoint di una prova. Non
+        # la scartiamo solo perche' nello stato corrente non partecipa a un
+        # link forte; gli archi forti restano comunque limitati alle
+        # partizioni esatte costruite sopra.
+        grouped_nodes = tuple(sorted(potential_groups.values(), key=_node_key))
+        candidates_by_digit = {
+            digit: tuple(
+                candidate
+                for candidate in self.all_candidates
+                if candidate[2] == digit
+            )
+            for digit in range(1, 10)
+        }
+        for group in grouped_nodes:
+            for candidate in candidates_by_digit[group.digit]:
+                if not self._node_visibility(group, candidate):
+                    continue
+                support_candidates = (
+                    *group.candidates,
+                    candidate,
+                )
+                house_ids = self._visibility_house_ids(group, candidate)
+                add_edge(
+                    _node_literal(group, True),
+                    _node_literal(candidate, False),
+                    "group-weak",
+                    support_candidates=support_candidates,
+                    support_house_ids=house_ids,
+                )
+                add_edge(
+                    _node_literal(candidate, True),
+                    _node_literal(group, False),
+                    "group-weak",
+                    support_candidates=support_candidates,
+                    support_house_ids=house_ids,
+                )
+
+        for first, second in combinations(grouped_nodes, 2):
+            if not self._node_visibility(first, second):
+                continue
+            support_candidates = (
+                *first.candidates,
+                *second.candidates,
+            )
+            house_ids = self._visibility_house_ids(first, second)
+            add_edge(
+                _node_literal(first, True),
+                _node_literal(second, False),
+                "group-weak",
+                support_candidates=support_candidates,
+                support_house_ids=house_ids,
+            )
+            add_edge(
+                _node_literal(second, True),
+                _node_literal(first, False),
+                "group-weak",
+                support_candidates=support_candidates,
+                support_house_ids=house_ids,
+            )
+
+        self.group_nodes = grouped_nodes
+        self.grouped_adjacency = {
+            source: tuple(
+                Edge(
+                    target,
+                    reason,
+                    tuple(sorted(support["candidates"])),
+                    tuple(sorted(support["houses"])),
+                )
+                for (target, reason), support in sorted(
+                    targets.items(),
+                    key=lambda item: (
+                        _graph_literal_key(item[0][0]),
+                        item[0][1],
+                    ),
+                )
+            )
+            for source, targets in raw.items()
+        }
 
     def edges(self, source: Literal, allowed: frozenset[str]):
         return (
@@ -451,6 +715,175 @@ class StaticImplicationGraph:
                 "support_house_ids": edge.support_house_ids,
             })
         return tuple(result)
+
+    def grouped_edges(
+        self,
+        source: GraphLiteral,
+        allowed: frozenset[str],
+    ):
+        self._ensure_grouped_adjacency()
+        return (
+            edge
+            for edge in self.grouped_adjacency.get(source, ())
+            if edge.reason in allowed
+        )
+
+    def grouped_edge(
+        self,
+        source: GraphLiteral,
+        target: GraphLiteral,
+        reason: str,
+    ):
+        self._ensure_grouped_adjacency()
+        for edge in self.grouped_adjacency.get(source, ()):
+            if edge.target == target and edge.reason == reason:
+                return edge
+        return None
+
+    def grouped_chain_supports(self, literals, reasons):
+        if len(reasons) != len(literals) - 1:
+            raise ValueError("Il numero di supporti deve coincidere con gli archi.")
+        result = []
+        for source, target, reason in zip(literals, literals[1:], reasons):
+            edge = self.grouped_edge(source, target, reason)
+            if edge is None:
+                raise ValueError("Il percorso grouped contiene un arco assente.")
+            result.append({
+                "support_candidates": edge.support_candidates,
+                "support_house_ids": edge.support_house_ids,
+            })
+        return tuple(result)
+
+    def grouped_shortest_path(
+        self,
+        source: GraphLiteral,
+        target: GraphLiteral,
+        *,
+        allowed: frozenset[str],
+        minimum_edges: int = 1,
+        maximum_edges: int | None = None,
+        require_group: bool = True,
+    ):
+        """Cammino minimo sul grafo condiviso candidato/gruppo."""
+        start_group = isinstance(_literal_node(source), GroupNode)
+        start_state = source, start_group
+        queue = deque([(start_state, 0)])
+        parent = {start_state: None}
+        parent_reason = {}
+
+        while queue:
+            (current, used_group), depth = queue.popleft()
+            if (
+                current == target
+                and depth >= minimum_edges
+                and (used_group or not require_group)
+            ):
+                states = []
+                cursor = current, used_group
+                while cursor is not None:
+                    states.append(cursor)
+                    cursor = parent[cursor]
+                states.reverse()
+                return (
+                    [state[0] for state in states],
+                    [parent_reason[state] for state in states[1:]],
+                )
+            if maximum_edges is not None and depth >= maximum_edges:
+                continue
+            for edge in self.grouped_edges(current, allowed):
+                next_group = used_group or isinstance(
+                    _literal_node(edge.target), GroupNode
+                )
+                next_state = edge.target, next_group
+                if next_state in parent:
+                    continue
+                parent[next_state] = current, used_group
+                parent_reason[next_state] = edge.reason
+                queue.append((next_state, depth + 1))
+        return None
+
+    def grouped_weak_reason(
+        self,
+        first: ImplicationNode,
+        second: ImplicationNode,
+    ) -> str | None:
+        source = _node_literal(first, True)
+        target = _node_literal(second, False)
+        for reason in ("peer", "y", "group-weak"):
+            if self.grouped_edge(source, target, reason) is not None:
+                return reason
+        return None
+
+    def grouped_cycles(
+        self,
+        *,
+        allowed: frozenset[str],
+        maximum_edges: int | None = MAX_STATIC_CYCLE_EDGES,
+    ):
+        self._ensure_grouped_adjacency()
+        nodes: tuple[ImplicationNode, ...] = tuple(sorted(
+            (*self.all_candidates, *self.group_nodes),
+            key=_node_key,
+        ))
+        seen_cycles = set()
+        for start_node in nodes:
+            start = _node_literal(start_node, True)
+            path = [start]
+            path_reasons = []
+            visited = {start}
+
+            def visit(current):
+                if (
+                    maximum_edges is not None
+                    and len(path_reasons) >= maximum_edges
+                ):
+                    return
+                for edge in self.grouped_edges(current, allowed):
+                    target = edge.target
+                    if target == start:
+                        if len(path_reasons) + 1 < 4:
+                            continue
+                        literals = path + [start]
+                        if not any(
+                            isinstance(_literal_node(item), GroupNode)
+                            for item in literals
+                        ):
+                            continue
+                        reasons = path_reasons + [edge.reason]
+                        signature = self._grouped_cycle_signature(
+                            literals, reasons
+                        )
+                        if signature not in seen_cycles:
+                            seen_cycles.add(signature)
+                            yield list(literals), list(reasons)
+                        continue
+                    if target in visited:
+                        continue
+                    if (
+                        proof_model.literal_state(target)
+                        and _node_key(_literal_node(target))
+                        < _node_key(start_node)
+                    ):
+                        continue
+                    visited.add(target)
+                    path.append(target)
+                    path_reasons.append(edge.reason)
+                    yield from visit(target)
+                    path_reasons.pop()
+                    path.pop()
+                    visited.remove(target)
+
+            yield from visit(start)
+
+    @staticmethod
+    def _grouped_cycle_signature(literals, reasons):
+        edges = []
+        for source, target, reason in zip(literals, literals[1:], reasons):
+            endpoints = tuple(sorted(
+                (_node_key(_literal_node(source)), _node_key(_literal_node(target)))
+            ))
+            edges.append((endpoints, reason))
+        return tuple(sorted(edges))
 
     def conjugate_pairs(self, digit: int):
         """Restituisce gli archi X forti non orientati per una cifra.
@@ -2223,6 +2656,273 @@ class LogicEngine:
                 results[index]
                 for results in subtype_results
                 if index < len(results)
+            )
+        return self._deduplicate(deductions, max_results=max_results)
+
+    @staticmethod
+    def _contains_group(literals):
+        return any(
+            isinstance(_literal_node(literal), GroupNode)
+            for literal in literals
+        )
+
+    def _grouped_endpoint_deductions(self, subtype, *, max_results):
+        collector = _DeductionCollector(max_results)
+        self.graph._ensure_grouped_adjacency()
+        nodes: tuple[ImplicationNode, ...] = tuple(sorted(
+            (*self.graph.all_candidates, *self.graph.group_nodes),
+            key=_node_key,
+        ))
+        allowed = frozenset({
+            "peer", "x", "y", "group-weak", "group-strong",
+        })
+        pair_targets = defaultdict(set)
+        weak_reasons = frozenset({"peer", "y", "group-weak"})
+        target_nodes: tuple[ImplicationNode, ...] = tuple(sorted(
+            (*self.graph.all_candidates, *self.graph.group_nodes),
+            key=_node_key,
+        ))
+        for target_node in target_nodes:
+            weak_nodes = tuple(sorted({
+                _literal_node(edge.target)
+                for edge in self.graph.grouped_edges(
+                    _node_literal(target_node, True), weak_reasons
+                )
+                if not proof_model.literal_state(edge.target)
+            }, key=_node_key))
+            for first, second in combinations(weak_nodes, 2):
+                pair_targets[(first, second)].add(target_node)
+
+        for first_index, first in enumerate(nodes):
+            for second in nodes[first_index + 1:]:
+                same_digit = _node_digit(first) == _node_digit(second)
+                if subtype == "x" and not same_digit:
+                    continue
+                if subtype == "aic" and same_digit:
+                    continue
+                targets = sorted(
+                    pair_targets.get((first, second), ()), key=_node_key
+                )
+                if not targets:
+                    continue
+                path_data = self.graph.grouped_shortest_path(
+                    _node_literal(first, False),
+                    _node_literal(second, True),
+                    allowed=allowed,
+                    minimum_edges=3,
+                    maximum_edges=MAX_STATIC_CYCLE_EDGES - 2,
+                    require_group=True,
+                )
+                if path_data is None:
+                    continue
+                central, central_reasons = path_data
+                central_nodes = [_literal_node(item) for item in central]
+                if len(set(central_nodes)) != len(central_nodes):
+                    continue
+                if not self._contains_group(central):
+                    continue
+                all_one_digit = len({
+                    _node_digit(item) for item in central_nodes
+                }) == 1
+                if subtype == "x" and not all_one_digit:
+                    continue
+                if subtype == "aic" and all_one_digit:
+                    continue
+
+                chains = []
+                chain_reasons = []
+                chain_supports = []
+                for target in targets:
+                    left_reason = self.graph.grouped_weak_reason(target, first)
+                    right_reason = self.graph.grouped_weak_reason(second, target)
+                    proof_chain = (
+                        _node_literal(target, True),
+                        *central,
+                        _node_literal(target, False),
+                    )
+                    reasons = (
+                        left_reason,
+                        *central_reasons,
+                        right_reason,
+                    )
+                    supports = self.graph.grouped_chain_supports(
+                        proof_chain, reasons
+                    )
+                    chains.append(proof_chain)
+                    chain_reasons.append(reasons)
+                    chain_supports.append(supports)
+                technique = (
+                    "Grouped X-Chain" if subtype == "x" else "Grouped AIC"
+                )
+                eliminations = {
+                    candidate
+                    for target in targets
+                    for candidate in _node_candidates(target)
+                }
+                if collector.add(_deduction(
+                    description=(
+                        f"La {technique} usa {sum(isinstance(node, GroupNode) for node in central_nodes)} "
+                        "nodi di gruppo e rende impossibili i candidati in "
+                        "weak link con entrambi gli endpoint."
+                    ),
+                    eliminations=eliminations,
+                    assumptions=tuple(item[0] for item in chains),
+                    chains=chains,
+                    reasons=tuple(sorted(set(chain(*chain_reasons)))),
+                    chain_reasons=chain_reasons,
+                    chain_supports=chain_supports,
+                    kind="grouped-endpoint-aic",
+                )):
+                    return collector.results
+        return collector.results
+
+    def _grouped_forcing_deductions(self, *, max_results):
+        collector = _DeductionCollector(max_results)
+
+        def ranked_results():
+            # Le strong discontinuity che risolvono piu' alternative della
+            # stessa cella sono la forma piu' informativa del medesimo loop.
+            # Il ranking non cambia le prove: rende solo equo il limite della
+            # vista rispetto ai molti esiti atomici possibili.
+            return sorted(
+                collector.results,
+                key=lambda item: (
+                    -len(item.get("placements", ()))
+                    - len(item.get("eliminations", ())),
+                    tuple(item.get("placements", ())),
+                    tuple(item.get("eliminations", ())),
+                ),
+            )
+
+        allowed = frozenset({
+            "peer", "x", "y", "group-weak", "group-strong",
+        })
+        for candidate in self.graph.all_candidates:
+            for source_state in (True, False):
+                source = _node_literal(candidate, source_state)
+                path_data = self.graph.grouped_shortest_path(
+                    source,
+                    _graph_opposite(source),
+                    allowed=allowed,
+                    minimum_edges=3,
+                    maximum_edges=MAX_STATIC_CYCLE_EDGES,
+                    require_group=True,
+                )
+                if path_data is None:
+                    continue
+                path, reasons = path_data
+                if source_state:
+                    placements, eliminations = (), (candidate,)
+                else:
+                    # Una strong discontinuity rende vero il candidato. Per
+                    # i Nice Loop esprimiamo l'effetto locale come rimozione
+                    # delle alternative nella cella: e' la forma canonica
+                    # usata anche dal corpus HoDoKu e conserva esattamente la
+                    # conseguenza logica del loop.
+                    placements = ()
+                    eliminations = tuple(
+                        (candidate[0], candidate[1], digit)
+                        for digit in sorted(
+                            self.candidates.get(candidate[:2], ())
+                        )
+                        if digit != candidate[2]
+                    )
+                if collector.add(_deduction(
+                    description=(
+                        "Il Grouped Nice Loop chiude una contraddizione sul "
+                        f"candidato R{candidate[0]+1}C{candidate[1]+1}="
+                        f"{candidate[2]}."
+                    ),
+                    placements=placements,
+                    eliminations=eliminations,
+                    assumptions=(source,),
+                    chains=(path,),
+                    reasons=reasons,
+                    chain_reasons=(reasons,),
+                    chain_supports=(
+                        self.graph.grouped_chain_supports(path, reasons),
+                    ),
+                    kind="grouped-forcing-chain",
+                )):
+                    return ranked_results()
+        return ranked_results()
+
+    def _grouped_loop_eliminations(self, literals, reasons):
+        eliminations = set()
+        for source, target, reason in zip(
+            literals, literals[1:], reasons
+        ):
+            if (
+                not proof_model.literal_state(source)
+                or proof_model.literal_state(target)
+            ):
+                continue
+            first = _literal_node(source)
+            second = _literal_node(target)
+            members = {
+                *_node_candidates(first),
+                *_node_candidates(second),
+            }
+            if reason == "y" and not isinstance(first, GroupNode):
+                row, column, _ = first
+                for digit in self.candidates.get((row, column), ()):
+                    candidate = (row, column, digit)
+                    if candidate not in members:
+                        eliminations.add(candidate)
+                continue
+            for candidate in self.graph.all_candidates:
+                if candidate in members:
+                    continue
+                if (
+                    self.graph.grouped_weak_reason(candidate, first)
+                    and self.graph.grouped_weak_reason(candidate, second)
+                ):
+                    eliminations.add(candidate)
+        return eliminations
+
+    def _grouped_cycle_deductions(self, *, max_results):
+        collector = _DeductionCollector(max_results)
+        allowed = frozenset({
+            "peer", "x", "y", "group-weak", "group-strong",
+        })
+        for literals, reasons in self.graph.grouped_cycles(
+            allowed=allowed,
+            maximum_edges=MAX_STATIC_CYCLE_EDGES,
+        ):
+            eliminations = self._grouped_loop_eliminations(literals, reasons)
+            if not eliminations:
+                continue
+            body = literals[:-1]
+            supports = self.graph.grouped_chain_supports(literals, reasons)
+            if collector.add(_deduction(
+                description=(
+                    "Il Grouped Continuous Nice Loop rende strong ogni weak "
+                    "link e applica la visibilità completa dei gruppi."
+                ),
+                eliminations=sorted(eliminations),
+                assumptions=(body[0],),
+                chains=(literals,),
+                reasons=reasons,
+                chain_reasons=(reasons,),
+                chain_supports=(supports,),
+                kind="grouped-cycle",
+            )):
+                break
+        return collector.results
+
+    def _find_grouped_chain(self, *, max_results):
+        buckets = (
+            self._grouped_endpoint_deductions("x", max_results=max_results),
+            self._grouped_endpoint_deductions("aic", max_results=max_results),
+            self._grouped_forcing_deductions(max_results=max_results),
+            self._grouped_cycle_deductions(max_results=max_results),
+        )
+        deductions = []
+        for index in range(max(map(len, buckets), default=0)):
+            deductions.extend(
+                bucket[index]
+                for bucket in buckets
+                if index < len(bucket)
             )
         return self._deduplicate(deductions, max_results=max_results)
 
