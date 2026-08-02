@@ -63,6 +63,7 @@ from .data_structure import *
 from . import logic_engine
 from . import difficulty as difficulty_model
 from . import exclusion as exclusion_patterns
+from . import fish as fish_engine
 from . import move_presentation
 from . import proof_schema
 from . import sue_de_coq as sue_de_coq_patterns
@@ -828,66 +829,131 @@ def hidden_subset(state, size):
 
 
 # ------------------------------------------------------------------- 5. fish
-_FISH_NAME = {2: 'X-Wing', 3: 'Swordfish', 4: 'Jellyfish'}
-_FISH_DIFF = {2: 3.2, 3: 3.8, 4: 5.2}
+def _fish_visual_evidence(deduction):
+    pattern = deduction.pattern
+    cells = defaultdict(set)
+    candidates = defaultdict(set)
+
+    def add(candidate, *roles):
+        row, column, value = candidate
+        candidates[(row, column, value)].update(roles)
+        cells[(row, column)].update(roles)
+
+    for candidate in deduction.body:
+        add(candidate, "pattern", "base", "cover")
+    for candidate in pattern.fins:
+        add(candidate, "pattern", "base", "fin")
+    for candidate in pattern.endo_fins:
+        add(candidate, "pattern", "base", "endo-fin")
+    for candidate in pattern.cannibalistic_targets:
+        add(candidate, "cover", "target", "elimination")
+
+    return {
+        "cells": [
+            {"row": row, "column": column, "roles": sorted(roles)}
+            for (row, column), roles in sorted(cells.items())
+        ],
+        "candidates": [
+            {
+                "row": row,
+                "column": column,
+                "value": value,
+                "roles": sorted(roles),
+                "state": (
+                    "off"
+                    if (row, column, value) in deduction.eliminations
+                    else "candidate"
+                ),
+            }
+            for (row, column, value), roles in sorted(candidates.items())
+        ],
+    }
+
+
+def _fish_description(deduction):
+    pattern = deduction.pattern
+    bases = ", ".join(
+        fish_engine.house_label(item) for item in pattern.base_sets
+    )
+    covers = ", ".join(
+        fish_engine.house_label(item) for item in pattern.cover_sets
+    )
+    clauses = [
+        f"Per il candidato {pattern.digit}, i base sets {bases} sono "
+        f"vincolati dai cover sets {covers}"
+    ]
+    if pattern.fins:
+        clauses.append(
+            f"le {len(pattern.fins)} exo-fin limitano i target alle celle "
+            "che le vedono tutte"
+        )
+    if pattern.endo_fins:
+        clauses.append(
+            f"le {len(pattern.endo_fins)} sovrapposizioni fra basi sono "
+            "trattate come endo-fin"
+        )
+    if pattern.cannibalistic_targets:
+        clauses.append(
+            f"{len(pattern.cannibalistic_targets)} target appartengono a "
+            "piu cover sets e sono cannibalistici"
+        )
+    if deduction.is_siamese:
+        clauses.append(
+            f"le {len(deduction.components)} componenti finned con le stesse "
+            "basi sono consolidate in un solo Siamese Fish"
+        )
+    return ". ".join(clauses) + "."
+
+
+def _fish_move(state, deduction):
+    pattern = deduction.pattern
+    primary_candidates = (
+        deduction.body | pattern.fins | pattern.endo_fins
+    )
+    primary = sorted({
+        (row, column) for row, column, _ in primary_candidates
+    })
+    payload = deduction.to_dict()
+    return _build_move(
+        technique=deduction.technique_name,
+        family="Fish",
+        difficulty=_canonical_difficulty(deduction.technique_name),
+        description=_fish_description(deduction),
+        placements=(),
+        eliminations=deduction.eliminations,
+        primary=primary,
+        proof_count=deduction.equivalent_pattern_count,
+        extra={
+            "fish_pattern": payload,
+            "fish_size": pattern.size,
+            "base_set_count": len(pattern.base_sets),
+            "cover_set_count": len(pattern.cover_sets),
+            "fin_count": len(pattern.fins),
+            "endo_fin_count": len(pattern.endo_fins),
+            "cannibalistic_count": len(pattern.cannibalistic_targets),
+            "visual_evidence": _fish_visual_evidence(deduction),
+        },
+        state=state,
+    )
 
 
 def fish(state, size):
-    moves = []
-    name = _FISH_NAME[size]
-    diff = _FISH_DIFF[size]
-    for v in range(1, 10):
-        # rows -> columns
-        row_cols = {}
-        for r in range(9):
-            cols = [c for c in range(9) if v in state.candidates[r][c]]
-            if 2 <= len(cols) <= size:
-                row_cols[r] = set(cols)
-        for combo in combinations(row_cols.keys(), size):
-            col_union = set()
-            for r in combo:
-                col_union |= row_cols[r]
-            if len(col_union) != size:
-                continue
-            elim = []
-            for c in col_union:
-                for r in range(9):
-                    if r not in combo and v in state.candidates[r][c]:
-                        elim.append((r, c, v))
-            primary = [(r, c) for r in combo for c in row_cols[r]]
-            mv = _elim_move(
-                name, 'Fish', diff,
-                f'Il candidato {v} nelle righe {[r+1 for r in combo]} e confinato alle '
-                f'colonne {sorted(c+1 for c in col_union)}: eliminato dal resto di quelle colonne.',
-                elim, primary, state)
-            if mv:
-                moves.append(mv)
-        # columns -> rows
-        col_rows = {}
-        for c in range(9):
-            rows = [r for r in range(9) if v in state.candidates[r][c]]
-            if 2 <= len(rows) <= size:
-                col_rows[c] = set(rows)
-        for combo in combinations(col_rows.keys(), size):
-            row_union = set()
-            for c in combo:
-                row_union |= col_rows[c]
-            if len(row_union) != size:
-                continue
-            elim = []
-            for r in row_union:
-                for c in range(9):
-                    if c not in combo and v in state.candidates[r][c]:
-                        elim.append((r, c, v))
-            primary = [(r, c) for c in combo for r in col_rows[c]]
-            mv = _elim_move(
-                name, 'Fish', diff,
-                f'Il candidato {v} nelle colonne {[c+1 for c in combo]} e confinato alle '
-                f'righe {sorted(r+1 for r in row_union)}: eliminato dal resto di quelle righe.',
-                elim, primary, state)
-            if mv:
-                moves.append(mv)
-    return moves
+    """Adattatore compatibile per il motore fish parametrico P10."""
+    deductions = fish_engine.find_all_fish(state, sizes=(size,))
+    return [
+        move
+        for deduction in deductions
+        if (move := _fish_move(state, deduction)) is not None
+    ]
+
+
+def generalized_fish(state):
+    """Raccoglie size 2-4 una sola volta e consolida gli esiti duplicati."""
+    return [
+        move
+        for deduction in fish_engine.find_all_fish(state)
+        if (move := _fish_move(state, deduction)) is not None
+    ]
 
 
 # ------------------------------------------------------------------ 6. wings

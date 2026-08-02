@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import math
 
 
-TECHNIQUE_CATALOG_VERSION = "1.3.0"
+TECHNIQUE_CATALOG_VERSION = "1.4.0"
 
 LEGACY_TECHNIQUE_ALIASES = {
     "Nested Forcing Chain": "Complete Forcing Tree",
@@ -126,6 +126,9 @@ FISH_METRICS = (
     "fish_size",
     "base_set_count",
     "cover_set_count",
+    "fin_count",
+    "endo_fin_count",
+    "cannibalistic_count",
 )
 CHAIN_METRICS = (
     "proof_node_count",
@@ -297,18 +300,211 @@ _CATALOG_ROWS = (
 
     # Fish, wings e pattern a cifra singola.
     _entry(
+        "fish.basic.2", "X-Wing", 3.8,
+        "fish", "fish_wings", "fish",
+        proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
         "fish.basic.3", "Swordfish", 4.1,
-        "fish", "fish_wings", "fish:3",
+        "fish", "fish_wings", "fish",
         proof_metric_profile=FISH_METRICS,
     ),
     _entry(
         "fish.basic.4", "Jellyfish", 4.8,
-        "fish", "fish_wings", "fish:4",
+        "fish", "fish_wings", "fish",
         proof_metric_profile=FISH_METRICS,
     ),
     _entry(
-        "fish.basic.2", "X-Wing", 3.8,
-        "fish", "fish_wings", "fish:2",
+        "fish.finned.2", "Finned X-Wing", 4.0,
+        "fish", "fish_wings", "fish",
+        parent_id="fish.basic.2",
+        se_equivalent_parent_id="fish.basic.2",
+        rating_kind="pseudo_se", proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.sashimi.2", "Sashimi X-Wing", 4.1,
+        "fish", "fish_wings", "fish",
+        parent_id="fish.finned.2",
+        se_equivalent_parent_id="fish.basic.2",
+        rating_kind="pseudo_se", proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.finned.3", "Finned Swordfish", 4.3,
+        "fish", "fish_wings", "fish",
+        parent_id="fish.basic.3",
+        se_equivalent_parent_id="fish.basic.3",
+        rating_kind="pseudo_se", proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.sashimi.3", "Sashimi Swordfish", 4.4,
+        "fish", "fish_wings", "fish",
+        parent_id="fish.finned.3",
+        se_equivalent_parent_id="fish.basic.3",
+        rating_kind="pseudo_se", proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.finned.4", "Finned Jellyfish", 5.0,
+        "fish", "fish_wings", "fish",
+        parent_id="fish.basic.4",
+        se_equivalent_parent_id="fish.basic.4",
+        rating_kind="pseudo_se", proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.sashimi.4", "Sashimi Jellyfish", 5.1,
+        "fish", "fish_wings", "fish",
+        parent_id="fish.finned.4",
+        se_equivalent_parent_id="fish.basic.4",
+        rating_kind="pseudo_se", proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.franken.2", "Franken X-Wing", 4.5,
+        "fish", "fish_wings", "fish",
+        parent_id="fish.basic.2", rating_kind="pseudo_se",
+        proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.franken.3", "Franken Swordfish", 4.9,
+        "fish", "fish_wings", "fish",
+        parent_id="fish.basic.3", rating_kind="pseudo_se",
+        proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.franken.4", "Franken Jellyfish", 5.3,
+        "fish", "fish_wings", "fish",
+        parent_id="fish.basic.4", rating_kind="pseudo_se",
+        proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.franken.finned.2", "Finned Franken X-Wing", 4.7,
+        "fish", "fish_wings", "fish",
+        parent_id="fish.franken.2", rating_kind="pseudo_se",
+        proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.franken.sashimi.2", "Sashimi Franken X-Wing", 4.8,
+        "fish", "fish_wings", "fish",
+        parent_id="fish.franken.finned.2", rating_kind="pseudo_se",
+        proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.franken.finned.3", "Finned Franken Swordfish", 5.1,
+        "fish", "fish_wings", "fish",
+        parent_id="fish.franken.3", rating_kind="pseudo_se",
+        proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.franken.sashimi.3", "Sashimi Franken Swordfish", 5.2,
+        "fish", "fish_wings", "fish",
+        parent_id="fish.franken.finned.3", rating_kind="pseudo_se",
+        proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.franken.finned.4", "Finned Franken Jellyfish", 5.5,
+        "fish", "fish_wings", "fish",
+        parent_id="fish.franken.4", rating_kind="pseudo_se",
+        proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.franken.sashimi.4", "Sashimi Franken Jellyfish", 5.6,
+        "fish", "fish_wings", "fish",
+        parent_id="fish.franken.finned.4", rating_kind="pseudo_se",
+        proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.mutant.2", "Mutant X-Wing", 4.8,
+        "fish", "fish_wings", "fish",
+        parent_id="fish.basic.2", rating_kind="pseudo_se",
+        proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.mutant.3", "Mutant Swordfish", 5.2,
+        "fish", "fish_wings", "fish",
+        parent_id="fish.basic.3", rating_kind="pseudo_se",
+        proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.mutant.4", "Mutant Jellyfish", 5.6,
+        "fish", "fish_wings", "fish",
+        parent_id="fish.basic.4", rating_kind="pseudo_se",
+        proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.mutant.finned.2", "Finned Mutant X-Wing", 5.0,
+        "fish", "fish_wings", "fish",
+        parent_id="fish.mutant.2", rating_kind="pseudo_se",
+        proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.mutant.sashimi.2", "Sashimi Mutant X-Wing", 5.1,
+        "fish", "fish_wings", "fish",
+        parent_id="fish.mutant.finned.2", rating_kind="pseudo_se",
+        proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.mutant.finned.3", "Finned Mutant Swordfish", 5.4,
+        "fish", "fish_wings", "fish",
+        parent_id="fish.mutant.3", rating_kind="pseudo_se",
+        proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.mutant.sashimi.3", "Sashimi Mutant Swordfish", 5.5,
+        "fish", "fish_wings", "fish",
+        parent_id="fish.mutant.finned.3", rating_kind="pseudo_se",
+        proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.mutant.finned.4", "Finned Mutant Jellyfish", 5.8,
+        "fish", "fish_wings", "fish",
+        parent_id="fish.mutant.4", rating_kind="pseudo_se",
+        proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.mutant.sashimi.4", "Sashimi Mutant Jellyfish", 5.9,
+        "fish", "fish_wings", "fish",
+        parent_id="fish.mutant.finned.4", rating_kind="pseudo_se",
+        proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.siamese", "Siamese Fish", 4.2,
+        "fish", "fish_wings", "fish",
+        rating_kind="pseudo_se", proof_metric_profile=FISH_METRICS,
+    ),
+    # Famiglie e modificatori strutturali: il detector emette il sottotipo
+    # dimensionato e conserva questi attributi nel FishPattern autorevole.
+    _entry(
+        "fish.franken.finned", "Finned Franken Fish", 4.7,
+        "fish", "fish_wings", "fish",
+        rating_kind="pseudo_se", abstract=True,
+        proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.franken.sashimi", "Sashimi Franken Fish", 4.8,
+        "fish", "fish_wings", "fish",
+        rating_kind="pseudo_se", abstract=True,
+        proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.mutant.finned", "Finned Mutant Fish", 5.0,
+        "fish", "fish_wings", "fish",
+        rating_kind="pseudo_se", abstract=True,
+        proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.mutant.sashimi", "Sashimi Mutant Fish", 5.1,
+        "fish", "fish_wings", "fish",
+        rating_kind="pseudo_se", abstract=True,
+        proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.modifier.endo", "Endo-Finned Fish", 5.0,
+        "fish", "fish_wings", "fish",
+        rating_kind="pseudo_se", abstract=True,
+        proof_metric_profile=FISH_METRICS,
+    ),
+    _entry(
+        "fish.modifier.cannibalistic", "Cannibalistic Fish", 5.0,
+        "fish", "fish_wings", "fish",
+        rating_kind="pseudo_se", abstract=True,
         proof_metric_profile=FISH_METRICS,
     ),
     _entry(

@@ -278,9 +278,11 @@ _DECLARED_RUNNERS = (
         techniques.naked_subset,
         6,
     ),
-    _local("fish:2", ("fish.basic.2",), techniques.fish, 2),
-    _local("fish:3", ("fish.basic.3",), techniques.fish, 3),
-    _local("fish:4", ("fish.basic.4",), techniques.fish, 4),
+    _local(
+        "fish",
+        technique_catalog.TECHNIQUE_IDS_BY_DETECTOR["fish"],
+        techniques.generalized_fish,
+    ),
     _local(
         "skyscraper",
         ("sdp.skyscraper",),

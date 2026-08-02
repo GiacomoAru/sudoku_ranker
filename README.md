@@ -11,6 +11,7 @@ Repository: [github.com/GiacomoAru/sudoku_ranker](https://github.com/GiacomoAru/
 ## Funzionalità principali
 
 - analisi logica passo per passo;
+- motore Fish parametrico per varianti Basic, Franken e Mutant;
 - ordinamento delle tecniche secondo difficoltà crescente;
 - tre metriche complementari di difficoltà;
 - riconoscimento locale da foto, senza servizi esterni;
@@ -28,7 +29,7 @@ Repository: [github.com/GiacomoAru/sudoku_ranker](https://github.com/GiacomoAru/
 
 ```text
 sudoku_app/
-    core/       motore, tecniche, difficoltà, canonicalizzazione e visualizzazioni
+    core/       motore, tecniche, Fish, difficoltà, canonicalizzazione e visualizzazioni
     archive/    persistenza JSON e indice delle classi isomorfe
     web/        API FastAPI, coda dei job e interfaccia browser
 
@@ -89,6 +90,19 @@ Il motore supporta tre modalità:
 La modalità predefinita è `profile`, con finestra attuale pari a `1.5` punti SE.
 
 Il limite massimo di risultati per tecnica viene applicato durante la ricerca, così le tecniche costose possono interrompersi appena è stato raccolto un numero sufficiente di esiti distinti.
+
+## Motore Fish
+
+Il modulo `sudoku_app.core.fish` rappresenta ogni configurazione mediante base
+set e cover set e usa la stessa pipeline per X-Wing, Swordfish e Jellyfish.
+La classificazione strutturale distingue Fish Basic, Franken e Mutant e gestisce
+le varianti Finned, Sashimi e Siamese; Endo-Finned e Cannibalistic sono esposti
+come modificatori del pattern. Le conclusioni equivalenti vengono consolidate
+prima di essere consegnate al solver.
+
+La ricerca procede per livelli Basic, Franken e Mutant e applica limiti
+espliciti alle configurazioni complesse, così il costo delle varianti avanzate
+resta controllato durante l’analisi ordinaria.
 
 ## Riconoscimento da foto
 

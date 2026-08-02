@@ -17,7 +17,7 @@ Non è necessario includere ogni nome mai inventato nella comunità Sudoku. La c
 
 ## Baseline acquisito
 
-Le patch P01-P09 e P06.5 sono applicate e non fanno più parte della roadmap operativa. Il progetto dispone già di:
+Le patch P01-P10, inclusa P06.5, sono applicate e non fanno più parte della roadmap operativa. Il progetto dispone già di:
 
 * catalogo centrale e identificatori stabili;
 * registro dichiarativo dei detector;
@@ -34,6 +34,8 @@ Le patch P01-P09 e P06.5 sono applicate e non fanno più parte della roadmap ope
 * classificazione strutturale delle catene esistenti;
 * contesto di unicità verificato, givens distinti dalle celle risolte e famiglia Unique Loop strutturale;
 * Sue de Coq classica ed estesa, Aligned Pair/Triplet Exclusion e subset generalizzati fino al Sextuple;
+* motore Fish parametrico per X-Wing, Swordfish e Jellyfish Basic, Franken e Mutant,
+  con varianti Finned, Sashimi, Siamese, Endo-Finned e Cannibalistic;
 * versionamento esplicito di prove e analisi archiviate.
 
 Le patch future devono estendere queste strutture, non crearne copie parallele.
@@ -41,66 +43,6 @@ Le patch future devono estendere queste strutture, non crearne copie parallele.
 ---
 
 # Blocco D: motori parametrici
-
-## P10. Fish engine generalizzato
-
-### Obiettivo
-
-Sostituire i detector indipendenti con un motore parametrico basato su base sets e cover sets.
-
-### Struttura
-
-```python
-@dataclass(frozen=True)
-class FishPattern:
-    digit: int
-    size: int
-    base_sets: tuple[int, ...]
-    cover_sets: tuple[int, ...]
-    fins: frozenset[Candidate]
-    endo_fins: frozenset[Candidate]
-    cannibalistic_targets: frozenset[Candidate]
-    fish_class: str
-```
-
-### Tecniche
-
-```text
-X-Wing
-Swordfish
-Jellyfish
-Finned X-Wing
-Sashimi X-Wing
-Finned Swordfish
-Sashimi Swordfish
-Finned Jellyfish
-Sashimi Jellyfish
-Franken X-Wing
-Franken Swordfish
-Franken Jellyfish
-Finned Franken Fish
-Sashimi Franken Fish
-Mutant X-Wing
-Mutant Swordfish
-Mutant Jellyfish
-Finned Mutant Fish
-Sashimi Mutant Fish
-Siamese Fish
-Endo-Finned Fish
-Cannibalistic Fish
-```
-
-`Endo-Finned` e `Cannibalistic` devono essere trattati principalmente come modificatori strutturali.
-
-### Criteri di completamento
-
-* La classificazione non dipende soltanto dal numero di candidati.
-* Fins e target rispettano la visibilità richiesta.
-* Franken e Mutant vengono distinti dai tipi di casa utilizzati.
-* Rotazioni, trasposizioni e permutazioni delle cifre producono risultati equivalenti.
-* Le conclusioni duplicate tra fish componenti vengono consolidate.
-
----
 
 ## P11. Coloring
 
