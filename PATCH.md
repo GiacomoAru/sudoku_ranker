@@ -246,9 +246,89 @@ non invoca né inizializza il Complete Forcing Tree.
 
 ### Obiettivo
 
-Rendere esplicito quali regole possano essere utilizzate all’interno di una propagazione.
+Rendere esplicito quali regole possano essere utilizzate all'interno di una propagazione (`InferenceProfile`), separando questo concetto da **cosa** viene cercato a ogni stato (`SearchPolicy`) e da **quanto** ciascun detector può costare (`SearchLimits`). I tre assi restano distinti per non trasformare P17 in un unico oggetto ingestibile:
 
-### Profili
+```text
+SearchPolicy      quali tecniche cercare nello stato corrente
+InferenceProfile  quali regole sono ammesse dentro una chain/dynamic/nested
+SearchLimits      quanto può spendere ciascun detector
+```
+
+### Regola fondamentale: la mossa minima è indipendente dalla modalità
+
+La prossima mossa applicata deve sempre essere la più semplice disponibile secondo la difficoltà pseudo-SE ("Mio"). Questo non dipende da quale `SearchPolicy` è attiva:
+
+1. si trova e si certifica la difficoltà minima `d_min` dello stato;
+2. si decide, in base alla `SearchPolicy`, quante altre mosse dello stato raccogliere attorno a essa;
+3. si applica deterministicamente una delle mosse minime.
+
+Le cinque modalità di `SearchPolicy` (sotto) non cambiano mai la mossa scelta: cambiano soltanto quante alternative vengono raccolte.
+
+Una mossa minima è **certificata** solo se ogni detector potenzialmente più semplice ha risposto in modo definitivo con uno di:
+
+```text
+FOUND        mossa trovata
+EXHAUSTED    nessuna mossa in questo stato per questa tecnica
+TRUNCATED    ricerca interrotta da un SearchLimits, esito indeterminato
+```
+
+Se un detector più semplice risponde `TRUNCATED`, la mossa trovata dopo di esso è soltanto la **minima conosciuta**, non necessariamente la minima reale: questa distinzione deve essere rappresentata nei risultati (es. `certified: bool`), non silenziata.
+
+### Scalini di ricerca (`search_tier`)
+
+`SearchPolicy` opera su uno scalino esplicito, `search_tier`, distinto da `family_id`/`strategy_id`/`inference_engine`: raggruppa le tecniche come le cercherebbe un umano, non come sono implementate. Contratto e tabella completa in `TASSIONOMIA.md`, sezione "Scalini di ricerca P17"; proiezione eseguibile in `technique_catalog.TECHNIQUE_SEARCH_TIER` / `SEARCH_TIER_NAMES_IT`.
+
+```text
+0  Elementari              singles, direct, locked candidates, subset
+1  Pattern a cifra singola fish, Skyscraper, 2-String Kite, Empty Rectangle
+2  Pattern multi-cifra     wings, uniqueness locale, Sue de Coq, ALS locali
+3  Catene statiche         X-Chain, XY-Chain, AIC, Nice Loop, ALS-chain
+4  Forcing avanzato        multiple/dynamic/plus, forcing net, templates, Kraken
+5  Nested forcing          vere Nested Chain con sottoprove
+6  Esaustivo               Complete Forcing Tree
+```
+
+Lo scalino non segue il numero di cifre coinvolte ma la famiglia cognitiva: una X-Chain resta in "Catene statiche" anche se usa una sola cifra; Swordfish e i fish finned restano "Pattern a cifra singola" anche se difficili; Kraken Fish appartiene al "Forcing avanzato" perché il fish è solo il guscio esterno e la dimostrazione vera passa per le catene.
+
+### Le cinque `SearchPolicy`
+
+```text
+superficial     soltanto le mosse con difficoltà minima effettiva
+smart_profile   default. Scalino della mossa minima + finestra p dentro quello scalino soltanto
+full_profile    finestra p su tutte le tecniche, senza vincolo di scalino (comportamento "profile" attuale)
+smart_deep      scalino della mossa minima esplorato per intero, senza finestra
+deep            tutti gli scalini esplorati per intero, senza finestra
+```
+
+`smart_profile` (nuovo default) trova `d_min`, individua lo scalino della mossa minima, cerca soltanto dentro quello scalino e conserva le mosse con difficoltà `<= d_min + p`: la finestra non attraversa mai lo scalino. Esempio: se la tecnica minima è uno Swordfish (tier 1), la finestra resta dentro il tier 1 e non recluta una wing multicifra di rating vicino ma di tier 2.
+
+`deep` esplora tutti gli scalini ordinari senza finestra, ma **non** include mai Complete Forcing Tree: non per un flag dedicato, ma perché l'albero completo resta un motore di fallback separato, invocato allo stesso modo per ogni `SearchPolicy` soltanto quando ordinary e Nested sono entrambi `EXHAUSTED` (architettura preesistente, confermata invariata).
+
+### `SearchLimits`: `limited` / `unlimited`
+
+Dimensione indipendente dalla `SearchPolicy`, componibile liberamente (`smart_profile+limited` è il default di produzione, `deep+unlimited` è per test/studio):
+
+```text
+result_limit          massimo numero di mosse restituite per tecnica
+search_budget          nodi, profondità, diramazioni, sottoprove esplorabili
+presentation_limit     quante mosse mostriamo/serializziamo
+```
+
+`result_limit` e `presentation_limit` non compromettono la mossa minima certificata. `search_budget` sì: se la ricerca viene fermata prima di poter concludere, il detector deve rispondere `TRUNCATED`, mai un `FOUND` silenzioso su una porzione incompleta dello spazio.
+
+`unlimited` non significa "nessun limite di sistema": significa che nessun cap statico interno (risultati, profondità, nodi) altera la risposta logica. Restano sempre attivi cancellazione esterna, protezione della memoria e timeout espliciti. `unlimited` è oggi utile solo a scopo di test/studio, non è la modalità di produzione.
+
+I `SearchLimits` fissi per detector (già esistenti: `MAX_MOVES_PER_TECHNIQUE`, budget ALS-AIC, budget Nested P16 ecc.) restano validi come default di `limited` e non dipendono dallo stato o dal puzzle.
+
+### Contratto futuro (non ancora implementato in questa patch)
+
+Predisporre soltanto la forma del contratto per la futura ricerca esaustiva mosse-per-tecnica, senza costruirne interfaccia o visualizzazione:
+
+```text
+search_moves(technique_id, cursor) -> moves, next_cursor, exhausted, truncated_reason
+```
+
+### `InferenceProfile`
 
 ```python
 @dataclass(frozen=True)
@@ -286,13 +366,35 @@ sottoprova
 costo
 ```
 
+### Fedeltà della definizione Nested
+
+Sudoku Explainer distingue le forcing chain ordinarie (regole basilari) dalle Advanced Forcing Chain (usano coppie, pointing, X-Wing ecc.) e definisce le Nested come "forcing chains within forcing chains": una deduzione interna alla catena è giustificata da un'altra catena. Non basta avere molte diramazioni, una chain lunga, una tecnica avanzata o propagazione dinamica: serve una sottoprova reale allegata a un'inferenza interna, condizione già resa autorevole in P16 (`nested_depth >= 1`, `nested_subproof_count >= 1`) e che P17 non deve indebolire.
+
 ### Criteri di completamento
 
-* Una Dynamic ordinaria usa soltanto il proprio profilo.
+* La mossa applicata è sempre la minima certificata, indipendentemente dalla `SearchPolicy` attiva.
+* `FOUND` / `EXHAUSTED` / `TRUNCATED` sono rappresentati esplicitamente nei risultati dei detector, e `TRUNCATED` a monte declassa le mosse successive a "minime conosciute" non certificate.
+* `search_tier` è derivato da campi già autorevoli del catalogo (non un secondo catalogo manuale) ed è validato: nessuna `strategy_id` priva di scalino.
+* `smart_profile` non fa mai attraversare lo scalino dalla finestra `p`.
+* Complete Forcing Tree resta il fallback separato dopo ordinary e Nested.
+* `unlimited` non altera mai la risposta logica rispetto a `limited`, solo la possibilità di completarla.
+* Una Dynamic ordinaria usa soltanto il proprio `InferenceProfile`.
 * Una Plus dichiara esattamente quali regole avanzate ha usato.
-* Una Nested non usa tecniche non consentite dal profilo.
+* Una Nested non usa tecniche non consentite dal profilo e contiene sempre almeno una sottoprova reale.
 * La difficoltà deriva dal profilo e dalla prova concreta.
-* L’interfaccia può mostrare le tecniche interne.
+* L'interfaccia può mostrare le tecniche interne.
+
+### Stato di implementazione: completata
+
+Implementati: `search_tier` (`technique_catalog.py`, validato, derivato da campi autorevoli), le cinque `SearchPolicy` in `collect_moves_for_analysis` (`superficial`, `smart_profile` nuovo default, `full_profile`, `smart_deep`, `deep`), rinominazione completa lato solver/web/archivio con alias legacy `profile`/`profilo` → `full_profile` (verificato su archivi online reali esistenti, filename e cache invariati per i dati già salvati).
+
+Implementati anche il flag `certified` e l'esito tipizzato `FOUND` / `EXHAUSTED` / `TRUNCATED` per ogni detector interrogato. `techniques.detector_search_metadata` conserva `completion`, `search_truncated` e cause stabili in `truncated_reasons`; `_collect_from_runners` aggiunge conteggi, difficoltà minima trovata e `minimum_certification_affected`, quindi propaga il contratto fino a `collect_moves_for_analysis` e a ogni passo di `solve_and_log`.
+
+La propagazione copre tutti i budget interni oggi presenti nei detector: limiti di fin, endo-fin e risultati del motore Fish; enumerazione, profondità, stati, tentativi e risultati delle ricerche ALS; pattern, tentativi e lunghezza dei percorsi Kraken; configurazioni Templates per cifra; lunghezza dei cammini statici e grouped del motore logico; profondità, predecessori, tentativi, branch, sottoprove, nodi e risultati Nested. I limiti di risultato censurano l'inventario e conservano la certificazione quando esiste già una mossa valida; i limiti che possono nascondere una tecnica più semplice rendono `certified: false`. Una ricerca troncata resta `TRUNCATED` anche quando ha prodotto mosse utili.
+
+Completati `InferenceProfile`, il collegamento reale a Dynamic, Dynamic Plus e Nested, la registrazione delle regole interne usate e `SearchLimits` centralizzato. Le configurazioni `limited` e `unlimited` attraversano solver e detector senza modificare la `SearchPolicy`: la prima applica i budget di produzione, la seconda disattiva i cap interni per test e studio, conservando i limiti di presentazione. I cinque profili di ricerca hanno test con contratti distinti; `smart_deep` evita i detector esterni allo scalino certificato invece di eseguire una deep completa e filtrarla soltanto alla fine.
+
+P17.1 e P17.2 restano patch autonome successive: la prima richiede il checkpoint progettuale sul Complete Forcing Tree, la seconda implementerà le famiglie acquisite da `Aggiunte.md`. La chiusura del P17 principale non anticipa le decisioni richieste da quei due punti.
 
 ---
 
@@ -317,9 +419,130 @@ La ricerca autorevole deve restare completa e senza cap interni che possano alte
 
 Il motore non deve essere un “andare a caso”: deve preferire branch informativi, riusare stati equivalenti e produrre un `ProofDAG` umano anche quando la ricerca sottostante è esaustiva.
 
+### Implementazione completata
+
+Il checkpoint ha fissato un branching ibrido e umano. Il motore sceglie la
+domanda col minor numero di alternative, preferendo una cella a una
+cifra-casa quando l'arita' coincide. Le domande cifra-casa coprono tutte le
+posizioni residue della cifra in una riga, colonna o box. L'impatto della
+propagazione risolve i pareggi successivi e l'ordine fail-first visita prima
+contraddizioni e stati piu' ridotti senza escludere alcun caso.
+
+Le cache SAT e UNSAT riusano stati equivalenti e pubblicano metriche leggere.
+Il `ProofDAG` conserva l'intero albero autorevole, comprese tipo di branch e
+alternative; `presentation_proof` e' una vista compatta derivata e collegata
+tramite digest. Il callback pubblico `cancellation_check` interrompe la
+ricerca dall'esterno, propaga `TRUNCATED` con
+`external_cancellation`, scarta le mosse parziali e non alimenta le cache.
+Il fallback mantiene la stessa posizione dopo ordinary e Nested in tutte le
+`SearchPolicy`. Nessun controllo dell'interfaccia rientra in P17.1.
+
 ---
 
-## P17.2 Revisione finale di spiegazioni e visualizzazioni
+## P17.2 Tecniche aggiuntive da `Aggiunte.md`
+
+### Collocazione
+
+Questa patch va eseguita dopo la chiusura dei profili P17 e dopo il
+checkpoint sul Complete Forcing Tree. Deve precedere la revisione editoriale
+finale, cosi' ogni nuova tecnica entra direttamente nel contratto definitivo
+di prove, spiegazioni e visualizzazioni.
+
+`Aggiunte.md` e' una fonte progettuale del repertorio futuro. La TASSIONOMIA
+resta la fonte autorevole degli identificatori, delle famiglie e dello stato
+di implementazione: ogni tecnica acquisita da `Aggiunte.md` deve quindi
+essere formalizzata li' prima di entrare nel catalogo eseguibile.
+
+### P17.2a Aligned Exclusion moderna
+
+Estendere il detector Aligned Pair/Triplet oggi disponibile affinche' gli
+excluder possano essere ALS multicella reali, condivisi con il motore ALS:
+
+* coppie base allineate e non allineate come casi specifici distinti;
+* excluder costituiti da ALS di una o piu' celle;
+* combinazioni con piu' ALS, conservando soltanto quelli necessari alla
+  conclusione;
+* gradi superiori a tre attraverso un motore parametrico e budget espliciti;
+* `ProofDAG` con assegnazioni respinte, ALS usati e conclusione verificabile.
+
+La versione locale gia' implementata resta un caso specifico valido. Il nome
+moderno deve derivare dalla struttura effettivamente usata e non dalla sola
+funzione che ha prodotto la mossa.
+
+### P17.2b Exocet e jExocet
+
+Introdurre un motore dedicato per il pattern Exocet descritto in
+`Aggiunte.md`, separato da fish, template e forcing generico. La prima
+versione deve formalizzare almeno:
+
+* base cells e insieme delle base digits;
+* target cells, companion e mirror cells;
+* cross-lines, S-cells, cover-lines ed escape cells;
+* validazione delle condizioni strutturali prima di qualunque eliminazione;
+* regole di eliminazione implementate come casi specifici identificabili;
+* payload strutturato e prova verificabile per ogni conclusione.
+
+Le regole ancora ambigue nella fonte, compreso il Compatible Digit Check,
+restano `planned` finche' definizione e fixture non sono sufficienti a
+garantire la soundness.
+
+### P17.2c Bowman's Bingo moderno
+
+Implementare Bowman's Bingo come last resort logico distinto dalle Forcing
+Net e dal Complete Forcing Tree. Una mossa Bowman's richiede una singola
+asserzione iniziale la cui propagazione collega senza ambiguita' tutti i
+candidati rimasti e determina una soluzione completa coerente della griglia.
+
+Il motore deve conservare:
+
+* asserzione iniziale e stato ON/OFF;
+* conseguenze candidate-level;
+* assenza di candidati non colorati o ambigui;
+* assenza di contraddizioni;
+* soluzione completa derivata;
+* `ProofDAG` o rete equivalente capace di giustificare ogni assegnazione.
+
+Il criterio globale della tecnica deve essere verificato esplicitamente. Una
+semplice contraddizione locale continua a appartenere alla propria famiglia
+di forcing.
+
+### Criteri di completamento
+
+* Le tre famiglie hanno identificatori e stato espliciti in TASSIONOMIA.
+* Ogni variante implementata possiede fixture positiva, near miss e test di
+  soundness contro la soluzione.
+* Aligned Exclusion riusa gli ALS autorevoli e non ricostruisce una seconda
+  definizione incompatibile.
+* Exocet non produce eliminazioni da regole ancora ambigue o parziali.
+* Bowman's Bingo prova realmente la copertura globale della griglia.
+* Tutti i limiti computazionali propagano lo stato di troncamento P17.
+
+### Implementazione completata
+
+Aligned Exclusion usa direttamente `als.enumerate_als` e conserva gli ALS
+minimi necessari a respingere le assegnazioni interessate da ogni
+conclusione. Type 1 allineato, Type 2 non allineato, Triplet e forma
+generalizzata hanno identità distinte. Il motore parametrico accetta gradi
+superiori a tre e propaga i budget di grado, combinazioni, assegnazioni e
+risultati.
+
+Il detector Junior Exocet formalizza base cells, base digits, target,
+companion, mirror, cross-line, S-cell, cover house ed escape cell. La Regola
+1 è eseguibile e possiede un `ProofDAG` strutturale. Compatible Digit Check e
+le Regole 3, 4, 5 e 8 hanno ID permanenti con stato `planned`, perché la fonte
+acquisita non offre ancora condizioni sufficienti per una implementazione
+affidabile.
+
+Bowman's Bingo usa una singola asserzione ON e accetta il risultato soltanto
+quando ogni candidato iniziale è colorato, ogni cella ha un solo candidato
+ON, non esistono contraddizioni e la griglia derivata soddisfa tutte le 27
+case Sudoku. Il `ProofDAG` conserva i parent di ogni conseguenza e tutte le
+assegnazioni finali. I tre detector propagano cause `TRUNCATED` tipizzate.
+Nessun controllo dell'interfaccia rientra in P17.2.
+
+---
+
+## P17.3 Revisione finale di spiegazioni e visualizzazioni
 
 ### Collocazione
 
@@ -581,8 +804,8 @@ La versione 1.0 è pronta quando:
 | `0.8.5`  | P10-P11       | Fish e coloring completi                                   |
 | `0.9.0`  | P12-P14       | AIC, Group Nodes, ALS e generalized wings                  |
 | `0.9.5`  | P15-P17       | Forcing Net, Kraken, vere Nested e profili                 |
-| `0.9.6`  | P16.5         | Complete Forcing Tree rivisto dopo checkpoint progettuale |
-| `0.9.7`  | P17.5         | Spiegazioni e visualizzazioni definitive                  |
+| `0.9.6`  | P17.1         | Complete Forcing Tree rivisto dopo checkpoint progettuale |
+| `0.9.7`  | P17.2-P17.3   | Tecniche aggiuntive e revisione editoriale definitiva     |
 | `0.9.8`  | P18-P19       | Difficoltà definitiva e archivi consolidati                |
 | `1.0.0`  | P20           | API e tassonomia congelate                                 |
 
@@ -593,7 +816,8 @@ Le fondamenta P01-P16 sono già acquisite.
 ```text
 P17 -> checkpoint P17.1
 P17.1 -> P17.2
-P17.2 -> P18
+P17.2 -> P17.3
+P17.3 -> P18
 P18 -> P19
 P19 -> P20
 ```
@@ -601,13 +825,17 @@ P19 -> P20
 # Ordine pratico restante
 
 ```text
-P17 Profili Dynamic, Plus e Nested
-CHECKPOINT obbligatorio prima di P16.5
-P17.1 Revisione Complete Forcing Tree
-P17.2 Revisione finale di spiegazioni e visualizzazioni
+P17 Profili Dynamic, Plus e Nested, completata
+P17.1 Revisione Complete Forcing Tree, completata
+P17.2 Tecniche aggiuntive da Aggiunte.md, completata
+P17.3 Revisione finale di spiegazioni e visualizzazioni
 P18 Difficoltà definitiva
 P19 Consolidamento archivi
 P20 Release 1.0
 ```
 
 Questa sequenza evita di riscrivere più volte gli stessi componenti. Le tecniche avanzate vengono costruite sopra il `ProofDAG` e i `chain_links` già disponibili; le Nested arrivano soltanto quando catene, gruppi, ALS e forcing sono formalizzati; il Complete Forcing Tree rimane un fallback estremo e viene rivisto soltanto dopo una decisione esplicita sui suoi default. La revisione editoriale finale arriva dopo tutti i motori, quando ogni tecnica può fornire supporti definitivi senza successive riscritture.
+
+
+P21: Sistemare interfaccia
+LA griglia cambia dimensione delle celle a seconda che ci si ao meno un numero nella riga colonna.

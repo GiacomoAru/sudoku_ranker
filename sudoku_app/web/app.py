@@ -295,18 +295,20 @@ def create_app(
     def analysis_plot(
         puzzle_id: str,
         plot_name: str,
-        analysis_mode: str = Query(default="profile"),
+        analysis_mode: str = Query(default=solver.DEFAULT_ANALYSIS_MODE),
         profile_difficulty_window: float = Query(
             default=solver.DEFAULT_PROFILE_DIFFICULTY_WINDOW,
             ge=0.0,
             le=10.0,
         ),
     ):
-        if analysis_mode not in {"profile", "deep", "superficial"}:
+        try:
+            analysis_mode = solver._normalise_analysis_mode(analysis_mode)
+        except ValueError as error:
             raise HTTPException(
                 status_code=422,
                 detail="Modalità di analisi non valida.",
-            )
+            ) from error
 
         try:
             image = service.render_plot(

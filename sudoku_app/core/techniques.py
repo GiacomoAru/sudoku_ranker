@@ -64,11 +64,14 @@ from . import logic_engine
 from . import als as als_engine
 from . import difficulty as difficulty_model
 from . import exclusion as exclusion_patterns
+from . import exocet as exocet_engine
 from . import fish as fish_engine
 from . import kraken as kraken_engine
 from . import coloring as coloring_engine
 from . import move_presentation
+from . import proof as proof_model
 from . import proof_schema
+from . import search_config
 from . import sue_de_coq as sue_de_coq_patterns
 from . import technique_catalog
 from . import technique_classification
@@ -292,6 +295,8 @@ def _state_signature(state):
         candidate_signature,
         getattr(state, "uniqueness_status", UNIQUENESS_NOT_CHECKED),
         given_signature,
+        search_config.limits_for_state(state).signature,
+        search_config.cancellation_signature_for_state(state),
     )
 
 
@@ -322,6 +327,58 @@ def _cached_moves(state, key, producer):
     if key not in cache:
         cache[key] = tuple(producer())
     return list(cache[key])
+
+
+def _record_search_metadata(
+    state,
+    key,
+    *,
+    truncated=False,
+    truncated_reasons=(),
+    inference_profile_id=None,
+):
+    """Registra in forma uniforme la completezza del detector ``key``.
+
+    ``completion`` descrive l'inventario prodotto dal detector. Le mosse
+    trovate restano un asse separato, calcolato dal solver dopo la chiamata:
+    una ricerca puo' quindi avere mosse utili ed essere comunque troncata.
+    """
+    reasons = {
+        str(reason)
+        for reason in truncated_reasons
+        if reason is not None and str(reason)
+    }
+    if truncated and not reasons:
+        reasons.add("unspecified_budget")
+    search_truncated = bool(truncated or reasons)
+    cache = _state_cache(state)
+    metadata = {
+        "completion": "truncated" if search_truncated else "exhausted",
+        "search_truncated": search_truncated,
+        "truncated_reasons": sorted(reasons),
+    }
+    if inference_profile_id is not None:
+        metadata["inference_profile_id"] = str(inference_profile_id)
+    cache[f"meta:{key}"] = metadata
+
+
+def _record_search_truncated(state, key, truncated):
+    """Compatibilita' interna per i chiamanti P17 precedenti."""
+    _record_search_metadata(state, key, truncated=truncated)
+
+
+def detector_search_metadata(state, key):
+    """Metadata di completezza cacheati per un detector.
+
+    Best-effort: uno stato incompatibile con la cache (es. un doppio di
+    test senza griglia) restituisce semplicemente "nessun metadato", non
+    deve mai far fallire la raccolta delle mosse.
+    """
+    try:
+        cache = _state_cache(state)
+    except AttributeError:
+        return {}
+    return cache.get(f"meta:{key}", {})
 
 
 def clear_technique_cache(state):
@@ -945,7 +1002,14 @@ def _fish_move(state, deduction):
 
 def fish(state, size):
     """Adattatore compatibile per il motore fish parametrico P10."""
-    deductions = fish_engine.find_all_fish(state, sizes=(size,))
+    limits = search_config.limits_for_state(state)
+    deductions = fish_engine.find_all_fish(
+        state,
+        sizes=(size,),
+        max_fins=limits.fish_fins,
+        max_endo_fins=limits.fish_endo_fins,
+        max_results_per_search=limits.fish_results,
+    )
     return [
         move
         for deduction in deductions
@@ -955,9 +1019,23 @@ def fish(state, size):
 
 def generalized_fish(state):
     """Raccoglie size 2-4 una sola volta e consolida gli esiti duplicati."""
+    truncated_out = []
+    limits = search_config.limits_for_state(state)
+    deductions = fish_engine.find_all_fish(
+        state,
+        max_fins=limits.fish_fins,
+        max_endo_fins=limits.fish_endo_fins,
+        max_results_per_search=limits.fish_results,
+        truncated_out=truncated_out,
+    )
+    _record_search_metadata(
+        state,
+        "fish",
+        truncated_reasons=truncated_out,
+    )
     return [
         move
-        for deduction in fish_engine.find_all_fish(state)
+        for deduction in deductions
         if (move := _fish_move(state, deduction)) is not None
     ]
 
@@ -965,7 +1043,25 @@ def generalized_fish(state):
 def kraken(state):
     """Kraken Type 1/2 con una prova AIC per ogni possibilità richiesta."""
     moves = []
-    for deduction in kraken_engine.find_kraken(state):
+    truncated_out = []
+    limits = search_config.limits_for_state(state)
+    deductions = kraken_engine.find_kraken(
+        state,
+        max_results=limits.kraken_results,
+        max_patterns=limits.kraken_patterns,
+        max_path_attempts=limits.kraken_path_attempts,
+        max_path_edges=limits.kraken_path_edges,
+        max_fins=limits.kraken_fish_fins,
+        max_endo_fins=limits.kraken_fish_endo_fins,
+        max_fish_results=limits.kraken_fish_results,
+        truncated_out=truncated_out,
+    )
+    _record_search_metadata(
+        state,
+        "kraken",
+        truncated_reasons=truncated_out,
+    )
+    for deduction in deductions:
         pattern = deduction.fish.pattern
         payload = deduction.to_dict()
         technique_name = (
@@ -1087,21 +1183,55 @@ def _als_move(state, deduction):
 
 def als(state):
     """Adattatore unico P14 per ALS e generalized wings."""
-    return _cached_moves(
-        state,
-        "als",
-        lambda: [
+
+    def produce():
+        truncated_out = []
+        limits = search_config.limits_for_state(state)
+        deductions = als_engine.find_all_als(
+            state,
+            max_chain_alses=limits.als_chain_alses,
+            max_chain_states=limits.als_chain_states,
+            max_results=limits.als_results,
+            max_aic_alses=limits.als_aic_alses,
+            max_aic_attempts=limits.als_aic_attempts,
+            max_aic_path_states=limits.als_aic_path_states,
+            max_aic_path_edges=limits.als_aic_path_edges,
+            max_death_blossom_states=(
+                limits.als_death_blossom_states
+            ),
+            truncated_out=truncated_out,
+        )
+        _record_search_metadata(
+            state,
+            "als",
+            truncated_reasons=truncated_out,
+        )
+        return [
             move
-            for deduction in als_engine.find_all_als(state)
+            for deduction in deductions
             if (move := _als_move(state, deduction)) is not None
-        ],
-    )
+        ]
+
+    return _cached_moves(state, "als", produce)
 
 
 def templates(state):
     """Pattern Overlay Method: configurazioni complete di una sola cifra."""
     moves = []
-    for deduction in template_engine.find_templates(state):
+    truncated_out = []
+    limits = search_config.limits_for_state(state)
+    deductions = template_engine.find_templates(
+        state,
+        max_results=limits.template_results,
+        max_templates=limits.templates_per_digit,
+        truncated_out=truncated_out,
+    )
+    _record_search_metadata(
+        state,
+        "templates",
+        truncated_reasons=truncated_out,
+    )
+    for deduction in deductions:
         payload = deduction.to_dict()
         move = _build_move(
             technique="Templates",
@@ -2544,20 +2674,121 @@ _ALIGNED_EXCLUSION_CONFIG = {
 }
 
 
-def aligned_exclusion(state, degree):
-    """Aligned Exclusion di grado 2 o 3, senza soluzione di riferimento."""
-    if degree not in _ALIGNED_EXCLUSION_CONFIG:
-        raise ValueError("Aligned Exclusion supporta soltanto grado 2 o 3")
-    technique, difficulty = _ALIGNED_EXCLUSION_CONFIG[degree]
+def _aligned_proof(pattern):
+    nodes = {}
+    branch_id = 0
+    nodes[branch_id] = proof_model.ProofNode(
+        id=branch_id,
+        kind="branch",
+        conclusion=None,
+        parents=(),
+        reason="aligned-exclusion-enumeration",
+        depth=0,
+        payload={
+            "base_cells": [list(cell) for cell in pattern.base_cells],
+            "degree": pattern.degree,
+            "aligned": pattern.aligned,
+            "allowed_assignments": [
+                list(item) for item in pattern.allowed_assignments
+            ],
+            "als_nodes": [
+                item.to_dict() for item in pattern.excluder_als
+            ],
+            "presentation": False,
+        },
+    )
+    contradiction_ids = []
+    for rejected in pattern.rejected_assignments:
+        assumption_id = len(nodes)
+        nodes[assumption_id] = proof_model.ProofNode(
+            id=assumption_id,
+            kind="assumption",
+            conclusion=None,
+            parents=(branch_id,),
+            reason="case-assignment",
+            depth=1,
+            payload={
+                "values": list(rejected.values),
+                "presentation": False,
+            },
+        )
+        contradiction_id = len(nodes)
+        nodes[contradiction_id] = proof_model.ProofNode(
+            id=contradiction_id,
+            kind="contradiction",
+            conclusion=None,
+            parents=(assumption_id,),
+            reason=rejected.reason,
+            depth=2,
+            payload={
+                "als_ids": list(rejected.als_ids),
+                "values": list(rejected.values),
+                "presentation": False,
+            },
+        )
+        contradiction_ids.append((rejected.values, contradiction_id))
+
+    conclusions = []
+    for row, column, value in pattern.eliminations:
+        position = pattern.base_cells.index((row, column))
+        parents = tuple(
+            node_id for assignment, node_id in contradiction_ids
+            if assignment[position] == value
+        )
+        node_id = len(nodes)
+        nodes[node_id] = proof_model.ProofNode(
+            id=node_id,
+            kind="common-conclusion",
+            conclusion=(row, column, value, False),
+            parents=parents,
+            reason="elimination",
+            depth=3,
+            payload={"action": "elimination", "presentation": False},
+        )
+        conclusions.append(node_id)
+
+    dag = proof_model.ProofDAG(
+        nodes=nodes,
+        roots=(branch_id,),
+        conclusions=tuple(conclusions),
+    )
+    return proof_model.logic_payload(
+        dag,
+        kind="aligned-exclusion-als",
+        reasons=(node.reason for node in nodes.values()),
+    )
+
+
+def aligned_exclusion(
+    state,
+    degree,
+    *,
+    detector_id=None,
+    truncated_out=None,
+    als_nodes=None,
+):
+    """Aligned Exclusion parametrica basata sugli ALS autorevoli."""
+    if isinstance(degree, bool) or int(degree) < 2:
+        raise ValueError("Aligned Exclusion richiede grado almeno 2")
+    degree = int(degree)
     moves = []
     seen = set()
+    truncated = truncated_out if truncated_out is not None else []
     for pattern in exclusion_patterns.enumerate_aligned_exclusions(
         state,
         degree,
+        truncated_out=truncated,
+        als_nodes=als_nodes,
     ):
+        if degree == 2 and not pattern.aligned:
+            technique, difficulty = 'Aligned Pair Exclusion Type 2', 6.3
+        elif degree in _ALIGNED_EXCLUSION_CONFIG:
+            technique, difficulty = _ALIGNED_EXCLUSION_CONFIG[degree]
+        else:
+            technique, difficulty = 'Generalized Aligned Exclusion', 7.8
         mv = _elim_move(
             technique, 'Exclusion', difficulty,
-            f'Le {degree} celle base condividono celle escludenti. '
+            f'Le {degree} celle base sono vincolate dagli ALS escludenti. '
             f'I candidati eliminati non compaiono in nessuna delle '
             f'{pattern.allowed_assignment_count} assegnazioni locali '
             f'ammissibili.',
@@ -2566,8 +2797,26 @@ def aligned_exclusion(state, degree):
             state,
             extra={
                 'exclusion_degree': degree,
+                'aligned_pair_type': (
+                    (1 if pattern.aligned else 2)
+                    if degree == 2 else None
+                ),
                 'base_cells': list(pattern.base_cells),
                 'excluder_cells': list(pattern.excluder_cells),
+                'excluder_als': [
+                    item.to_dict() for item in pattern.excluder_als
+                ],
+                'allowed_assignments': [
+                    list(item) for item in pattern.allowed_assignments
+                ],
+                'rejected_assignments': [
+                    {
+                        'values': list(item.values),
+                        'reason': item.reason,
+                        'als_ids': list(item.als_ids),
+                    }
+                    for item in pattern.rejected_assignments
+                ],
                 'allowed_assignment_count': (
                     pattern.allowed_assignment_count
                 ),
@@ -2579,21 +2828,171 @@ def aligned_exclusion(state, degree):
                     pattern.allowed_assignment_count
                     + pattern.rejected_assignment_count
                 ),
+                'logic': _aligned_proof(pattern),
             },
         )
         _append_unique(moves, mv, seen)
+    if detector_id is not None:
+        _record_search_metadata(
+            state,
+            detector_id,
+            truncated=bool(truncated),
+            truncated_reasons=truncated,
+        )
     return moves
 
 
 def aligned_pair_exclusion(state):
-    return aligned_exclusion(state, 2)
+    return aligned_exclusion(
+        state,
+        2,
+        detector_id="aligned_pair_exclusion",
+    )
 
 
 def aligned_triplet_exclusion(state):
-    return aligned_exclusion(state, 3)
+    return aligned_exclusion(
+        state,
+        3,
+        detector_id="aligned_triplet_exclusion",
+    )
+
+
+def generalized_aligned_exclusion(state):
+    limits = search_config.limits_for_state(state)
+    candidate_count = sum(
+        state.grid[row, column] == 0
+        and len(state.candidates[row][column]) >= 2
+        for row in range(9)
+        for column in range(9)
+    )
+    maximum = limits.aligned_max_degree or candidate_count
+    moves = []
+    truncated = []
+    als_nodes = als_engine.enumerate_als(state)
+    for degree in range(4, min(maximum, candidate_count) + 1):
+        moves.extend(aligned_exclusion(
+            state,
+            degree,
+            truncated_out=truncated,
+            als_nodes=als_nodes,
+        ))
+    if limits.aligned_max_degree is not None and candidate_count > maximum:
+        truncated.append("aligned_max_degree")
+    _record_search_metadata(
+        state,
+        "generalized_aligned_exclusion",
+        truncated=bool(truncated),
+        truncated_reasons=truncated,
+    )
+    return moves
+
+
+def _jexocet_proof(pattern):
+    nodes = {
+        0: proof_model.ProofNode(
+            id=0,
+            kind="advanced-rule",
+            conclusion=None,
+            parents=(),
+            reason="jexocet-structure",
+            depth=0,
+            payload={**pattern.to_dict(), "presentation": False},
+        )
+    }
+    conclusions = []
+    for elimination in pattern.eliminations:
+        node_id = len(nodes)
+        nodes[node_id] = proof_model.ProofNode(
+            id=node_id,
+            kind="common-conclusion",
+            conclusion=(*elimination, False),
+            parents=(0,),
+            reason="exocet-rule-1",
+            depth=1,
+            payload={"action": "elimination", "presentation": False},
+        )
+        conclusions.append(node_id)
+    dag = proof_model.ProofDAG(
+        nodes=nodes,
+        roots=(0,),
+        conclusions=tuple(conclusions),
+    )
+    return proof_model.logic_payload(
+        dag,
+        kind="junior-exocet-rule-1",
+        reasons=("jexocet-structure", "exocet-rule-1"),
+    )
+
+
+def junior_exocet(state):
+    """Junior Exocet validato, limitato alla Regola 1 acquisita."""
+    truncated = []
+    moves = []
+    seen = set()
+    for pattern in exocet_engine.enumerate_jexocet_rule1(
+        state,
+        truncated_out=truncated,
+    ):
+        payload = pattern.to_dict()
+        primary = (
+            list(pattern.base_cells)
+            + list(pattern.target_cells)
+            + list(pattern.companion_cells)
+            + [cell for pair in pattern.mirror_cells for cell in pair]
+            + list(pattern.s_cells)
+            + list(pattern.escape_cells)
+        )
+        move = _elim_move(
+            'Junior Exocet Rule 1',
+            'Exocet',
+            7.9,
+            (
+                'Le due celle base e le cross-line formano un Junior '
+                'Exocet valido. I target devono contenere cifre base, '
+                'quindi i candidati esterni vengono eliminati.'
+            ),
+            pattern.eliminations,
+            primary,
+            state,
+            extra={
+                'exocet': payload,
+                'logic': _jexocet_proof(pattern),
+                'support_cell_count': len(set(primary)),
+                'candidate_count': len(pattern.base_digits),
+            },
+        )
+        _append_unique(moves, move, seen)
+    _record_search_metadata(
+        state,
+        "junior_exocet",
+        truncated=bool(truncated),
+        truncated_reasons=truncated,
+    )
+    return moves
 
 
 # -------------------------------------------- logical implication engine
+
+_LOGIC_DETECTOR_BY_TECHNIQUE = {
+    "Bidirectional X-Cycle": "bidirectional_x_cycle",
+    "XY-Chain": "xy_chain",
+    "Bidirectional Y-Cycle": "bidirectional_y_cycle",
+    "Forcing X-Chain": "forcing_x_chain",
+    "Forcing Chain": "forcing_chain",
+    "AIC": "aic",
+    "Bidirectional Cycle": "bidirectional_cycle",
+    "Grouped Chain": "grouped_chain",
+    "Nishio": "nishio",
+    "Cell Forcing Chain": "cell_forcing_chain",
+    "Region Forcing Chain": "region_forcing_chain",
+    "Dynamic Forcing Chain": "dynamic_forcing_chain",
+    "Dynamic Forcing Chain Plus": "dynamic_forcing_chain_plus",
+    "Forcing Net": "forcing_net",
+    "Bowman's Bingo": "bowmans_bingo",
+    "Nested Forcing Chain": "nested_forcing_chain",
+    "Complete Forcing Tree": "complete_forcing_tree",
+}
 
 def _conclusion_effects(move):
     return _atomic_conclusions(
@@ -2668,6 +3067,17 @@ def _logic_moves(state, technique, excluded_effects=()):
     grouped = {}
 
     raw_deductions = logic_engine.find_logic_deductions(state, technique)
+    search_metadata = logic_engine.logic_search_metadata(state, technique)
+    detector_id = _LOGIC_DETECTOR_BY_TECHNIQUE[technique]
+    _record_search_metadata(
+        state,
+        detector_id,
+        truncated=search_metadata.get("search_truncated", False),
+        truncated_reasons=search_metadata.get("truncated_reasons", ()),
+        inference_profile_id=search_metadata.get(
+            "inference_profile_id"
+        ),
+    )
 
     for deduction in raw_deductions:
         raw_placements = _normalise_triplets(
@@ -3054,6 +3464,15 @@ def forcing_net(state):
     return _cached_moves(state, "logic:Forcing Net", produce)
 
 
+def bowmans_bingo(state):
+    """Propagazione globale deterministica da una singola asserzione ON."""
+    return _cached_moves(
+        state,
+        "logic:Bowman's Bingo",
+        lambda: _logic_moves(state, "Bowman's Bingo"),
+    )
+
+
 def nested_forcing_chain(state):
     def produce():
         return _logic_moves(state, "Nested Forcing Chain")
@@ -3062,7 +3481,13 @@ def nested_forcing_chain(state):
 
 
 def complete_forcing_tree(state):
-    def produce():
-        return _logic_moves(state, "Complete Forcing Tree")
+    key = "logic:Complete Forcing Tree"
+    cache = _state_cache(state)
+    if key in cache:
+        return list(cache[key])
 
-    return _cached_moves(state, "logic:Complete Forcing Tree", produce)
+    moves = tuple(_logic_moves(state, "Complete Forcing Tree"))
+    metadata = detector_search_metadata(state, "complete_forcing_tree")
+    if not metadata.get("search_truncated", False):
+        cache[key] = moves
+    return list(moves)

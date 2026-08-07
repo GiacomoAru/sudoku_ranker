@@ -303,8 +303,13 @@ class ALSImplicationGraph:
             tuple(sorted(als.cells)),
             tuple(sorted(als.candidates)),
         )))
-        max_alses = max(1, int(max_alses))
-        selected_alses = eligible_alses[:max_alses]
+        if max_alses is not None:
+            max_alses = max(1, int(max_alses))
+        selected_alses = (
+            eligible_alses
+            if max_alses is None
+            else eligible_alses[:max_alses]
+        )
         self.search_truncated = len(selected_alses) < len(eligible_alses)
         self.als_nodes = tuple(
             ALSNode.from_als(als, graph.state, digit)
@@ -472,6 +477,7 @@ class ALSImplicationGraph:
         from . import logic_engine
 
         self.last_search_truncated = False
+        self.last_search_truncated_reasons = set()
         start_node = logic_engine._literal_node(source)
         start_state = (
             source,
@@ -482,7 +488,9 @@ class ALSImplicationGraph:
         parent = {start_state: None}
         parent_reason = {}
 
-        while queue and len(parent) <= max_states:
+        while queue and (
+            max_states is None or len(parent) <= max_states
+        ):
             (current, used_als, used_candidate), depth = queue.popleft()
             if (
                 current == target
@@ -496,11 +504,18 @@ class ALSImplicationGraph:
                     states.append(cursor)
                     cursor = parent[cursor]
                 states.reverse()
+                self.last_search_truncated = bool(
+                    self.last_search_truncated_reasons
+                )
                 return (
                     [state[0] for state in states],
                     [parent_reason[state] for state in states[1:]],
                 )
             if maximum_edges is not None and depth >= maximum_edges:
+                if any(True for _ in self.edges(current, allowed)):
+                    self.last_search_truncated_reasons.add(
+                        "als_aic_max_path_edges"
+                    )
                 continue
             for edge in self.edges(current, allowed):
                 node = logic_engine._literal_node(edge.target)
@@ -514,7 +529,13 @@ class ALSImplicationGraph:
                 parent[next_state] = (current, used_als, used_candidate)
                 parent_reason[next_state] = edge.reason
                 queue.append((next_state, depth + 1))
-        self.last_search_truncated = bool(queue)
+        if queue and max_states is not None:
+            self.last_search_truncated_reasons.add(
+                "als_aic_max_path_states"
+            )
+        self.last_search_truncated = bool(
+            self.last_search_truncated_reasons
+        )
         return None
 
     def chain_supports(self, literals, reasons):

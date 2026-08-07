@@ -16,6 +16,7 @@ from itertools import combinations
 from typing import Iterable, Iterator, TypeAlias
 
 from .data_structure import UNITS, UNIT_KINDS, peers
+from . import search_config
 
 
 Candidate: TypeAlias = tuple[int, int, int]
@@ -50,9 +51,9 @@ FISH_CLASS_ORDER = {"basic": 0, "franken": 1, "mutant": 2}
 
 # Limiti di enumerazione, non di validita' logica. Tre fin complessive e due
 # endo-fin coprono le varianti P10 mantenendo utilizzabile il detector Python.
-DEFAULT_MAX_FINS = 3
-DEFAULT_MAX_ENDO_FINS = 2
-DEFAULT_MAX_RAW_RESULTS = 512
+DEFAULT_MAX_FINS = search_config.LIMITED_SEARCH_LIMITS.fish_fins
+DEFAULT_MAX_ENDO_FINS = search_config.LIMITED_SEARCH_LIMITS.fish_endo_fins
+DEFAULT_MAX_RAW_RESULTS = search_config.LIMITED_SEARCH_LIMITS.fish_results
 
 
 @dataclass(frozen=True, slots=True)
@@ -311,6 +312,7 @@ def _iter_cover_combinations(
     endo_mask: int,
     max_fins: int,
     target_mask: int | None = None,
+    truncated_out: list | None = None,
 ) -> Iterator[tuple[tuple[int, ...], int, int]]:
     """Enumera cover sets con pruning sulle fin ormai inevitabili."""
     suffix_union = [0] * (len(cover_ids) + 1)
@@ -338,7 +340,12 @@ def _iter_cover_combinations(
         mandatory_fins = (
             base_mask & ~(union_mask | suffix_union[start])
         ) | endo_mask
-        if mandatory_fins.bit_count() > max_fins:
+        if (
+            max_fins is not None
+            and mandatory_fins.bit_count() > max_fins
+        ):
+            if truncated_out is not None:
+                truncated_out.append("fish_max_fins")
             return
         if not has_target_cover and not any(
             house_id in target_cover_ids
@@ -374,6 +381,7 @@ def find_fish(
     max_results: int = DEFAULT_MAX_RAW_RESULTS,
     target_mask: int | None = None,
     require_direct_elimination: bool = True,
+    truncated_out: list | None = None,
 ) -> Iterator[FishDeduction]:
     """Trova fish parametrici per una cifra e una dimensione.
 
@@ -386,7 +394,11 @@ def find_fish(
         raise ValueError("digit deve essere compreso tra 1 e 9.")
     if size not in FISH_SIZE_NAMES:
         raise ValueError("size deve essere 2, 3 o 4.")
-    if max_fins < 0 or max_endo_fins < 0 or max_results <= 0:
+    if (
+        max_fins is not None and max_fins < 0
+        or max_endo_fins is not None and max_endo_fins < 0
+        or max_results is not None and max_results <= 0
+    ):
         raise ValueError("I budget del fish devono essere non negativi e finiti.")
 
     base_types = _normalise_house_types(
@@ -436,7 +448,12 @@ def find_fish(
             mask = house_candidate_masks[house_id]
             endo_mask |= base_union & mask
             base_union |= mask
-        if endo_mask.bit_count() > max_endo_fins:
+        if (
+            max_endo_fins is not None
+            and endo_mask.bit_count() > max_endo_fins
+        ):
+            if truncated_out is not None:
+                truncated_out.append("fish_max_endo_fins")
             continue
 
         relevant_cover_ids = tuple(
@@ -464,6 +481,7 @@ def find_fish(
             endo_mask=endo_mask,
             max_fins=max_fins,
             target_mask=target_mask,
+            truncated_out=truncated_out,
         ):
             fish_class = classify_fish(base_sets, cover_sets)
             if fish_class not in accepted:
@@ -471,7 +489,12 @@ def find_fish(
 
             exo_mask = base_union & ~cover_union & ~endo_mask
             all_fins_mask = exo_mask | endo_mask
-            if all_fins_mask.bit_count() > max_fins:
+            if (
+                max_fins is not None
+                and all_fins_mask.bit_count() > max_fins
+            ):
+                if truncated_out is not None:
+                    truncated_out.append("fish_max_fins")
                 continue
 
             regular_targets = cover_union & ~base_union
@@ -513,7 +536,9 @@ def find_fish(
                 sashimi=sashimi,
             )
             emitted += 1
-            if emitted >= max_results:
+            if max_results is not None and emitted >= max_results:
+                if truncated_out is not None:
+                    truncated_out.append("fish_result_limit")
                 return
 
 
@@ -638,6 +663,7 @@ def find_all_fish(
     max_endo_fins: int = DEFAULT_MAX_ENDO_FINS,
     max_results_per_search: int = DEFAULT_MAX_RAW_RESULTS,
     allow_siamese: bool = True,
+    truncated_out: list | None = None,
 ) -> list[FishDeduction]:
     """Esegue il motore in ordine Basic, Franken, Mutant.
 
@@ -677,12 +703,20 @@ def find_all_fish(
                 (("row", "box"), ("column", "box")),
                 (("column", "box"), ("row", "box")),
             ),
-            min(max_results_per_search, 8),
+            (
+                None
+                if max_results_per_search is None
+                else min(max_results_per_search, 8)
+            ),
         ),
         (
             "mutant",
             ((HOUSE_TYPES, HOUSE_TYPES),),
-            min(max_results_per_search, 4),
+            (
+                None
+                if max_results_per_search is None
+                else min(max_results_per_search, 4)
+            ),
         ),
     )
     for fish_class, searches, result_limit in search_tiers:
@@ -701,6 +735,7 @@ def find_all_fish(
                         max_endo_fins=max_endo_fins,
                         max_results=result_limit,
                         target_mask=template_eliminations[digit],
+                        truncated_out=truncated_out,
                     ))
         if raw:
             return consolidate_fish_deductions(

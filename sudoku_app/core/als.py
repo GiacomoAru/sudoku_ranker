@@ -15,17 +15,22 @@ from typing import Iterable
 from .als_graph import ALSGraph, ALSImplicationGraph, RCC
 from .als_nodes import ALSNode
 from .data_structure import UNITS, peers
+from . import search_config
 
 
 Cell = tuple[int, int]
 Candidate = tuple[int, int, int]
 
 DEFAULT_MAX_ALS_CELLS = 8
-DEFAULT_MAX_CHAIN_ALSES = 8
-DEFAULT_MAX_RAW_RESULTS = 512
-DEFAULT_MAX_AIC_ALSES = 64
-DEFAULT_MAX_AIC_SEARCH_ATTEMPTS = 256
-DEFAULT_MAX_AIC_PATH_STATES = 2_048
+DEFAULT_MAX_CHAIN_ALSES = search_config.LIMITED_SEARCH_LIMITS.als_chain_alses
+DEFAULT_MAX_RAW_RESULTS = search_config.LIMITED_SEARCH_LIMITS.als_results
+DEFAULT_MAX_AIC_ALSES = search_config.LIMITED_SEARCH_LIMITS.als_aic_alses
+DEFAULT_MAX_AIC_SEARCH_ATTEMPTS = (
+    search_config.LIMITED_SEARCH_LIMITS.als_aic_attempts
+)
+DEFAULT_MAX_AIC_PATH_STATES = (
+    search_config.LIMITED_SEARCH_LIMITS.als_aic_path_states
+)
 
 GENERALIZED_WING_IDS = {
     (3, False): "wing.wxyz",
@@ -623,14 +628,21 @@ def find_als_chains(
     *,
     max_alses: int = DEFAULT_MAX_CHAIN_ALSES,
     max_results: int = DEFAULT_MAX_RAW_RESULTS,
+    max_search_states: int | None = (
+        search_config.LIMITED_SEARCH_LIMITS.als_chain_states
+    ),
+    truncated_out: list | None = None,
 ) -> tuple[ALSDeduction, ...]:
     """Cammini ALS-RCC puri, classificati sempre come ALS Chain."""
 
     from collections import deque
 
-    max_alses = max(4, min(int(max_alses), 12))
-    max_results = max(1, int(max_results))
-    max_search_states = max(32_768, max_results * 32)
+    if max_alses is None:
+        max_alses = max(4, len(graph.als_nodes))
+    else:
+        max_alses = max(4, int(max_alses))
+    if max_results is not None:
+        max_results = max(1, int(max_results))
     searched_states = 0
     results = []
     outcome_signatures = set()
@@ -698,9 +710,19 @@ def find_als_chains(
         while queue:
             path, links = queue.popleft()
             searched_states += 1
-            if searched_states > max_search_states:
+            if (
+                max_search_states is not None
+                and searched_states > max_search_states
+            ):
+                if truncated_out is not None:
+                    truncated_out.append("als_chain_max_search_states")
                 break
             if len(path) >= max_alses:
+                if truncated_out is not None and any(
+                    neighbor not in path
+                    for neighbor in graph.neighbors(path[-1])
+                ):
+                    truncated_out.append("als_chain_max_alses")
                 continue
             current = path[-1]
             for neighbor in graph.neighbors(current):
@@ -732,10 +754,20 @@ def find_als_chains(
                     if len(next_path) >= 4 and neighbor.id > start.id:
                         evaluate(next_path, next_links)
                     queue.append((next_path, next_links))
-        if searched_states > max_search_states:
+        if (
+            max_search_states is not None
+            and searched_states > max_search_states
+        ):
             break
 
-    return _deduplicate(results)[:max_results]
+    deductions = _deduplicate(results)
+    if (
+        max_results is not None
+        and len(deductions) > max_results
+        and truncated_out is not None
+    ):
+        truncated_out.append("als_chain_result_limit")
+    return deductions if max_results is None else deductions[:max_results]
 
 
 def find_als_aics(
@@ -745,17 +777,29 @@ def find_als_aics(
     max_alses: int = DEFAULT_MAX_AIC_ALSES,
     max_search_attempts: int = DEFAULT_MAX_AIC_SEARCH_ATTEMPTS,
     max_path_states: int = DEFAULT_MAX_AIC_PATH_STATES,
+    max_path_edges: int | None = (
+        search_config.LIMITED_SEARCH_LIMITS.als_aic_path_edges
+    ),
+    truncated_out: list | None = None,
 ) -> tuple[ALSAICDeduction, ...]:
-    """Cerca AIC miste con almeno un vero ALSNode multicella."""
+    """Cerca AIC miste con almeno un vero ALSNode multicella.
+
+    Se ``truncated_out`` e' una lista, vi vengono aggiunti codici stabili
+    per il limite di ALS, i tentativi, gli stati, la lunghezza dei cammini e
+    il numero di risultati. Le cause sono disponibili anche senza deduzioni.
+    """
 
     from . import logic_engine
 
-    max_results = max(1, int(max_results))
+    if max_results is not None:
+        max_results = max(1, int(max_results))
     implication = ALSImplicationGraph(
         graph,
         require_multicell=True,
         max_alses=max_alses,
     )
+    if implication.search_truncated and truncated_out is not None:
+        truncated_out.append("als_aic_max_alses")
     if not implication.als_nodes:
         return ()
 
@@ -797,7 +841,12 @@ def find_als_aics(
             if not any(isinstance(node, ALSNode) for node in unordered):
                 continue
             for first, second in (unordered, tuple(reversed(unordered))):
-                if search_attempts >= max_search_attempts:
+                if (
+                    max_search_attempts is not None
+                    and search_attempts >= max_search_attempts
+                ):
+                    if truncated_out is not None:
+                        truncated_out.append("als_aic_max_search_attempts")
                     return finalized(truncated=True)
                 search_attempts += 1
                 path_data = implication.shortest_path(
@@ -805,7 +854,7 @@ def find_als_aics(
                     logic_engine._node_literal(second, True),
                     allowed=allowed,
                     minimum_edges=3,
-                    maximum_edges=12,
+                    maximum_edges=max_path_edges,
                     require_als=True,
                     require_candidate=True,
                     max_states=max_path_states,
@@ -814,6 +863,10 @@ def find_als_aics(
                     path_search_truncated
                     or implication.last_search_truncated
                 )
+                if truncated_out is not None:
+                    truncated_out.extend(sorted(
+                        implication.last_search_truncated_reasons
+                    ))
                 if path_data is None:
                     continue
                 central, central_reasons = path_data
@@ -884,7 +937,9 @@ def find_als_aics(
                     chain_supports=(tuple(supports),),
                     endpoint_digit=target[2],
                 ))
-                if len(results) >= max_results:
+                if max_results is not None and len(results) >= max_results:
+                    if truncated_out is not None:
+                        truncated_out.append("als_aic_result_limit")
                     return finalized(truncated=True)
 
     return finalized()
@@ -907,12 +962,16 @@ def find_death_blossoms(
     graph,
     *,
     max_results: int = DEFAULT_MAX_RAW_RESULTS,
+    max_search_states: int | None = (
+        search_config.LIMITED_SEARCH_LIMITS.als_death_blossom_states
+    ),
+    truncated_out: list | None = None,
 ) -> tuple[ALSDeduction, ...]:
     """Cerca stem e un petal ALS per ognuno dei candidati della stem."""
 
     results = []
-    max_results = max(1, int(max_results))
-    max_search_states = max(32_768, max_results * 64)
+    if max_results is not None:
+        max_results = max(1, int(max_results))
     searched_states = 0
 
     for row in range(9):
@@ -935,9 +994,20 @@ def find_death_blossoms(
             def visit(index, selected, common_digits):
                 nonlocal searched_states
                 searched_states += 1
-                if searched_states > max_search_states:
+                if (
+                    max_search_states is not None
+                    and searched_states > max_search_states
+                ):
+                    if truncated_out is not None:
+                        truncated_out.append(
+                            "als_death_blossom_max_search_states"
+                        )
                     return
-                if len(results) >= max_results:
+                if max_results is not None and len(results) >= max_results:
+                    if truncated_out is not None:
+                        truncated_out.append(
+                            "als_death_blossom_result_limit"
+                        )
                     return
                 if index == len(ordered_digits):
                     petals = tuple(dict.fromkeys(selected))
@@ -988,13 +1058,20 @@ def find_death_blossoms(
                         selected + (petal,),
                         frozenset(next_common),
                     )
-                    if len(results) >= max_results:
+                    if max_results is not None and len(results) >= max_results:
                         return
 
             visit(0, (), None)
-            if searched_states > max_search_states:
+            if (
+                max_search_states is not None
+                and searched_states > max_search_states
+            ):
                 return _deduplicate(results)
-            if len(results) >= max_results:
+            if max_results is not None and len(results) >= max_results:
+                if truncated_out is not None:
+                    truncated_out.append(
+                        "als_death_blossom_result_limit"
+                    )
                 return _deduplicate(results)
     return _deduplicate(results)
 
@@ -1035,11 +1112,30 @@ def find_all_als(
     *,
     max_cells: int = DEFAULT_MAX_ALS_CELLS,
     max_chain_alses: int = DEFAULT_MAX_CHAIN_ALSES,
+    max_chain_states: int | None = (
+        search_config.LIMITED_SEARCH_LIMITS.als_chain_states
+    ),
     max_results: int = DEFAULT_MAX_RAW_RESULTS,
+    max_aic_alses: int | None = DEFAULT_MAX_AIC_ALSES,
+    max_aic_attempts: int | None = DEFAULT_MAX_AIC_SEARCH_ATTEMPTS,
+    max_aic_path_states: int | None = DEFAULT_MAX_AIC_PATH_STATES,
+    max_aic_path_edges: int | None = (
+        search_config.LIMITED_SEARCH_LIMITS.als_aic_path_edges
+    ),
+    max_death_blossom_states: int | None = (
+        search_config.LIMITED_SEARCH_LIMITS.als_death_blossom_states
+    ),
+    truncated_out: list | None = None,
 ) -> tuple:
-    """Esegue una sola enumerazione e condivide il medesimo grafo RCC."""
+    """Esegue una sola enumerazione e condivide il medesimo grafo RCC.
+
+    Se ``truncated_out`` e' una lista, raccoglie uniformemente le cause di
+    troncamento di ALS Chain, ALS-AIC, Death Blossom e del limite finale di
+    inventario, anche quando nessun produttore restituisce deduzioni.
+    """
 
     graph = ALSGraph(state, enumerate_als(state, max_cells=max_cells))
+    truncated_reasons = []
     producers = (
         find_als_xz(graph),
         find_als_xy_wings(graph),
@@ -1047,18 +1143,37 @@ def find_all_als(
             graph,
             max_alses=max_chain_alses,
             max_results=max_results,
+            max_search_states=max_chain_states,
+            truncated_out=truncated_reasons,
         ),
         find_als_aics(
             graph,
-            max_results=min(max_results, 32),
+            max_results=(
+                None if max_results is None else min(max_results, 32)
+            ),
+            max_alses=max_aic_alses,
+            max_search_attempts=max_aic_attempts,
+            max_path_states=max_aic_path_states,
+            max_path_edges=max_aic_path_edges,
+            truncated_out=truncated_reasons,
         ),
-        find_death_blossoms(graph, max_results=max_results),
+        find_death_blossoms(
+            graph,
+            max_results=max_results,
+            max_search_states=max_death_blossom_states,
+            truncated_out=truncated_reasons,
+        ),
     )
-    return _deduplicate(
+    deductions = _deduplicate(
         deduction
         for group in producers
         for deduction in group
-    )[:max_results]
+    )
+    if max_results is not None and len(deductions) > max_results:
+        truncated_reasons.append("als_result_limit")
+    if truncated_out is not None:
+        truncated_out.extend(sorted(set(truncated_reasons)))
+    return deductions if max_results is None else deductions[:max_results]
 
 
 __all__ = [

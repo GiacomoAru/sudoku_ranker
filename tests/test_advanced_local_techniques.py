@@ -67,57 +67,57 @@ class GeneralizedSubsetTests(unittest.TestCase):
 class AlignedExclusionTests(unittest.TestCase):
     def test_pair_enumerates_all_allowed_assignments(self):
         state = synthetic_state({
-            (0, 0): {1, 2, 3},
-            (1, 1): {1, 2, 3},
-            (0, 1): {1, 2},
-            (1, 0): {1, 3},
+            (0, 0): {2, 4},
+            (0, 4): {2, 5, 8},
+            (0, 1): {2, 8},
+            (0, 3): {4, 8},
         })
         patterns = exclusion.enumerate_aligned_exclusions(state, 2)
         pattern = next(
             item for item in patterns
-            if item.base_cells == ((0, 0), (1, 1))
+            if item.base_cells == ((0, 0), (0, 4))
         )
         self.assertEqual(
             set(pattern.eliminations),
-            {(0, 0, 1), (1, 1, 1)},
+            {(0, 4, 2), (0, 4, 8)},
         )
         self.assertEqual(pattern.allowed_assignment_count, 2)
+        self.assertTrue(pattern.aligned)
+        self.assertTrue(pattern.excluder_als)
 
     def test_triplet_enumerates_every_admissible_permutation(self):
         state = synthetic_state({
-            (0, 0): {1, 2, 3, 4},
-            (1, 1): {1, 2, 3, 4},
-            (2, 2): {1, 2, 3, 4},
-            (0, 1): {1, 2, 3},
-            (0, 2): {1, 2, 4},
-            (1, 0): {1, 3, 4},
+            (0, 0): {1, 2},
+            (1, 4): {3, 4},
+            (5, 6): {5, 6},
+            (0, 4): {1, 3},
+            (1, 0): {1, 4},
         })
-        moves = techniques.aligned_triplet_exclusion(state)
-        move = next(
-            item for item in moves
-            if set(item["base_cells"])
-            == {(0, 0), (1, 1), (2, 2)}
+        pattern = next(
+            item for item in exclusion.enumerate_aligned_exclusions(state, 3)
+            if item.base_cells == ((0, 0), (1, 4), (5, 6))
         )
         self.assertEqual(
-            set(move["eliminations"]),
-            {(0, 0, 1), (1, 1, 1), (2, 2, 1)},
+            set(pattern.eliminations),
+            {(0, 0, 1)},
         )
-        self.assertEqual(move["allowed_assignment_count"], 6)
+        self.assertEqual(pattern.allowed_assignment_count, 4)
+        move = techniques.aligned_triplet_exclusion(state)[0]
+        self.assertIn("proof_dag", move["logic"])
         json.dumps(move)
 
     def test_triplet_near_miss_preserves_supported_candidate(self):
         state = synthetic_state({
-            (0, 0): {1, 2, 3, 4},
-            (1, 1): {1, 2, 3, 4},
-            (2, 2): {1, 2, 3, 4},
-            (0, 1): {1, 2, 3},
-            (0, 2): {1, 2, 4},
-            (1, 0): {2, 3, 4},
+            (0, 0): {1, 2},
+            (1, 4): {3, 4},
+            (5, 6): {5, 6},
+            (0, 4): {1, 3},
+            (1, 0): {2, 4},
         })
         patterns = exclusion.enumerate_aligned_exclusions(state, 3)
         intended = [
             pattern for pattern in patterns
-            if pattern.base_cells == ((0, 0), (1, 1), (2, 2))
+            if pattern.base_cells == ((0, 0), (1, 4), (5, 6))
         ]
         self.assertFalse(any(
             (0, 0, 1) in pattern.eliminations

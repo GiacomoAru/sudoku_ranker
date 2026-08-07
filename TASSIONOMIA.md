@@ -46,13 +46,13 @@ versionata (`TAXONOMY_CONTRACT_VERSION = "P16"`, catalogo `2.1.0`). Le mappe
 di compatibilita' esportate da `techniques.py` non costituiscono fonti
 alternative.
 
-Il contratto P16 rende autorevoli:
+Il contratto P17.2 rende autorevoli:
 
 | Asse | Regola |
 |---|---|
 | Identita' | ID stabile, nome canonico, alias, parent e parent SE |
 | Famiglia | `family_id` e `strategy_id` provengono dal catalogo |
-| Motore semantico | `inference_engine`: `local`, `fish`, `coloring`, `chain`, `group`, `als`, `forcing`, `dynamic`, `nested`, `complete_tree`, `template` |
+| Motore semantico | `inference_engine`: `local`, `fish`, `coloring`, `chain`, `group`, `als`, `forcing`, `dynamic`, `nested`, `complete_tree`, `template`, `exocet` |
 | Livello esecutivo | `engine_type`: `local`, `logic`, `nested`, `complete_tree`; resta separato dal motore semantico |
 | Prova | `ProofDAG` e nodi tipizzati sono autorevoli; viste lineari e presentazione sono derivate |
 | Metriche strutturali | Profili separati per candidate, GroupNode, ALSNode, net, template e Kraken |
@@ -167,8 +167,9 @@ o Forcing Net. I quattro casi specifici, mantenuti separati, sono
 Il motore non risolve l'intero puzzle, non esplora arbitrariamente tutte le
 celle residue e non usa l'insoddisfacibilità di un ramo completo come
 scorciatoia. `Complete Forcing Tree` resta un motore autonomo di fallback 2.
-Il profilo interno P16 è `p16-dynamic-subchain-v1`; P17 renderà esplicite le
-regole avanzate ammesse nei diversi profili.
+Il profilo Nested predefinito è `nested_level_2`. P17 rende esplicite le
+regole ammesse e conserva `inference_profile_id` e
+`inference_rules_used` nella prova concreta.
 
 ```python
 MAX_NESTED_DEPTH = 2
@@ -321,6 +322,91 @@ nested = entry.fallback_tier == 1
 complete_tree = entry.fallback_tier == 2
 ```
 
+## Scalini di ricerca P17
+
+`fallback_tier` seleziona il motore (ordinary / nested / complete tree).
+`search_tier` e' un asse distinto, introdotto da P17: raggruppa le tecniche
+come le cercherebbe un umano che procede per famiglie cognitive, non come
+sono implementate. Due tecniche possono condividere `inference_engine`
+(entrambe risolte con lo stesso motore a grafo) ma appartenere a scalini
+diversi, perche' lo scalino descrive dove la tecnica si colloca nel percorso
+di ricerca umano, non il meccanismo del detector.
+
+| `search_tier` | Nome | Contenuto | Esempi |
+|---:|---|---|---|
+| 0 | Elementari | singles, direct, locked candidates, subset e interazioni locali | Naked Single, Pointing, Naked Quad |
+| 1 | Pattern a cifra singola | fish semplici e complessi, Skyscraper, 2-String Kite, Turbot Fish, Empty Rectangle | Swordfish, Jellyfish Franken/Mutant |
+| 2 | Pattern multi-cifra | wings, uniqueness locale, Sue de Coq, ALS locali, exclusion | XY-Wing, WXYZ-Wing, Unique Rectangle, ALS-XZ |
+| 3 | Catene statiche | X-Chain, XY-Chain, AIC, Nice Loop, grouped chain, ALS-chain, Unique Loop, coloring | AIC Type 1/2, Grouped AIC, ALS-AIC, Death Blossom |
+| 4 | Forcing avanzato | forcing multiplo, dynamic, Dynamic Plus, forcing net, templates, Kraken | Dynamic Forcing Chain, Kraken Fish, Templates |
+| 5 | Nested forcing | vere Nested Chain con sottoprove ricorsive | Nested Contradiction/Double/Cell/Region |
+| 6 | Esaustivo | Complete Forcing Tree | Complete Forcing Tree |
+
+Regole di derivazione (implementate in `_search_tier` in
+`technique_catalog.py`, non un secondo catalogo):
+
+* lo scalino segue di norma `strategy_id`, gia' molto vicino a questa
+  sequenza per costruzione storica;
+* dentro `fish_wings`, `family_id == "fish"` resta tier 1, `family_id ==
+  "wings"` sale a tier 2 — un Wing e' un pattern multi-cifra anche quando il
+  motore che lo implementa e' `local`, `chain` o `als`;
+* dentro `almost_locked_sets`, gli ALS locali (RCC singolo/doppio, XY-Wing)
+  restano tier 2; ALS Chain, Death Blossom e ALS-AIC sono tier 3 perche' la
+  dimostrazione attraversa una sequenza di ALS/candidati come una catena;
+* dentro `uniqueness_exclusion`, le tecniche con `inference_engine ==
+  "local"` (UR, BUG, Sue de Coq, Aligned Pair/Triplet) restano tier 2; Unique
+  Loop, essendo chain-shaped, sale a tier 3;
+* Kraken Fish e' un'eccezione esplicita: nonostante `family_id == "fish"`, il
+  fish e' solo il guscio esterno e la dimostrazione vera passa per catene, e
+  va quindi collocato tier 4 insieme al resto del forcing avanzato.
+
+Nessuna tecnica riceve uno scalino per assegnazione manuale libera: la
+funzione di derivazione e' totale su tutte le `strategy_id` esistenti e un
+`CatalogValidationError` blocca il catalogo se una nuova `strategy_id` non
+viene collegata a uno scalino.
+
+## Profili d'inferenza e limiti P17
+
+`search_config.py` è la proiezione eseguibile autorevole di due assi
+indipendenti dalla `SearchPolicy`:
+
+| `InferenceProfile.id` | Regole ammesse |
+|---|---|
+| `static` | link statici X/Y |
+| `dynamic` | link statici e single prodotti dalla propagazione |
+| `dynamic_plus` | Dynamic, locked candidates, subset e basic fish |
+| `nested_level_1` | Dynamic e una sottoprova Nested |
+| `nested_level_2` | Dynamic e sottoprove Nested fino a profondità 2 |
+| `complete_tree` | propagazione di base dentro il motore esaustivo separato |
+
+Dynamic ordinaria usa `dynamic`. Dynamic Plus usa `dynamic_plus` e registra
+le regole realmente presenti nel `ProofDAG`, per esempio
+`advanced-locking`, `advanced-naked-pair` oppure `advanced-x-wing`. Nested
+usa `nested_level_2`, richiede almeno una sottoprova reale e conserva il
+profilo anche nella chiave di memoizzazione.
+
+`SearchLimits` centralizza i budget di solver, Logic Engine, Fish, ALS,
+Kraken, Templates e Nested. Le configurazioni pubbliche sono:
+
+```text
+limited     budget di produzione fissi e cause TRUNCATED tipizzate
+unlimited   cap interni disattivati per test e studio
+```
+
+`None` rappresenta un budget interno disattivato. I confini finiti derivati
+dallo stato, come il numero massimo di candidati distinti, restano validi e
+non costituiscono un troncamento. I limiti di presentazione restano attivi
+in entrambe le modalità e censurano soltanto l'inventario. Un limite di
+ricerca che può nascondere una tecnica più semplice rende la mossa minima
+non certificata.
+
+Il Complete Forcing Tree segue il contratto P17.1 e non possiede budget
+interni di nodi, profondita' o rami. `cancellation_check` costituisce il suo
+solo arresto operativo: arriva dall'esterno, produce `TRUNCATED` con causa
+`external_cancellation` e scarta ogni risultato parziale. Il numero di mosse
+restituite resta un limite di presentazione e non limita la prova di una
+mossa scelta.
+
 ## Catalogo tassonomico completo
 
 Le definizioni seguenti sintetizzano il repertorio ufficiale HoDoKu, la tassonomia SE 1.2.1 e le estensioni pubblicate da SukakuExplainer. HoDoKu documenta singles, subsets, locked candidates, fish, wings, coloring, uniqueness, chains, ALS, Sue de Coq e last-resort methods. citeturn0search2turn8search5 Le equivalenze dei nomi avanzati e i rating SE provengono dalla documentazione e dal codice di Sudoku Explainer e SukakuExplainer. citeturn12view1turn13view0turn14view0
@@ -441,8 +527,12 @@ Skyscraper, Two-String Kite e Turbot Crane sono collocati da SukakuExplainer nel
 | 730 `unique.bug_lite` | **BUG-Lite**, Generalized Unique Loop | Generalizzazione locale del deadly pattern BUG. Da implementare solo come estensione opzionale, non come compatibilità SE 1.2.1. | A, group | 6.1 `pseudo_se` | G, U | 0 |
 | 740 `misc.sue_de_coq.basic` | **Sue de Coq**, Two-Sector Disjoint Subsets, SDC | Intersezione casa-linea con candidati eccedenti compensati da set disgiunti nella linea e nel box. Produce due locked sets sovrapposti. | A, local | 5.0 `pseudo_se` | S, L | 0 |
 | 750 `misc.sue_de_coq.extended` | **Extended Sue de Coq** | Forma generalizzata con set aggiuntivi e candidati esterni all’intersezione. | A, local | 5.3 `pseudo_se` | S, L | 0 |
-| 760 `exclusion.aligned_pair` | **Aligned Pair Exclusion**, APE | Enumerare le assegnazioni di due base cells; una combinazione è vietata se viola una casa o svuota un excluder comune. Eliminare valori assenti da tutte le combinazioni valide. | A, local | 6.2 `se` | B, L | 0 |
-| 770 `exclusion.aligned_triple` | **Aligned Triplet Exclusion**, ATE | Come APE su tre base cells, con enumerazione combinatoria e common excluders. | A, local | 7.5 `se` | B, L | 0 |
+| 760 `exclusion.aligned_pair` | **Aligned Pair Exclusion**, APE Type 1 | Due base cells allineate vengono enumerate contro ALS canonici. Due cifre assegnate che rimuovono due candidati distinti dallo stesso ALS rendono impossibile il caso. | A, ALS/local | 6.2 `se` | A, B | 0 |
+| 765 `exclusion.aligned_pair.type2` | **Aligned Pair Exclusion Type 2**, Non-Aligned Pair Exclusion | Le due base cells non si vedono, quindi una cifra uguale può occupare entrambe. Gli ALS escludono soltanto le assegnazioni che ne violano la cardinalità. | A, ALS/local | 6.3 `pseudo_se` | A, B | 0 |
+| 770 `exclusion.aligned_triple` | **Aligned Triplet Exclusion**, ATE | Enumerazione di tre base cells contro uno o più ALS, con supporto minimo per ogni conclusione. | A, ALS/local | 7.5 `pseudo_se` | A, B | 0 |
+| 775 `exclusion.aligned_set` | **Generalized Aligned Exclusion** | Motore parametrico per quattro o più base cells. I budget limitano combinazioni, assegnazioni, grado e risultati con esito `TRUNCATED`. | A, ALS/local | 7.8 `pseudo_se` | A, B | 0 |
+| 780 `pattern.jexocet.rule1` | **Junior Exocet Rule 1**, jExocet | Base, target, companion, mirror, cross-line, S-cell, cover house ed escape cell soddisfano il pattern. Eliminare dai target le cifre esterne alle base digits. | A, exocet | 7.9 `project` | B, L | 0 |
+| 781-785 `pattern.jexocet.compatible_digit`, `rule3/4/5/8` | **Regole jExocet pianificate** | Identità riservate con stato `planned`. Diventano eseguibili soltanto dopo una definizione completa e fixture di soundness. | A, exocet | 8.0 `project` | B, L | 0 |
 
 Le tecniche di unicità sono valide soltanto quando il puzzle è stato verificato come univoco. Un UR occupa esattamente due righe, due colonne e due box; HoDoKu documenta UR Type 1-6, Hidden Rectangle, Avoidable Rectangle Type 1-2 e BUG+1. citeturn8search3turn7search1 Sue de Coq è formalizzabile come una costruzione di subset disgiunti all’intersezione di linea e box, con una variante base e forme estese. citeturn8search0
 
@@ -490,6 +580,7 @@ HoDoKu definisce Remote Pair, X-Chain, XY-Chain, Nice Loop, AIC Type 1 e 2, Cont
 | 1130 `forcing.net.double` | **Double Forcing Net** | Due ipotesi complementari producono la stessa conclusione attraverso net. | A, group | 9.0 `pseudo_se` | B, G | 0 |
 | 1140 `forcing.net.cell` | **Cell Forcing Net** | Ogni candidato di una cella produce la stessa conclusione attraverso DAG non lineari. | A, group | 9.2 `pseudo_se` | B, G | 0 |
 | 1150 `forcing.net.region` | **Region Forcing Net** | Ogni posizione di casa produce la stessa conclusione tramite net. | A, group | 9.2 `pseudo_se` | B, G | 0 |
+| 1155 `forcing.bowmans_bingo` | **Bowman's Bingo** | Una singola asserzione positiva colora ON oppure OFF ogni candidato rimasto, senza contraddizioni o celle ambigue, e produce una soluzione Sudoku completa. | L, dynamic | 9.4 `project` | B, G | 0 |
 | 1160 `template.single_digit` | **Templates**, Pattern Overlay Method | Enumerare tutte le configurazioni valide di una cifra compatibili con lo stato. Eliminare candidati assenti da ogni template; piazzare quelli presenti in tutti. | A, group | 7.8 `pseudo_se` | B, L | 0 |
 | 1170 `kraken.fish.type1` | **Kraken Fish Type 1** | Ogni fin del fish implica, tramite una catena, la falsità dello stesso target. | A, fish | 8.2 `pseudo_se` | F, B, C | 0 |
 | 1180 `kraken.fish.type2` | **Kraken Fish Type 2** | Tutte le possibilità rilevanti in un cover set, incluse le fins, implicano la stessa eliminazione. | A, fish | 8.4 `pseudo_se` | F, B, C | 0 |
@@ -897,17 +988,20 @@ def prove_nested_inference(
 
 La sottoprova deve dimostrare una singola inferenza utilizzata dalla catena contenitore. Non deve continuare arbitrariamente fino alla soluzione completa.
 
-**Complete Forcing Tree**
+**Complete Forcing Tree P17.1**
 
 ```python
-def complete_forcing_tree(state, root_assumption, limits):
+def complete_forcing_tree(state, root_assumption, cancellation_check):
     root_state = apply_assumption(state, root_assumption)
 
     result = prove_unsatisfiable_exhaustively(
         root_state,
-        choose_branch="minimum_remaining_values",
+        choose_branch=(
+            "fewest alternatives, cell before house-digit on equal arity"
+        ),
+        order_cases="fail-first by logical propagation",
         memoize=True,
-        limits=limits,
+        cancellation_check=cancellation_check,
     )
 
     if result.status == "unsatisfiable":
@@ -916,7 +1010,20 @@ def complete_forcing_tree(state, root_assumption, limits):
     return None
 ```
 
-Per preservare il comportamento attuale si possono inizialmente mantenere limiti molto alti o configurabili. Il nome e il rating devono però dichiarare che si tratta di ricerca completa, non di una Nested canonica.
+Ogni split e' una domanda Sudoku esaustiva. Un branch di cella copre tutti i
+candidati della cella; un branch cifra-casa copre tutte le posizioni rimaste
+per quella cifra nella riga, colonna o box. La scelta usa prima il minor
+numero di alternative, preferisce la cella a parita' e usa l'impatto della
+propagazione come criterio successivo. L'ordine fail-first visita prima i
+casi che producono una contraddizione o riducono maggiormente lo stato, senza
+rimuovere alternative.
+
+Gli stati SAT e UNSAT vengono memorizzati per riusare sottoprove equivalenti.
+Il `ProofDAG` completo conserva tutte le alternative ed e' la prova
+autorevole. `presentation_proof` contiene una catena rappresentativa e
+metriche sintetiche collegate al DAG tramite digest, quindi serve soltanto
+alla lettura umana. Complete Forcing Tree resta un fallback autonomo dopo
+ordinary e Nested in ogni `SearchPolicy`.
 
 ## Corrispondenza dei nomi e schema del catalogo
 
@@ -1403,7 +1510,7 @@ La suite automatica deve includere:
 | Metamorphic | Invarianza sotto permutazioni delle cifre, trasposizione, riflessione, bande e stack |
 | Fuzzing | Stati di candidati casuali validi confrontati con un SAT/backtracking oracle |
 | Uniqueness gate | UR, UL, AR e BUG disabilitati su puzzle non verificati univoci |
-| Budget | Nested e Complete Tree rispettano nodi, rami, profondità, timeout e cancellazione |
+| Budget | Nested rispetta i budget interni; Complete Tree accetta cancellazione esterna esplicita e scarta prove parziali |
 | Serialization | Round trip del ProofDAG senza perdita di parent, metriche o nested proofs |
 | Regression | Identico esito logico sul corpus congelato, salvo cambi documentati di classificazione |
 | Performance | Budget distinto per local, chain, ALS, nested e complete tree |
@@ -1434,7 +1541,9 @@ senza introdurre motori paralleli.
 | P14.1 | Unificare tassonomia e codice | ID moderni, `inference_engine`, `ALSNode`, vera ALS-AIC, precedenza specifica, metriche Group/ALS | Round trip, near miss, classificazione e persistenza |
 | P15 | Classificare ProofDAG non lineari | Forcing Net, Templates e Kraken Fish sopra i motori esistenti | Chain versus net; nessuna sovrascrittura di ALS/Grouped |
 | P16 (completata) | Implementare vere Nested | Nested inference come sottoprova, memoizzazione, cycle guard, budget depth 1-2 | `nested_subproof_count >= 1`; nessuna ricerca fino alla soluzione completa |
-| P17 | Esplicitare profili Dynamic/Plus/Nested | Regole interne configurabili per local, fish, grouped e ALS | Ogni inferenza avanzata conserva detector e subproof |
+| P17 (completata) | Esplicitare SearchPolicy, InferenceProfile e SearchLimits | Cinque policy, profili Dynamic/Plus/Nested, limited/unlimited e troncamenti tipizzati | Ogni inferenza conserva profilo e regole; minimo certificato |
+| P17.1 (completata) | Rendere umano il fallback completo | Branch cella e cifra-casa, ordine fail-first, cache SAT/UNSAT, cancellazione esterna e vista compatta | Branch esaustivi e deterministici; ProofDAG completo; cancellazione `TRUNCATED` senza risultati parziali |
+| P17.2 (completata) | Acquisire le tecniche definite in `Aggiunte.md` | Aligned Exclusion con ALS, jExocet Rule 1, Bowman's Bingo globale e regole ambigue pianificate | Fixture positive, near miss, soundness, ProofDAG e troncamenti tipizzati |
 | P18 | Calibrare e pubblicare | Ricalibrare rating e metriche, migrare archivi, congelare v1 | Holdout corpus, benchmark, compatibility report, schema migration test |
 
 La pipeline applica il seguente contratto di normalizzazione:
@@ -1496,6 +1605,8 @@ chain/net deriva dal DAG; Templates opera per cifra; Kraken conserva fish e
 rami AIC verificabili. Le Nested conservano la sottoprova che dimostra il nodo
 interno e non invocano il Complete Forcing Tree.
 
-La roadmap complessiva sarà completa quando P17-P18 avranno aggiunto i profili
-espliciti e la calibrazione senza violare questo contratto. Il Complete
-Forcing Tree resta l'ultimo fallback dopo i livelli logici precedenti.
+P17 ha completato i profili espliciti e il contratto dei limiti. P17.1 ha
+reso il Complete Forcing Tree un ultimo fallback umano ed esaustivo, con
+branch Sudoku, riuso degli stati e cancellazione esterna certificata. La
+roadmap complessiva sarà completa quando P18 avrà calibrato rating e metriche
+senza violare questo contratto.

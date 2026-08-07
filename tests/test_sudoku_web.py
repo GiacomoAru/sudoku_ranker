@@ -56,7 +56,7 @@ class SudokuWebTests(unittest.TestCase):
         self.assertEqual(response.json()["archive_profile"], "online")
         self.assertEqual(
             response.json()["default_analysis_mode"],
-            "profile",
+            "smart_profile",
         )
         self.assertEqual(
             response.json()["default_profile_difficulty_window"],
@@ -201,7 +201,7 @@ class SudokuWebTests(unittest.TestCase):
             payload["name"],
             f"sudoku_{payload['puzzle_id'][:8]}",
         )
-        self.assertEqual(analysis["analysis_mode"], "profile")
+        self.assertEqual(analysis["analysis_mode"], "smart_profile")
         self.assertEqual(
             analysis["profile_difficulty_window"],
             solver.DEFAULT_PROFILE_DIFFICULTY_WINDOW,
@@ -240,7 +240,7 @@ class SudokuWebTests(unittest.TestCase):
                 self.online_root
                 / "analyses"
                 / payload["puzzle_id"]
-                / "analysis_profile_1p5.json"
+                / "analysis_smart_profile_1p5.json"
             ).exists()
         )
         puzzle_payload = json.loads(
@@ -265,7 +265,7 @@ class SudokuWebTests(unittest.TestCase):
             self.online_root
             / "analyses"
             / payload["puzzle_id"]
-            / "analysis_profile_1p5.json"
+            / "analysis_smart_profile_1p5.json"
         )
         stored_analysis = json.loads(
             analysis_path.read_text(encoding="utf-8")

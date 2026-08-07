@@ -33,6 +33,7 @@ from .als_nodes import ALSNode
 from .group_nodes import GroupNode
 from . import proof as proof_model
 from . import proof_schema
+from . import search_config
 
 
 Candidate = tuple[int, int, int]
@@ -43,10 +44,16 @@ ALSLiteral = tuple[ALSNode, bool]
 GraphLiteral = Literal | GroupLiteral | ALSLiteral
 
 # Limiti espliciti di output e delle viste lineari.
-MAX_DEDUCTIONS_PER_TECHNIQUE = 16 # limite massimo non valicabile
-MAX_NESTED_DEDUCTIONS = 2 # limite massimo non valicabile
-MAX_COMPLETE_TREE_DEDUCTIONS = 1 # limite massimo non valicabile
-MAX_STATIC_CYCLE_EDGES = 16
+MAX_DEDUCTIONS_PER_TECHNIQUE = (
+    search_config.LIMITED_SEARCH_LIMITS.logic_results
+)
+MAX_NESTED_DEDUCTIONS = (
+    search_config.LIMITED_SEARCH_LIMITS.nested_results
+)
+MAX_COMPLETE_TREE_DEDUCTIONS = 1
+MAX_STATIC_CYCLE_EDGES = (
+    search_config.LIMITED_SEARCH_LIMITS.static_cycle_edges
+)
 STORE_COMPLETE_FORCING_TREE_PROOF = False
 
 if not (
@@ -93,6 +100,7 @@ LOGIC_TECHNIQUE_BATCHES = {
         "Dynamic Forcing Chain",
         "Dynamic Forcing Chain Plus",
         "Forcing Net",
+        "Bowman's Bingo",
     ),
     "nested": (
         "Nested Forcing Chain",
@@ -252,7 +260,12 @@ def _fingerprint(state) -> tuple:
             for value in state.candidates[row][column]:
                 mask |= 1 << value
             masks.append(mask)
-    return grid, tuple(masks)
+    return (
+        grid,
+        tuple(masks),
+        search_config.limits_for_state(state).signature,
+        search_config.cancellation_signature_for_state(state),
+    )
 
 
 def _literal_record(literal: GraphLiteral) -> dict:
@@ -455,6 +468,69 @@ def _attach_propagation_proof(
         reasons=(node.reason for node in dag.nodes.values()),
     )
     return deduction
+
+
+def _bowmans_proof_dag(result, placements, colored_literals):
+    """Costruisce la rete globale che certifica un Bowman's Bingo."""
+    nodes = {}
+    ids = {}
+
+    def node_kind(reason, parents):
+        if not parents or reason == "assumption":
+            return "assumption"
+        if reason in {"x", "y", "peer"}:
+            return "static-implication"
+        if reason in {"cell-single", "unit-single"}:
+            return "dynamic-single"
+        return "advanced-rule"
+
+    ordered = result.proof_literals(colored_literals)
+    for literal in ordered:
+        parent_ids = tuple(
+            ids[parent]
+            for parent in result.parents.get(literal, ())
+            if parent in ids
+        )
+        reason = result.reasons.get(literal, "assumption")
+        node_id = len(nodes)
+        nodes[node_id] = proof_model.ProofNode(
+            id=node_id,
+            kind=node_kind(reason, parent_ids),
+            conclusion=literal,
+            parents=parent_ids,
+            reason=reason,
+            depth=(
+                0
+                if not parent_ids
+                else 1 + max(nodes[parent].depth for parent in parent_ids)
+            ),
+            payload={"presentation": True},
+        )
+        ids[literal] = node_id
+
+    conclusions = []
+    for row, column, value in placements:
+        literal = (row, column, value, True)
+        parent = ids[literal]
+        node_id = len(nodes)
+        nodes[node_id] = proof_model.ProofNode(
+            id=node_id,
+            kind="common-conclusion",
+            conclusion=literal,
+            parents=(parent,),
+            reason="placement",
+            depth=nodes[parent].depth + 1,
+            payload={"action": "placement", "presentation": False},
+        )
+        conclusions.append(node_id)
+
+    return proof_model.ProofDAG(
+        nodes=nodes,
+        roots=tuple(sorted(
+            node.id for node in nodes.values() if not node.parents
+        )),
+        conclusions=tuple(conclusions),
+    )
 
 
 @dataclass(frozen=True)
@@ -889,6 +965,7 @@ class StaticImplicationGraph:
         minimum_edges: int = 1,
         maximum_edges: int | None = None,
         require_group: bool = True,
+        truncated_out: list | None = None,
     ):
         """Cammino minimo sul grafo condiviso candidato/gruppo."""
         start_group = isinstance(_literal_node(source), GroupNode)
@@ -915,6 +992,16 @@ class StaticImplicationGraph:
                     [parent_reason[state] for state in states[1:]],
                 )
             if maximum_edges is not None and depth >= maximum_edges:
+                if any(
+                    (
+                        edge.target,
+                        used_group or isinstance(
+                            _literal_node(edge.target), GroupNode
+                        ),
+                    ) not in parent
+                    for edge in self.grouped_edges(current, allowed)
+                ) and truncated_out is not None:
+                    truncated_out.append("max_static_cycle_edges")
                 continue
             for edge in self.grouped_edges(current, allowed):
                 next_group = used_group or isinstance(
@@ -945,6 +1032,7 @@ class StaticImplicationGraph:
         *,
         allowed: frozenset[str],
         maximum_edges: int | None = MAX_STATIC_CYCLE_EDGES,
+        truncated_out: list | None = None,
     ):
         self._ensure_grouped_adjacency()
         nodes: tuple[ImplicationNode, ...] = tuple(sorted(
@@ -963,6 +1051,11 @@ class StaticImplicationGraph:
                     maximum_edges is not None
                     and len(path_reasons) >= maximum_edges
                 ):
+                    if any(
+                        edge.target not in visited
+                        for edge in self.grouped_edges(current, allowed)
+                    ) and truncated_out is not None:
+                        truncated_out.append("max_static_cycle_edges")
                     return
                 for edge in self.grouped_edges(current, allowed):
                     target = edge.target
@@ -1048,6 +1141,7 @@ class StaticImplicationGraph:
         required: frozenset[str] = frozenset(),
         minimum_edges: int = 1,
         maximum_edges: int | None = None,
+        truncated_out: list | None = None,
     ):
         """Cammino minimo che rispetta i tipi di collegamento richiesti."""
         start_state = source, frozenset()
@@ -1075,6 +1169,11 @@ class StaticImplicationGraph:
                 return literals, reasons
 
             if maximum_edges is not None and depth >= maximum_edges:
+                if any(
+                    (edge.target, used | {edge.reason}) not in parent
+                    for edge in self.edges(current, allowed)
+                ) and truncated_out is not None:
+                    truncated_out.append("max_static_cycle_edges")
                 continue
 
             for edge in self.edges(current, allowed):
@@ -1108,6 +1207,7 @@ class StaticImplicationGraph:
         allowed: frozenset[str],
         required: frozenset[str],
         maximum_edges: int | None = MAX_STATIC_CYCLE_EDGES,
+        truncated_out: list | None = None,
     ):
         """Enumera cicli semplici alternati, in ordine deterministico.
 
@@ -1126,6 +1226,11 @@ class StaticImplicationGraph:
                     maximum_edges is not None
                     and len(path_reasons) >= maximum_edges
                 ):
+                    if any(
+                        edge.target not in visited
+                        for edge in self.edges(current, allowed)
+                    ) and truncated_out is not None:
+                        truncated_out.append("max_static_cycle_edges")
                     return
                 for edge in self.edges(current, allowed):
                     target = edge.target
@@ -1266,7 +1371,10 @@ class DynamicPropagator:
         self.initial_graph = StaticImplicationGraph(self.initial)
         self.initial_advanced = {
             (candidate, rule)
-            for candidate, rule, _ in self._advanced_eliminations(self.initial)
+            for candidate, rule, _ in self._advanced_eliminations(
+                self.initial,
+                search_config.DYNAMIC_PLUS_PROFILE,
+            )
         }
 
     @staticmethod
@@ -1287,11 +1395,19 @@ class DynamicPropagator:
             for row, column in UNITS[unit_index]
         )
 
-    def propagate(self, source: Literal, *, mode="dynamic", advanced_level=0):
+    def propagate(
+        self,
+        source: Literal,
+        *,
+        mode="dynamic",
+        advanced_level=None,
+        inference_profile=None,
+    ):
         return self.propagate_assumptions(
             (source,),
             mode=mode,
             advanced_level=advanced_level,
+            inference_profile=inference_profile,
         )
 
     def propagate_assumptions(
@@ -1299,9 +1415,19 @@ class DynamicPropagator:
         sources,
         *,
         mode="dynamic",
-        advanced_level=0,
+        advanced_level=None,
+        inference_profile=None,
     ):
         """Propaga un contesto finito di ipotesi senza fare branching."""
+        if inference_profile is None:
+            inference_profile = (
+                search_config.DYNAMIC_PLUS_PROFILE
+                if advanced_level is not None and int(advanced_level)
+                else search_config.DYNAMIC_PROFILE
+            )
+        inference_profile = search_config.inference_profile(
+            inference_profile
+        )
         sources = tuple(dict.fromkeys(sources))
         if not sources:
             raise ValueError("La propagazione richiede almeno un'ipotesi.")
@@ -1382,19 +1508,23 @@ class DynamicPropagator:
                     if len(values) == 1:
                         remaining = next(iter(values))
                         static = len(self.initial.get(cell, ())) == 2 and before_count == 2
-                        next_features = set(features)
-                        if not static:
-                            next_features.add("dynamic")
-                        false_parents = tuple(
-                            item for item in result.off
-                            if item[:2] == cell
-                        ) or (literal,)
-                        queue.append((
-                            (row, column, remaining, True),
-                            false_parents,
-                            "y" if static else "cell-single",
-                            frozenset(next_features),
-                        ))
+                        if (
+                            static
+                            or inference_profile.allow_dynamic_singles
+                        ):
+                            next_features = set(features)
+                            if not static:
+                                next_features.add("dynamic")
+                            false_parents = tuple(
+                                item for item in result.off
+                                if item[:2] == cell
+                            ) or (literal,)
+                            queue.append((
+                                (row, column, remaining, True),
+                                false_parents,
+                                "y" if static else "cell-single",
+                                frozenset(next_features),
+                            ))
 
                 for unit_index in _UNITS_BY_CELL[cell]:
                     if self._unit_has_solved(unit_index, value):
@@ -1425,6 +1555,11 @@ class DynamicPropagator:
                     if len(positions) == 1:
                         target_row, target_column = positions[0]
                         static = initial_count == 2
+                        if (
+                            not static
+                            and not inference_profile.allow_dynamic_singles
+                        ):
+                            continue
                         next_features = set(features)
                         if not static:
                             next_features.add("dynamic")
@@ -1442,10 +1577,16 @@ class DynamicPropagator:
                 if result.contradiction:
                     break
 
-            if result.contradiction or not advanced_level:
+            if (
+                result.contradiction
+                or not inference_profile.advanced_rule_ids
+            ):
                 break
 
-            advanced = self._advanced_eliminations(work)
+            advanced = self._advanced_eliminations(
+                work,
+                inference_profile,
+            )
             pending = []
             for candidate, rule, support in advanced:
                 # Una regola già applicabile prima dell'assunzione non è una
@@ -1484,7 +1625,7 @@ class DynamicPropagator:
 
         return result
 
-    def _advanced_eliminations(self, work):
+    def _advanced_eliminations(self, work, inference_profile):
         """Prime inferenze FC+: locking, pair e X-Wing."""
         found: dict[Candidate, tuple[str, set[Candidate]]] = {}
 
@@ -1607,9 +1748,21 @@ class DynamicPropagator:
                         for row in rows:
                             add((row, column, value), "advanced-x-wing", support)
 
+        allowed_reasons = set()
+        if inference_profile.allow_locked_candidates:
+            allowed_reasons.add("advanced-locking")
+        if inference_profile.allow_subsets:
+            allowed_reasons.update({
+                "advanced-naked-pair",
+                "advanced-hidden-pair",
+            })
+        if inference_profile.allow_basic_fish:
+            allowed_reasons.add("advanced-x-wing")
+
         return [
             (candidate, rule, support)
             for candidate, (rule, support) in sorted(found.items())
+            if rule in allowed_reasons
         ]
 
 
@@ -1621,8 +1774,28 @@ class _CompleteForcingTreeProofNode:
     propagations: tuple[Literal, ...] = ()
     contradiction: bool = False
     contradiction_reason: str | None = None
+    branch_kind: str | None = None
     branch_cell: tuple[int, int] | None = None
+    branch_house_id: int | None = None
+    branch_digit: int | None = None
+    branch_alternatives: tuple[Literal, ...] = ()
     children: tuple["_CompleteForcingTreeProofNode", ...] = ()
+
+
+@dataclass(frozen=True)
+class _HumanBranch:
+    """Domanda Sudoku esaustiva usata dal Complete Forcing Tree."""
+
+    kind: str
+    alternatives: tuple[Literal, ...]
+    label: str
+    cell: tuple[int, int] | None = None
+    house_id: int | None = None
+    digit: int | None = None
+
+
+class _CompleteSearchCancelled(Exception):
+    """Arresto esplicito della ricerca completa richiesto dal chiamante."""
 
 
 def _mask_values(mask: int):
@@ -1656,16 +1829,21 @@ def _nested_state_masks(grid, candidates) -> tuple[int, ...]:
     return tuple(masks)
 
 
-def _technique_result_limit(technique, max_results):
+def _technique_result_limit(technique, max_results, limits=None):
     """Applica i limiti di output senza limitare la ricerca interna."""
+    limits = limits or search_config.LIMITED_SEARCH_LIMITS
     requested = _normalise_max_results(max_results)
     if technique == _COMPLETE_TREE_TECHNIQUE:
-        hard_limit = MAX_COMPLETE_TREE_DEDUCTIONS
+        hard_limit = (
+            None if limits.unlimited else MAX_COMPLETE_TREE_DEDUCTIONS
+        )
     elif technique == _NESTED_TECHNIQUE:
-        hard_limit = MAX_NESTED_DEDUCTIONS
+        hard_limit = limits.nested_results
     else:
-        hard_limit = MAX_DEDUCTIONS_PER_TECHNIQUE
+        hard_limit = limits.logic_results
 
+    if hard_limit is None:
+        return requested
     if requested is None:
         return hard_limit
 
@@ -1680,22 +1858,134 @@ class CompleteForcingTreeSearch:
     gia' calcolate.
     """
 
-    def __init__(self, grid, candidates):
+    def __init__(self, grid, candidates, *, cancellation_check=None):
         self.initial_masks = _nested_state_masks(grid, candidates)
+        self._cancellation_check = cancellation_check
         self._solution_cache: dict[tuple[int, ...], tuple[int, ...] | None] = {}
         self._proof_cache: dict[
             tuple[int, ...],
             _CompleteForcingTreeProofNode | None,
         ] = {}
+        self._cache_metrics = {
+            "solution_hits": 0,
+            "solution_misses": 0,
+            "proof_hits": 0,
+            "proof_misses": 0,
+        }
+
+    def _check_cancelled(self):
+        if (
+            self._cancellation_check is not None
+            and bool(self._cancellation_check())
+        ):
+            raise _CompleteSearchCancelled
 
     @staticmethod
-    def _choose_branch_cell(masks: tuple[int, ...]) -> int | None:
-        choices = (
-            (mask.bit_count(), index)
-            for index, mask in enumerate(masks)
-            if mask.bit_count() > 1
+    def _branch_impact(masks, alternatives):
+        impact = 0
+        for row, column, value, _ in alternatives:
+            index = row * 9 + column
+            bit = 1 << value
+            impact += masks[index].bit_count() - 1
+            impact += sum(
+                1 for peer_index in _PEER_INDEXES[index]
+                if masks[peer_index] & bit
+            )
+        return impact
+
+    @classmethod
+    def _choose_human_branch(cls, masks: tuple[int, ...]):
+        """Sceglie la domanda Sudoku piu' semplice e informativa.
+
+        Le celle chiedono quale candidato occupi una casella. I branch
+        cifra-casa chiedono in quale posizione di una casa vada una cifra.
+        Entrambe le domande coprono tutte le alternative possibili.
+        """
+        branches = []
+
+        for index, mask in enumerate(masks):
+            if mask.bit_count() <= 1:
+                continue
+            row, column = divmod(index, 9)
+            alternatives = tuple(
+                (row, column, value, True)
+                for value in _mask_values(mask)
+            )
+            branches.append(_HumanBranch(
+                kind="cell",
+                alternatives=alternatives,
+                label=f"R{row + 1}C{column + 1}",
+                cell=(row, column),
+            ))
+
+        seen_house_digits = set()
+        for house_id, unit in enumerate(_UNIT_INDEXES):
+            for value, bit in zip(range(1, 10), _DIGIT_BITS):
+                positions = tuple(
+                    index for index in unit if masks[index] & bit
+                )
+                if len(positions) <= 1:
+                    continue
+                if any(masks[index] == bit for index in positions):
+                    continue
+                signature = value, tuple(sorted(positions))
+                if signature in seen_house_digits:
+                    continue
+                seen_house_digits.add(signature)
+                alternatives = tuple(
+                    (*divmod(index, 9), value, True)
+                    for index in sorted(positions)
+                )
+                house_name, visible_index = _visible_unit_reference(house_id)
+                branches.append(_HumanBranch(
+                    kind="house-digit",
+                    alternatives=alternatives,
+                    label=(
+                        f"{house_name} {visible_index}, valore {value}"
+                    ),
+                    house_id=house_id,
+                    digit=value,
+                ))
+
+        def rank(branch):
+            stable = (
+                branch.cell
+                if branch.cell is not None
+                else (branch.house_id, branch.digit)
+            )
+            return (
+                len(branch.alternatives),
+                0 if branch.kind == "cell" else 1,
+                -cls._branch_impact(masks, branch.alternatives),
+                stable,
+            )
+
+        return min(branches, key=rank, default=None)
+
+    def _ordered_branch_alternatives(self, masks, branch):
+        """Ordina i casi fail-first senza rimuovere alcuna alternativa."""
+        previews = []
+        for alternative in branch.alternatives:
+            self._check_cancelled()
+            propagated, _, contradiction = self._propagate(
+                masks,
+                assumption=alternative,
+                record_trace=False,
+            )
+            if contradiction is not None:
+                score = (0, 0, 0, alternative)
+            else:
+                unresolved = sum(
+                    mask.bit_count() > 1 for mask in propagated
+                )
+                candidate_count = sum(
+                    mask.bit_count() for mask in propagated
+                )
+                score = (1, unresolved, candidate_count, alternative)
+            previews.append((score, alternative))
+        return tuple(
+            alternative for _, alternative in sorted(previews)
         )
-        return min(choices, default=(0, None))[1]
 
     @staticmethod
     def _apply_assumption(work, assumption, note, queue):
@@ -1735,6 +2025,7 @@ class CompleteForcingTreeSearch:
         return None
 
     def _propagate(self, masks, assumption=None, *, record_trace=True):
+        self._check_cancelled()
         work = list(masks)
         trace = []
         seen_trace = set()
@@ -1763,6 +2054,7 @@ class CompleteForcingTreeSearch:
 
         while True:
             while queue:
+                self._check_cancelled()
                 index = queue.popleft()
                 mask = work[index]
                 value = _single_mask_value(mask)
@@ -1804,6 +2096,7 @@ class CompleteForcingTreeSearch:
             hidden_single_found = False
 
             for unit_index, unit in enumerate(_UNIT_INDEXES):
+                self._check_cancelled()
                 for value, bit in zip(range(1, 10), _DIGIT_BITS):
                     positions = [
                         index for index in unit
@@ -1845,6 +2138,7 @@ class CompleteForcingTreeSearch:
         return tuple(work), tuple(trace), None
 
     def _find_solution(self, masks):
+        self._check_cancelled()
         propagated, _, contradiction = self._propagate(
             masks,
             record_trace=False,
@@ -1855,18 +2149,24 @@ class CompleteForcingTreeSearch:
 
         cached = self._solution_cache.get(propagated, ...)
         if cached is not ...:
+            self._cache_metrics["solution_hits"] += 1
             return cached
+        self._cache_metrics["solution_misses"] += 1
 
-        branch_index = self._choose_branch_cell(propagated)
+        branch = self._choose_human_branch(propagated)
 
-        if branch_index is None:
+        if branch is None:
             self._solution_cache[propagated] = propagated
             return propagated
 
-        for value in _mask_values(propagated[branch_index]):
-            child = list(propagated)
-            child[branch_index] = 1 << value
-            solution = self._find_solution(tuple(child))
+        for alternative in self._ordered_branch_alternatives(
+            propagated,
+            branch,
+        ):
+            solution = self._find_solution_with_assumption(
+                propagated,
+                alternative,
+            )
 
             if solution is not None:
                 self._solution_cache[propagated] = solution
@@ -1875,6 +2175,14 @@ class CompleteForcingTreeSearch:
         self._solution_cache[propagated] = None
         return None
 
+    def _find_solution_with_assumption(self, masks, assumption):
+        row, column, value, is_on = assumption
+        child = list(masks)
+        index = row * 9 + column
+        bit = 1 << value
+        child[index] = bit if is_on else child[index] & ~bit
+        return self._find_solution(tuple(child))
+
     @staticmethod
     def _attach_context(core, assumption, propagations):
         return _CompleteForcingTreeProofNode(
@@ -1882,11 +2190,16 @@ class CompleteForcingTreeSearch:
             propagations=propagations,
             contradiction=core.contradiction,
             contradiction_reason=core.contradiction_reason,
+            branch_kind=core.branch_kind,
             branch_cell=core.branch_cell,
+            branch_house_id=core.branch_house_id,
+            branch_digit=core.branch_digit,
+            branch_alternatives=core.branch_alternatives,
             children=core.children,
         )
 
     def _prove_unsatisfiable(self, masks, assumption=None):
+        self._check_cancelled()
         propagated, trace, contradiction = self._propagate(
             masks,
             assumption=assumption,
@@ -1903,21 +2216,24 @@ class CompleteForcingTreeSearch:
 
         cached = self._proof_cache.get(propagated, ...)
         if cached is not ...:
+            self._cache_metrics["proof_hits"] += 1
             if cached is None:
                 return None
             return self._attach_context(cached, assumption, trace)
+        self._cache_metrics["proof_misses"] += 1
 
-        branch_index = self._choose_branch_cell(propagated)
+        branch = self._choose_human_branch(propagated)
 
-        if branch_index is None:
+        if branch is None:
             self._proof_cache[propagated] = None
             return None
 
-        row, column = divmod(branch_index, 9)
         children = []
 
-        for value in _mask_values(propagated[branch_index]):
-            child_assumption = (row, column, value, True)
+        for child_assumption in self._ordered_branch_alternatives(
+            propagated,
+            branch,
+        ):
             child_proof = self._prove_unsatisfiable(
                 propagated,
                 assumption=child_assumption,
@@ -1930,7 +2246,11 @@ class CompleteForcingTreeSearch:
             children.append(child_proof)
 
         core = _CompleteForcingTreeProofNode(
-            branch_cell=(row, column),
+            branch_kind=branch.kind,
+            branch_cell=branch.cell,
+            branch_house_id=branch.house_id,
+            branch_digit=branch.digit,
+            branch_alternatives=branch.alternatives,
             children=tuple(children),
         )
         self._proof_cache[propagated] = core
@@ -2061,6 +2381,7 @@ class CompleteForcingTreeSearch:
                 ],
                 "contradiction": node.contradiction,
                 "contradiction_reason": node.contradiction_reason,
+                "branch_kind": node.branch_kind,
                 "branch_cell": (
                     {
                         "row": node.branch_cell[0],
@@ -2069,6 +2390,12 @@ class CompleteForcingTreeSearch:
                     if node.branch_cell is not None
                     else None
                 ),
+                "branch_house_id": node.branch_house_id,
+                "branch_digit": node.branch_digit,
+                "branch_alternatives": [
+                    _literal_record(literal)
+                    for literal in node.branch_alternatives
+                ],
                 "children": child_ids,
             }
             nodes[node_id] = record
@@ -2147,7 +2474,14 @@ class CompleteForcingTreeSearch:
                 (() if cursor is None else (cursor,)),
                 "complete-case-split",
                 {
+                    "branch_kind": current.branch_kind,
                     "branch_cell": list(current.branch_cell or ()),
+                    "branch_house_id": current.branch_house_id,
+                    "branch_digit": current.branch_digit,
+                    "alternatives": [
+                        _literal_record(literal)
+                        for literal in current.branch_alternatives
+                    ],
                     "branch_count": len(current.children),
                     "presentation": False,
                 },
@@ -2176,7 +2510,29 @@ class CompleteForcingTreeSearch:
             nested_proofs={},
         )
 
+    @staticmethod
+    def _compact_proof_view(proof, formal_dag, metrics):
+        """Vista breve derivata dalla prova completa e priva di autorita'."""
+        return {
+            "kind": "complete-forcing-tree-compact-view",
+            "authoritative": False,
+            "proof_dag_digest": formal_dag.digest(),
+            "root_assumption": (
+                _literal_record(proof.assumption)
+                if proof.assumption is not None
+                else None
+            ),
+            "representative_chain": [
+                _literal_record(literal)
+                for literal in CompleteForcingTreeSearch._longest_chain(proof)
+            ],
+            "branch_count": metrics["branch_count"],
+            "leaf_count": metrics["leaf_count"],
+            "max_chain_length": metrics["max_chain_length"],
+        }
+
     def find_deductions(self, max_results):
+        self._check_cancelled()
         collector = _DeductionCollector(max_results)
         solution = self._find_solution(self.initial_masks)
 
@@ -2192,6 +2548,7 @@ class CompleteForcingTreeSearch:
         )
 
         for _, index in branch_cells:
+            self._check_cancelled()
             if collector.full:
                 break
 
@@ -2199,6 +2556,7 @@ class CompleteForcingTreeSearch:
             solution_value = _single_mask_value(solution[index])
 
             for value in _mask_values(self.initial_masks[index]):
+                self._check_cancelled()
                 if collector.full:
                     break
                 if value == solution_value:
@@ -2255,6 +2613,16 @@ class CompleteForcingTreeSearch:
                     proof_schema.normalize_proof_metrics(
                         deduction["logic"]
                     )
+                )
+                deduction["logic"]["presentation_proof"] = (
+                    self._compact_proof_view(
+                        proof,
+                        formal_dag,
+                        deduction["logic"]["metrics"],
+                    )
+                )
+                deduction["logic"]["search_cache"] = dict(
+                    self._cache_metrics
                 )
                 deduction["logic"]["complete"] = True
                 deduction["logic"]["exhaustive"] = True
@@ -2317,6 +2685,10 @@ class LogicEngine:
     """Facade che calcola e memorizza le deduzioni per uno stato immutato."""
 
     def __init__(self, state):
+        self.search_limits = search_config.limits_for_state(state)
+        self.cancellation_check = (
+            search_config.cancellation_check_for_state(state)
+        )
         self.grid = state.grid.copy()
         self.candidates = _candidate_map(state)
         self.graph = StaticImplicationGraph(self.candidates)
@@ -2327,6 +2699,9 @@ class LogicEngine:
         # esaurita naturalmente prima del limite configurato.
         self._results = {}
         self._result_limits = {}
+        self._search_metadata = {}
+        self._active_truncated_reasons = []
+        self._active_inference_profile = search_config.STATIC_PROFILE
         self._prepared_batches = set()
 
         # Queste cache contengono strutture riutilizzabili nello stesso stato.
@@ -2338,15 +2713,34 @@ class LogicEngine:
         self._complete_forcing_tree_search = None
         self._lock = RLock()
 
-    def _propagate(self, source, *, mode="dynamic", advanced_level=0):
+    def _propagate(
+        self,
+        source,
+        *,
+        mode="dynamic",
+        advanced_level=None,
+        inference_profile=None,
+    ):
         """Propaga esattamente al livello richiesto e ne riusa il risultato."""
-        key = source, mode, int(advanced_level)
+        if inference_profile is None:
+            if advanced_level is None:
+                inference_profile = self._active_inference_profile
+            else:
+                inference_profile = (
+                    search_config.DYNAMIC_PLUS_PROFILE
+                    if int(advanced_level)
+                    else search_config.DYNAMIC_PROFILE
+                )
+        inference_profile = search_config.inference_profile(
+            inference_profile
+        )
+        key = source, mode, inference_profile.id
 
         if key not in self._propagation_cache:
             self._propagation_cache[key] = self.propagator.propagate(
                 source,
                 mode=mode,
-                advanced_level=int(advanced_level),
+                inference_profile=inference_profile,
             )
 
         return self._propagation_cache[key]
@@ -2388,6 +2782,7 @@ class LogicEngine:
             .replace("-", "_")
             .replace("(", "")
             .replace(")", "")
+            .replace("'", "")
         )
 
     def _cache_covers(self, technique, max_results):
@@ -2428,7 +2823,11 @@ class LogicEngine:
             self._result_limits[technique] = stored_limit
 
     def _compute(self, technique, max_results):
-        max_results = _technique_result_limit(technique, max_results)
+        max_results = _technique_result_limit(
+            technique,
+            max_results,
+            self.search_limits,
+        )
 
         if self._cache_covers(technique, max_results):
             return
@@ -2438,16 +2837,50 @@ class LogicEngine:
         if method is None:
             raise KeyError(f"Tecnica logica sconosciuta: {technique}")
 
+        self._active_truncated_reasons = []
+        self._active_inference_profile = (
+            search_config.profile_for_technique(technique)
+        )
         deductions = self._deduplicate(
             method(max_results=max_results),
             max_results=max_results,
         )
-        self._store_result(technique, deductions, max_results)
+        reasons = set(self._active_truncated_reasons)
+        if max_results is not None and len(deductions) >= max_results:
+            reasons.add("logic_result_limit")
+        for deduction in deductions:
+            logic = deduction.setdefault("logic", {})
+            profile = self._active_inference_profile
+            proof_dag = logic.get("proof_dag", {}) or {}
+            rule_ids = sorted(set(logic.get(
+                "inference_rules_used", ()
+            )) | {
+                str(node.get("reason"))
+                for node in dict(proof_dag.get("nodes", {})).values()
+                if node.get("reason")
+                and node.get("reason") not in {
+                    "assumption", "common-conclusion"
+                }
+            })
+            if technique == "Forcing Net" and not any(
+                rule.startswith("advanced-") for rule in rule_ids
+            ):
+                profile = search_config.DYNAMIC_PROFILE
+            logic["inference_profile_id"] = profile.id
+            logic["inference_rules_used"] = rule_ids
+        self._search_metadata[technique] = {
+            "completion": "truncated" if reasons else "exhausted",
+            "search_truncated": bool(reasons),
+            "truncated_reasons": sorted(reasons),
+            "inference_profile_id": self._active_inference_profile.id,
+        }
+        if "external_cancellation" not in reasons:
+            self._store_result(technique, deductions, max_results)
 
     def prepare(
         self,
         target="all",
-        max_results=DEFAULT_MAX_DEDUCTIONS_PER_TECHNIQUE,
+        max_results=None,
     ):
         """
         Prepara una tecnica oppure un batch esplicito.
@@ -2491,9 +2924,13 @@ class LogicEngine:
     def get_cached(
         self,
         technique,
-        max_results=DEFAULT_MAX_DEDUCTIONS_PER_TECHNIQUE,
+        max_results=None,
     ):
-        max_results = _technique_result_limit(technique, max_results)
+        max_results = _technique_result_limit(
+            technique,
+            max_results,
+            self.search_limits,
+        )
 
         if not self._cache_covers(technique, max_results):
             raise KeyError(
@@ -2511,10 +2948,28 @@ class LogicEngine:
     def find(
         self,
         technique: str,
-        max_results=DEFAULT_MAX_DEDUCTIONS_PER_TECHNIQUE,
+        max_results=None,
     ):
         self.prepare(technique, max_results=max_results)
+        if (
+            not self._cache_covers(
+                technique,
+                _technique_result_limit(
+                    technique,
+                    max_results,
+                    self.search_limits,
+                ),
+            )
+            and self._search_metadata.get(technique, {}).get(
+                "search_truncated"
+            )
+        ):
+            return []
         return self.get_cached(technique, max_results=max_results)
+
+    def search_metadata(self, technique):
+        """Completezza dell'ultima ricerca cacheata per ``technique``."""
+        return dict(self._search_metadata.get(technique, {}))
 
     @staticmethod
     def _deduplicate(deductions, max_results=None):
@@ -2539,7 +2994,8 @@ class LogicEngine:
         for literals, reasons in self.graph.cycles(
             allowed=frozenset(allowed),
             required=frozenset(required),
-            maximum_edges=MAX_STATIC_CYCLE_EDGES,
+            maximum_edges=self.search_limits.static_cycle_edges,
+            truncated_out=self._active_truncated_reasons,
         ):
             body = literals[:-1]
             supports = self.graph.chain_supports(literals, reasons)
@@ -2642,6 +3098,7 @@ class LogicEngine:
                     allowed=frozenset(allowed),
                     required=frozenset(required),
                     minimum_edges=3,
+                    truncated_out=self._active_truncated_reasons,
                 )
 
                 if not path_data:
@@ -2733,7 +3190,12 @@ class LogicEngine:
                     allowed=allowed,
                     required=required,
                     minimum_edges=3,
-                    maximum_edges=MAX_STATIC_CYCLE_EDGES - 2,
+                    maximum_edges=(
+                        None
+                        if self.search_limits.static_cycle_edges is None
+                        else self.search_limits.static_cycle_edges - 2
+                    ),
+                    truncated_out=self._active_truncated_reasons,
                 )
                 if path_data is None:
                     continue
@@ -2897,8 +3359,13 @@ class LogicEngine:
                     _node_literal(second, True),
                     allowed=allowed,
                     minimum_edges=3,
-                    maximum_edges=MAX_STATIC_CYCLE_EDGES - 2,
+                    maximum_edges=(
+                        None
+                        if self.search_limits.static_cycle_edges is None
+                        else self.search_limits.static_cycle_edges - 2
+                    ),
                     require_group=True,
+                    truncated_out=self._active_truncated_reasons,
                 )
                 if path_data is None:
                     continue
@@ -2992,8 +3459,9 @@ class LogicEngine:
                     _graph_opposite(source),
                     allowed=allowed,
                     minimum_edges=3,
-                    maximum_edges=MAX_STATIC_CYCLE_EDGES,
+                    maximum_edges=self.search_limits.static_cycle_edges,
                     require_group=True,
+                    truncated_out=self._active_truncated_reasons,
                 )
                 if path_data is None:
                     continue
@@ -3074,7 +3542,8 @@ class LogicEngine:
         })
         for literals, reasons in self.graph.grouped_cycles(
             allowed=allowed,
-            maximum_edges=MAX_STATIC_CYCLE_EDGES,
+            maximum_edges=self.search_limits.static_cycle_edges,
+            truncated_out=self._active_truncated_reasons,
         ):
             eliminations = self._grouped_loop_eliminations(literals, reasons)
             if not eliminations:
@@ -3225,7 +3694,7 @@ class LogicEngine:
         technique,
         *,
         required_feature,
-        advanced_level,
+        inference_profile,
         max_results,
         collector=None,
         accept=None,
@@ -3248,12 +3717,12 @@ class LogicEngine:
             on_result = self._propagate(
                 source_on,
                 mode="dynamic",
-                advanced_level=advanced_level,
+                inference_profile=inference_profile,
             )
             off_result = self._propagate(
                 source_off,
                 mode="dynamic",
-                advanced_level=advanced_level,
+                inference_profile=inference_profile,
             )
 
             if (
@@ -3390,7 +3859,7 @@ class LogicEngine:
         technique,
         *,
         required_feature,
-        advanced_level,
+        inference_profile,
         max_results,
         collector=None,
         accept=None,
@@ -3427,7 +3896,7 @@ class LogicEngine:
                 self._propagate(
                     source,
                     mode="dynamic",
-                    advanced_level=advanced_level,
+                    inference_profile=inference_profile,
                 )
                 for source in sources
             ]
@@ -3546,14 +4015,14 @@ class LogicEngine:
         technique,
         *,
         required_feature,
-        advanced_level,
+        inference_profile,
         max_results,
     ):
         collector = _DeductionCollector(max_results)
         self._binary_dynamic(
             technique,
             required_feature=required_feature,
-            advanced_level=advanced_level,
+            inference_profile=inference_profile,
             max_results=max_results,
             collector=collector,
         )
@@ -3562,7 +4031,7 @@ class LogicEngine:
             self._multiple_dynamic(
                 technique,
                 required_feature=required_feature,
-                advanced_level=advanced_level,
+                inference_profile=inference_profile,
                 max_results=max_results,
                 collector=collector,
             )
@@ -3573,7 +4042,7 @@ class LogicEngine:
         return self._dynamic_tier(
             "Dynamic Forcing Chain",
             required_feature="dynamic",
-            advanced_level=0,
+            inference_profile=search_config.DYNAMIC_PROFILE,
             max_results=max_results,
         )
 
@@ -3581,7 +4050,7 @@ class LogicEngine:
         return self._dynamic_tier(
             "Dynamic Forcing Chain Plus",
             required_feature="advanced",
-            advanced_level=1,
+            inference_profile=search_config.DYNAMIC_PLUS_PROFILE,
             max_results=max_results,
         )
 
@@ -3604,16 +4073,16 @@ class LogicEngine:
         # di propagazione che l'ha trovata. Raccogliamo quindi sia i rami
         # Dynamic sia i rami Plus; i rispettivi runner chain li rifiutano
         # quando la prova non e' lineare.
-        for required_feature, advanced_level in (
-            ("dynamic", 0),
-            ("advanced", 1),
+        for required_feature, inference_profile in (
+            ("dynamic", search_config.DYNAMIC_PROFILE),
+            ("advanced", search_config.DYNAMIC_PLUS_PROFILE),
         ):
             if collector.full:
                 break
             self._binary_dynamic(
                 "Forcing Net",
                 required_feature=required_feature,
-                advanced_level=advanced_level,
+                inference_profile=inference_profile,
                 max_results=max_results,
                 collector=collector,
                 accept=is_candidate_net,
@@ -3623,7 +4092,7 @@ class LogicEngine:
             self._multiple_dynamic(
                 "Forcing Net",
                 required_feature=required_feature,
-                advanced_level=advanced_level,
+                inference_profile=inference_profile,
                 max_results=max_results,
                 collector=collector,
                 accept=is_candidate_net,
@@ -3656,6 +4125,125 @@ class LogicEngine:
 
         return collector.results
 
+    def _find_bowmans_bingo(self, *, max_results):
+        """Cerca un'asserzione positiva che colori l'intero stato."""
+        attempts = 0
+        completed_roots = 0
+        best = None
+        best_rank = None
+        all_candidates = tuple(sorted(
+            self.graph.all_candidates,
+            key=lambda item: (
+                len(self.candidates[item[:2]]),
+                item,
+            ),
+        ))
+
+        for candidate in all_candidates:
+            if (
+                self.search_limits.bowmans_attempts is not None
+                and attempts >= self.search_limits.bowmans_attempts
+            ):
+                self._active_truncated_reasons.append("bowmans_attempts")
+                break
+            attempts += 1
+            source = _literal(candidate, True)
+            result = self._propagate(
+                source,
+                mode="dynamic",
+                inference_profile=search_config.DYNAMIC_PLUS_PROFILE,
+            )
+            if result.contradiction:
+                continue
+
+            placements = []
+            colored_literals = []
+            globally_colored = True
+            for cell, values in sorted(self.candidates.items()):
+                on_values = [
+                    value for value in sorted(values)
+                    if (cell[0], cell[1], value, True) in result.on
+                ]
+                if len(on_values) != 1:
+                    globally_colored = False
+                    break
+                value = on_values[0]
+                for other in sorted(values):
+                    literal = (cell[0], cell[1], other, other == value)
+                    collection = result.on if other == value else result.off
+                    if literal not in collection:
+                        globally_colored = False
+                        break
+                    colored_literals.append(literal)
+                if not globally_colored:
+                    break
+                placements.append((*cell, value))
+
+            if not globally_colored:
+                continue
+
+            solved = self.grid.copy()
+            for row, column, value in placements:
+                solved[row, column] = value
+            if any(
+                {int(solved[row, column]) for row, column in unit}
+                != set(range(1, 10))
+                for unit in UNITS
+            ):
+                continue
+
+            dag = _bowmans_proof_dag(
+                result,
+                tuple(placements),
+                tuple(colored_literals),
+            )
+            logic = proof_model.logic_payload(
+                dag,
+                kind="bowmans-bingo-global-coloring",
+                reasons=(node.reason for node in dag.nodes.values()),
+            )
+            logic["global_coverage"] = {
+                "start_assertion": _literal_record(source),
+                "candidate_count": len(colored_literals),
+                "unsolved_cell_count": len(placements),
+                "uncolored_candidates": [],
+                "ambiguous_cells": [],
+                "contradiction": False,
+                "complete_solution": True,
+                "solution": [
+                    [int(solved[row, column]) for column in range(9)]
+                    for row in range(9)
+                ],
+            }
+            deduction = {
+                "description": (
+                    f"L'asserzione R{candidate[0] + 1}C{candidate[1] + 1}="
+                    f"{candidate[2]} collega tutti i candidati rimasti e "
+                    "determina una soluzione completa coerente."
+                ),
+                "placements": sorted(placements),
+                "eliminations": [],
+                "primary": dag.primary_cells(),
+                "logic": logic,
+            }
+            rank = (
+                logic["metrics"]["proof_node_count"],
+                logic["metrics"]["max_chain_length"],
+                candidate,
+            )
+            if best_rank is None or rank < best_rank:
+                best = deduction
+                best_rank = rank
+            completed_roots += 1
+            if (
+                self.search_limits.bowmans_results is not None
+                and completed_roots >= self.search_limits.bowmans_results
+            ):
+                self._active_truncated_reasons.append("bowmans_results")
+                break
+
+        return [] if best is None else [best]
+
     def _find_nested_forcing_chain(self, *, max_results):
         # Import tardivo per lasciare al motore Nested l'uso del propagatore
         # condiviso senza creare un ciclo di import a livello di modulo.
@@ -3665,26 +4253,37 @@ class LogicEngine:
             self._nested_forcing_engine = NestedForcingEngine(
                 self.grid,
                 self.candidates,
+                inference_profile=self._active_inference_profile,
+                search_limits=self.search_limits,
             )
         return self._nested_forcing_engine.find_deductions(
             max_results=max_results,
+            truncated_out=self._active_truncated_reasons,
         )
 
     def _find_complete_forcing_tree(self, *, max_results):
         max_results = _technique_result_limit(
             _COMPLETE_TREE_TECHNIQUE,
             max_results,
+            self.search_limits,
         )
 
         if self._complete_forcing_tree_search is None:
             self._complete_forcing_tree_search = CompleteForcingTreeSearch(
                 self.grid,
                 self.candidates,
+                cancellation_check=self.cancellation_check,
             )
 
-        return self._complete_forcing_tree_search.find_deductions(
-            max_results=max_results,
-        )
+        try:
+            return self._complete_forcing_tree_search.find_deductions(
+                max_results=max_results,
+            )
+        except _CompleteSearchCancelled:
+            self._active_truncated_reasons.append(
+                "external_cancellation"
+            )
+            return []
 
 
 # Cache LRU indicizzata dal contenuto logico dello stato, non dall'identità
@@ -3723,7 +4322,7 @@ def prepare_logic_cache(
     state,
     technique=None,
     batch=None,
-    max_results=DEFAULT_MAX_DEDUCTIONS_PER_TECHNIQUE,
+    max_results=None,
 ):
     """Prepara soltanto la tecnica o il batch richiesto.
 
@@ -3744,7 +4343,7 @@ def prepare_logic_cache(
 def get_cached_logic_deductions(
     state,
     technique: str,
-    max_results=DEFAULT_MAX_DEDUCTIONS_PER_TECHNIQUE,
+    max_results=None,
 ):
     """Legge una tecnica già preparata con un limite sufficiente."""
     return _engine_for(state).get_cached(
@@ -3756,13 +4355,18 @@ def get_cached_logic_deductions(
 def find_logic_deductions(
     state,
     technique: str,
-    max_results=DEFAULT_MAX_DEDUCTIONS_PER_TECHNIQUE,
+    max_results=None,
 ):
     """Cerca una tecnica fermandosi agli esiti distinti richiesti."""
     return _engine_for(state).find(
         technique,
         max_results=max_results,
     )
+
+
+def logic_search_metadata(state, technique):
+    """Restituisce la completezza della ricerca logica gia' eseguita."""
+    return _engine_for(state).search_metadata(technique)
 
 
 def static_implication_graph(state):
@@ -3827,6 +4431,7 @@ __all__ = [
     "find_logic_deductions",
     "get_cached_logic_deductions",
     "logic_cache_info",
+    "logic_search_metadata",
     "prepare_logic_cache",
     "static_implication_graph",
 ]

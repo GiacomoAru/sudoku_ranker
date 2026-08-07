@@ -5,7 +5,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from ..core import solver
 
 
-AnalysisMode = Literal["profile", "deep", "superficial"]
+# ``str`` puro (non un Literal statico): il validatore sotto delega a
+# ``solver._normalise_analysis_mode``, che resta l'unica fonte di verita'
+# per nomi canonici e alias legacy (SearchPolicy P17).
+AnalysisMode = str
 
 
 class SudokuSubmission(BaseModel):
@@ -24,7 +27,7 @@ class SudokuSubmission(BaseModel):
     tag: str = Field(default="nessun_riferimento", min_length=1, max_length=160)
     difficulty: str = Field(default="non_indicata", min_length=1, max_length=60)
 
-    analysis_mode: AnalysisMode = "profile"
+    analysis_mode: AnalysisMode = solver.DEFAULT_ANALYSIS_MODE
     profile_difficulty_window: float = Field(
         default=solver.DEFAULT_PROFILE_DIFFICULTY_WINDOW,
         ge=0.0,
@@ -39,6 +42,14 @@ class SudokuSubmission(BaseModel):
             "confermato."
         ),
     )
+
+    @field_validator("analysis_mode")
+    @classmethod
+    def validate_analysis_mode(cls, value):
+        try:
+            return solver._normalise_analysis_mode(value)
+        except ValueError as error:
+            raise ValueError(str(error)) from error
 
     @field_validator("grid")
     @classmethod

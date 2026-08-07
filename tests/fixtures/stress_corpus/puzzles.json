@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "source": {
+    "name": "SudokuWiki.org extreme puzzles (archivio online del progetto)",
+    "url": "https://www.sudokuwiki.org/",
+    "license": "Vedi archivio online del progetto; puzzle pubblicati come esempi didattici da SudokuWiki.org.",
+    "selection_rule": "Isolati dall archivio online: ogni caso e stato scelto perche la sua grading gia calcolata (mode legacy profile, finestra 1.5) riporta hardest_technique == \"Complete Forcing Tree\", cioe nessuna tecnica ordinaria o Nested basta a risolverlo. Esclusi i puzzle dell archivio online con rating piu basso (40 clue minimal, 17 clue, Test_michele), che non richiedono il fallback esaustivo."
+  },
+  "cases": [
+    {
+      "id": "e42b41b28da99d0b87e7",
+      "name": "Unsolvable #28",
+      "tier": "extreme",
+      "source_rating": 15.3,
+      "cached_hardest_technique": "Complete Forcing Tree",
+      "puzzle": "600008940900006100070040000200610000000000200089002000000060005000000030800001600"
+    },
+    {
+      "id": "cd2d8e2f05fd08e82bfc",
+      "name": "Unsolvable #49",
+      "tier": "extreme",
+      "source_rating": 15.1,
+      "cached_hardest_technique": "Complete Forcing Tree",
+      "puzzle": "002800000030060007100000040600090000050600009000057060000300100070006008400000020"
+    },
+    {
+      "id": "838d25307a114f383f0a",
+      "name": "golden nugget",
+      "tier": "extreme",
+      "source_rating": 14.8,
+      "cached_hardest_technique": "Complete Forcing Tree",
+      "puzzle": "000000039000010005003005800008009006070020000100400000009008050020000600400700000"
+    },
+    {
+      "id": "147e472a04ed5a720e76",
+      "name": "Very Hard",
+      "tier": "extreme",
+      "source_rating": 14.7,
+      "cached_hardest_technique": "Complete Forcing Tree",
+      "puzzle": "000000001000002340003000250001005004060070000800900000004003002070080000900600010"
+    },
+    {
+      "id": "19b391388235484be9fa",
+      "name": "Arto Inkala",
+      "tier": "extreme",
+      "source_rating": 14.7,
+      "cached_hardest_technique": "Complete Forcing Tree",
+      "puzzle": "800000000003600000070090200050007000000045700000100030001000068008500010090000400"
+    },
+    {
+      "id": "2fc59662e55de49c860a",
+      "name": "Very Hard",
+      "tier": "extreme",
+      "source_rating": 14.7,
+      "cached_hardest_technique": "Complete Forcing Tree",
+      "puzzle": "000000001000001230002000450001005003060070000800900000005004002070080000900600300"
+    },
+    {
+      "id": "a804164a3d46e454a8e4",
+      "name": "Level-3",
+      "tier": "extreme",
+      "source_rating": 14.7,
+      "cached_hardest_technique": "Complete Forcing Tree",
+      "puzzle": "100000700007109000680070000001090600000300020040000003008060100500000040000002005"
+    },
+    {
+      "id": "50ec91cefd9ca947342f",
+      "name": "Very Hard",
+      "tier": "extreme",
+      "source_rating": 14.6,
+      "cached_hardest_technique": "Complete Forcing Tree",
+      "puzzle": "000000001000000234001002056003006010070050000800900000006004020050070000900800000"
+    },
+    {
+      "id": "79d4a5ffa61bbd86da2e",
+      "name": "Very Hard",
+      "tier": "extreme",
+      "source_rating": 14.6,
+      "cached_hardest_technique": "Complete Forcing Tree",
+      "puzzle": "000000001000002340003000250001005004060070000800900000005003002070600000900080400"
+    },
+    {
+      "id": "a3223387bcc799d4ed74",
+      "name": "Very Hard",
+      "tier": "extreme",
+      "source_rating": 14.6,
+      "cached_hardest_technique": "Complete Forcing Tree",
+      "puzzle": "000000001000002340003000520001003002060070000800900050004001005070600000900080000"
+    },
+    {
+      "id": "a36f7674ceda526e7025",
+      "name": "Very Hard",
+      "tier": "extreme",
+      "source_rating": 14.6,
+      "cached_hardest_technique": "Complete Forcing Tree",
+      "puzzle": "000000001000000234001002056003004020050070000800900000006003010070050000900800000"
+    },
+    {
+      "id": "fb4e2bbaecd1202eaa05",
+      "name": "Very Hard",
+      "tier": "extreme",
+      "source_rating": 14.6,
+      "cached_hardest_technique": "Complete Forcing Tree",
+      "puzzle": "000000001000002340003000250001003002060070000800900500004001005070080000900600000"
+    },
+    {
+      "id": "96969dea9742b35ef9bc",
+      "name": "Very Hard",
+      "tier": "extreme",
+      "source_rating": 14.5,
+      "cached_hardest_technique": "Complete Forcing Tree",
+      "puzzle": "000000001000001230002000450001004002060070000800900300004005003070080000900600000"
+    },
+    {
+      "id": "fa1751aa90970738445d",
+      "name": "Escargot",
+      "tier": "extreme",
+      "source_rating": 14.5,
+      "cached_hardest_technique": "Complete Forcing Tree",
+      "puzzle": "100007090030020008009600500005300900010080002600004000300000010040000007007000300"
+    }
+  ]
+}

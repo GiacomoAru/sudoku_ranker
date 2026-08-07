@@ -402,13 +402,26 @@ _DECLARED_RUNNERS = (
     ),
     _local(
         "aligned_pair_exclusion",
-        ("exclusion.aligned_pair",),
+        (
+            "exclusion.aligned_pair",
+            "exclusion.aligned_pair.type2",
+        ),
         techniques.aligned_pair_exclusion,
     ),
     _local(
         "aligned_triplet_exclusion",
         ("exclusion.aligned_triple",),
         techniques.aligned_triplet_exclusion,
+    ),
+    _local(
+        "generalized_aligned_exclusion",
+        ("exclusion.aligned_set",),
+        techniques.generalized_aligned_exclusion,
+    ),
+    _local(
+        "junior_exocet",
+        ("pattern.jexocet.rule1",),
+        techniques.junior_exocet,
     ),
     _logic(
         "bidirectional_x_cycle",
@@ -501,6 +514,11 @@ _DECLARED_RUNNERS = (
             "forcing.net.region",
         ),
         techniques.forcing_net,
+    ),
+    _logic(
+        "bowmans_bingo",
+        ("forcing.bowmans_bingo",),
+        techniques.bowmans_bingo,
     ),
     _logic(
         "nested_forcing_chain",

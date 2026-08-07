@@ -710,6 +710,7 @@ class LogicEngineTests(unittest.TestCase):
                 "fallback_tier_used": 0,
                 "fallback_stage": "ordinary",
                 "fallback_reason": None,
+                "certified": True,
             }),
         ) as collect_moves:
             _, chain, status = solver.solve_and_log(

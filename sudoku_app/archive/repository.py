@@ -235,7 +235,7 @@ def _normalise_analysis_request(
         allowed = getattr(
             ss,
             "ANALYSIS_MODES",
-            {"deep", "profile", "superficial"},
+            {"deep", "smart_deep", "smart_profile", "full_profile", "superficial"},
         )
         mode = str(analysis_mode or ss.DEFAULT_ANALYSIS_MODE).strip().lower()
         mode = aliases.get(mode, mode)
@@ -245,7 +245,7 @@ def _normalise_analysis_request(
                 f"Modalità di analisi non valida: {analysis_mode!r}."
             )
 
-    if mode == "profile":
+    if mode in ("smart_profile", "full_profile"):
         if profile_difficulty_window is None:
             profile_difficulty_window = getattr(
                 ss,
@@ -281,8 +281,8 @@ def _analysis_variant(
         profile_difficulty_window,
     )
 
-    if mode == "profile":
-        return f"profile_{_profile_window_token(window)}"
+    if mode in ("smart_profile", "full_profile"):
+        return f"{mode}_{_profile_window_token(window)}"
 
     return mode
 
@@ -363,7 +363,7 @@ def _analysis_payload_is_current(
     if stored_mode != requested_mode:
         return False
 
-    if requested_mode == "profile":
+    if requested_mode in ("smart_profile", "full_profile"):
         return abs(float(stored_window) - float(requested_window)) <= 1e-12
 
     return True
@@ -868,6 +868,8 @@ _STORED_MOVE_FIELDS = (
     "effective_move_count_is_lower_bound",
     "move_discovery_difficulty_is_upper_bound",
     "capped_techniques",
+    "certified",
+    "truncated_detector_ids",
 )
 
 def _compact_analysis_for_storage(analysis):
@@ -1705,15 +1707,17 @@ def list_sudokus(
         if "deep" in variants:
             preferred_variant = variants["deep"]
         else:
-            profile_variants = [
+            windowed_variants = [
                 item
                 for item in variants.values()
-                if item["analysis_mode"] == "profile"
+                if item["analysis_mode"] in (
+                    "smart_profile", "full_profile",
+                )
             ]
 
-            if profile_variants:
+            if windowed_variants:
                 preferred_variant = sorted(
-                    profile_variants,
+                    windowed_variants,
                     key=lambda item: item[
                         "profile_difficulty_window"
                     ],
@@ -1756,7 +1760,8 @@ def list_sudokus(
             "duplicate_of": canonical_info.get("duplicate_of"),
             "analysed": bool(variants),
             "analysed_deep": "deep" in modes,
-            "analysed_profile": "profile" in modes,
+            "analysed_smart_profile": "smart_profile" in modes,
+            "analysed_full_profile": "full_profile" in modes,
             "analysed_superficial": "superficial" in modes,
             "analysis_modes": sorted(modes),
             "analysis_variants": sorted(variants),
@@ -2214,9 +2219,11 @@ def analyse_puzzle_cached(
     """
     Restituisce e persiste la variante di analisi richiesta.
 
-    Le varianti ``deep``, ``profile`` e ``superficial`` hanno file e chiavi
-    di cache distinti. ``profile`` con finestra 1.5 è il default; la ``deep``
-    continua a usare il nome storico ``analysis.json``.
+    Ogni ``SearchPolicy`` (``deep``, ``smart_deep``, ``smart_profile``,
+    ``full_profile``, ``superficial``) ha file e chiavi di cache distinti.
+    ``smart_profile`` con finestra 1.5 è il default; ``deep`` continua a
+    usare il nome storico ``analysis.json``. Il vecchio identificatore
+    ``profile`` (archivi pre-P17) risolve a ``full_profile``.
     """
     _ensure_sudoku_directories()
 
@@ -2281,7 +2288,7 @@ def analyse_puzzle_cached(
         analysis_mode=mode,
         profile_difficulty_window=(
             window
-            if mode == "profile"
+            if mode in ("smart_profile", "full_profile")
             else getattr(
                 ss,
                 "DEFAULT_PROFILE_DIFFICULTY_WINDOW",

@@ -231,6 +231,12 @@ class NestedForcingEngineTests(unittest.TestCase):
         deductions = engine.find("Nested Forcing Chain", max_results=2)
 
         self.assertEqual(len(deductions), 2)
+        metadata = engine.search_metadata("Nested Forcing Chain")
+        self.assertTrue(metadata["search_truncated"])
+        self.assertIn(
+            "nested_result_limit",
+            metadata["truncated_reasons"],
+        )
         deduction = next(
             item for item in deductions
             if item["eliminations"] == [(7, 5, 4)]

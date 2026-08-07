@@ -1,21 +1,48 @@
 """Motore risolutivo e analisi logica dei Sudoku.
 
-A ogni passaggio il solver interroga le tecniche in ordine di difficolta'.
-La modalita' ``profile`` esplora una finestra configurabile sopra la mossa
-piu' semplice trovata, ``deep`` interroga tutte le tecniche ordinarie e
-``superficial`` conserva soltanto la frontiera minima.
+A ogni passaggio il solver interroga le tecniche in ordine di difficolta' e
+sceglie sempre la mossa certificata piu' semplice: la ``SearchPolicy``
+(``mode``) non cambia mai quella scelta, cambia soltanto quante mosse
+alternative vengono raccolte attorno a essa. Le cinque policy sono:
 
-Le tecniche di fallback sono escluse da ogni inventario ordinario, incluso
-``deep``. Il solver prova nell'ordine tecniche ordinarie, Nested Forcing Chain
-e Complete Forcing Tree, fermandosi al primo livello che produce mosse. Le
-tecniche ordinarie possono restituire fino a 16 conclusioni, quelle del Logic
-Engine fino a 8, le Nested fino a 2 e l'albero completo una sola. Questi
-limiti riguardano i risultati, non la profondita' interna della ricerca.
+* ``superficial``   soltanto le mosse con difficolta' minima effettiva;
+* ``smart_profile``  default. Scalino (``search_tier``, vedi
+  ``technique_catalog``) della mossa minima, finestra ``p`` soltanto dentro
+  quello scalino;
+* ``full_profile``  finestra ``p`` su tutte le tecniche ordinarie, senza
+  vincolo di scalino (comportamento storico di ``profile``);
+* ``smart_deep``     scalino della mossa minima esplorato per intero, senza
+  finestra;
+* ``deep``           tutti gli scalini ordinari esplorati per intero, senza
+  finestra.
+
+Lo scalino raggruppa le tecniche come le cercherebbe un umano (famiglia
+cognitiva), non come sono implementate: due tecniche possono condividere lo
+stesso motore ma appartenere a scalini diversi. Contratto completo in
+``TASSIONOMIA.md``, sezione "Scalini di ricerca P17".
+
+Le tecniche di fallback (Nested Forcing Chain, Complete Forcing Tree) restano
+fuori da ogni inventario ordinario, incluso ``deep``: sono interrogate solo
+in assenza di mosse ordinarie (Nested) o ordinarie+Nested (Complete Tree),
+allo stesso modo per ogni ``SearchPolicy`` — non e' la policy a decidere se
+l'albero completo interviene, ma soltanto l'assenza di alternative piu'
+semplici. Il solver prova nell'ordine tecniche ordinarie, Nested Forcing
+Chain e Complete Forcing Tree, fermandosi al primo livello che produce mosse.
+Le tecniche ordinarie possono restituire fino a 16 conclusioni, quelle del
+Logic Engine fino a 8, le Nested fino a 2 e l'albero completo una sola.
+Questi limiti riguardano i risultati, non la profondita' interna della
+ricerca.
 
 Ogni mossa possiede una difficolta' base determinata dalla tecnica e una
 difficolta' tecnica effettiva. Quest'ultima aggiunge alla base la complessita'
 concreta della prova, quando la mossa espone catene, assunzioni, rami o
 metriche strutturali. La crescita e' logaritmica e non ha un limite massimo.
+
+Ogni runner interrogato risponde FOUND (mosse trovate), EXHAUSTED (nessuna
+mossa, ricerca completa) o TRUNCATED con cause tipizzate. ``SearchLimits``
+centralizza i budget e offre le modalita' limited e unlimited. La mossa
+scelta e' ``certified`` soltanto se nessun runner potenzialmente piu'
+semplice ha subito un troncamento capace di nascondere il minimo reale.
 """
 
 import math
@@ -25,6 +52,7 @@ from . import data_structure as sds
 from . import difficulty as difficulty_model
 from . import move_presentation
 from . import proof_schema
+from . import search_config
 from . import techniques as st
 from . import technique_catalog
 from . import technique_registry
@@ -32,24 +60,40 @@ from . import technique_registry
 
 ANALYSIS_MODES = {
     "deep",
-    "profile",
+    "smart_deep",
+    "full_profile",
+    "smart_profile",
     "superficial",
 }
 
+# "profile" e "profilo" sono lo storico identificatore pre-P17: risolvono a
+# ``full_profile`` per non alterare il comportamento di analisi gia'
+# archiviate sul disco (vedi TECHNIQUE_SEARCH_TIER / repository.py). Nessun
+# nuovo alias deve essere aggiunto senza un formato legacy reale da
+# supportare (regola P19).
 ANALYSIS_MODE_ALIASES = {
     "full": "deep",
-    "profilo": "profile",
+    "profile": "full_profile",
+    "profilo": "full_profile",
     "standard": "superficial",
     "shallow": "superficial",
     "superficiale": "superficial",
 }
 
 DEFAULT_PROFILE_DIFFICULTY_WINDOW = 1.5
-DEFAULT_ANALYSIS_MODE = "profile"
-MAX_MOVES_PER_TECHNIQUE = 16
-MAX_LOGIC_ENGINE_MOVES_PER_TECHNIQUE = 8
-MAX_NESTED_MOVES_PER_STEP = 2
-MAX_COMPLETE_TREE_MOVES_PER_STEP = 1
+DEFAULT_ANALYSIS_MODE = "smart_profile"
+MAX_MOVES_PER_TECHNIQUE = (
+    search_config.LIMITED_SEARCH_LIMITS.presentation_results
+)
+MAX_LOGIC_ENGINE_MOVES_PER_TECHNIQUE = (
+    search_config.LIMITED_SEARCH_LIMITS.logic_presentation_results
+)
+MAX_NESTED_MOVES_PER_STEP = (
+    search_config.LIMITED_SEARCH_LIMITS.nested_presentation_results
+)
+MAX_COMPLETE_TREE_MOVES_PER_STEP = (
+    search_config.LIMITED_SEARCH_LIMITS.complete_tree_presentation_results
+)
 MAX_SOLVER_STEPS = 8_192
 
 if not (
@@ -496,24 +540,60 @@ def _collect_from_runners(
 ):
     moves = []
     best_difficulty = None
+    best_search_tier = None
     scanned_runner_count = 0
     stopped_early = False
     stop_before_min_difficulty = None
     capped_techniques = set()
     result_limit_reached = False
+    detector_searches = []
+    truncated_detector_ids = set()
+
+    def affects_minimum(reasons, found_moves):
+        """Distingue un inventario censurato da un minimo incerto."""
+        if not reasons:
+            return False
+        if not found_moves:
+            return True
+        return any(
+            reason != "runner_result_limit"
+            and not reason.endswith("_result_limit")
+            for reason in reasons
+        )
 
     for runner in runners:
         minimum_difficulty = runner.minimum_difficulty
         if best_difficulty is not None:
+            # smart_profile e smart_deep restringono per search_tier soltanto
+            # nel filtro finale (un detector puo' emettere piu' tecniche a
+            # scalini diversi, es. il motore ALS): qui la soglia resta un
+            # superset per difficolta', mai piu' stretta di full_profile.
+            runner_tiers = {
+                definition.search_tier
+                for definition in (
+                    technique_catalog.technique_definition(technique_id)
+                    for technique_id in runner.technique_ids
+                )
+            }
             if mode == "superficial":
                 difficulty_limit = best_difficulty
-            elif mode == "profile":
+            elif mode in ("smart_profile", "full_profile"):
                 difficulty_limit = (
                     best_difficulty
                     + profile_difficulty_window
                 )
             else:
                 difficulty_limit = None
+
+            # Dopo la frontiera che potrebbe ancora migliorare d_min, gli
+            # smart profile interrogano soltanto detector dello scalino
+            # certificato. smart_profile conserva anche la propria finestra.
+            if (
+                mode in ("smart_profile", "smart_deep")
+                and float(minimum_difficulty) > best_difficulty
+                and best_search_tier not in runner_tiers
+            ):
+                continue
 
             if (
                 difficulty_limit is not None
@@ -531,8 +611,21 @@ def _collect_from_runners(
         found = list(
             _call_registered_runner(runner, state) or []
         )
+        search_metadata = st.detector_search_metadata(
+            state,
+            runner.detector_id,
+        )
+        truncated_reasons = set(
+            search_metadata.get("truncated_reasons", ())
+        )
+        if (
+            search_metadata.get("search_truncated", False)
+            and not truncated_reasons
+        ):
+            truncated_reasons.add("unspecified_budget")
         if len(found) >= runner_limit:
             result_limit_reached = True
+            truncated_reasons.add("runner_result_limit")
 
         prepared = [
             _prepare_move(_validate_runner_move(runner, move))
@@ -542,6 +635,44 @@ def _collect_from_runners(
             prepared,
             canonical_transform,
         )
+        prepared_minimum = (
+            min(_difficulty_score(move) for move in prepared)
+            if prepared
+            else None
+        )
+        detector_truncated = bool(
+            search_metadata.get("search_truncated", False)
+            or truncated_reasons
+        )
+        minimum_certification_affected = affects_minimum(
+            truncated_reasons,
+            prepared,
+        )
+        if detector_truncated:
+            truncated_detector_ids.add(runner.detector_id)
+        detector_searches.append({
+            "detector_id": runner.detector_id,
+            "minimum_difficulty": float(minimum_difficulty),
+            "found_count": len(prepared),
+            "found_minimum_difficulty": prepared_minimum,
+            "outcome": (
+                "TRUNCATED"
+                if detector_truncated
+                else "FOUND"
+                if prepared
+                else "EXHAUSTED"
+            ),
+            "completion": (
+                "truncated" if detector_truncated else "exhausted"
+            ),
+            "minimum_certification_affected": (
+                minimum_certification_affected
+            ),
+            "inference_profile_id": search_metadata.get(
+                "inference_profile_id"
+            ),
+            "truncated_reasons": sorted(truncated_reasons),
+        })
 
         raw_counts = {}
         representative_moves = {}
@@ -571,14 +702,16 @@ def _collect_from_runners(
             continue
 
         moves.extend(prepared)
-        local_minimum = min(
-            _difficulty_score(move)
-            for move in prepared
+        current_best = min(
+            moves,
+            key=lambda move: _move_sort_key(
+                move,
+                canonical_transform,
+            ),
         )
-        best_difficulty = (
-            local_minimum
-            if best_difficulty is None
-            else min(best_difficulty, local_minimum)
+        best_search_tier = _move_definition(current_best).search_tier
+        best_difficulty = min(
+            _difficulty_score(move) for move in moves
         )
 
     moves = _deduplicate_moves(
@@ -609,7 +742,7 @@ def _collect_from_runners(
                     abs_tol=1e-9,
                 )
             ]
-        elif mode == "profile":
+        elif mode == "full_profile":
             difficulty_limit = (
                 best_difficulty
                 + profile_difficulty_window
@@ -619,6 +752,54 @@ def _collect_from_runners(
                 for move in moves
                 if _difficulty_score(move) <= difficulty_limit
             ]
+        elif mode in ("smart_profile", "smart_deep"):
+            # La mossa minima certificata (stesso ordinamento usato per
+            # scegliere la mossa da applicare) fissa lo scalino di ricerca:
+            # smart_profile e smart_deep non attraversano mai quello
+            # scalino, a differenza di full_profile/deep.
+            best_move = min(
+                moves,
+                key=lambda move: _move_sort_key(
+                    move,
+                    canonical_transform,
+                ),
+            )
+            best_tier = _move_definition(best_move).search_tier
+            if mode == "smart_profile":
+                difficulty_limit = (
+                    best_difficulty
+                    + profile_difficulty_window
+                )
+                moves = [
+                    move
+                    for move in moves
+                    if _difficulty_score(move) <= difficulty_limit
+                    and _move_definition(move).search_tier == best_tier
+                ]
+            else:
+                moves = [
+                    move
+                    for move in moves
+                    if _move_definition(move).search_tier == best_tier
+                ]
+
+    # Una mossa minima e' certificata quando ogni detector che potrebbe
+    # produrre una difficolta' strettamente inferiore ha concluso la ricerca.
+    # Un troncamento alla stessa soglia puo' nascondere mosse equivalenti, ma
+    # non una mossa piu' semplice; censura quindi l'inventario e non il minimo.
+    if best_difficulty is None:
+        truncated_before_best_difficulty = any(
+            search["completion"] == "truncated"
+            and search["minimum_certification_affected"]
+            for search in detector_searches
+        )
+    else:
+        truncated_before_best_difficulty = any(
+            search["completion"] == "truncated"
+            and search["minimum_certification_affected"]
+            and search["minimum_difficulty"] < best_difficulty
+            for search in detector_searches
+        )
 
     return moves, {
         "best_difficulty": best_difficulty,
@@ -627,6 +808,9 @@ def _collect_from_runners(
         "stop_before_min_difficulty": stop_before_min_difficulty,
         "capped_techniques": sorted(capped_techniques),
         "result_limit_reached": result_limit_reached,
+        "truncated_before_best_difficulty": truncated_before_best_difficulty,
+        "truncated_detector_ids": sorted(truncated_detector_ids),
+        "detector_searches": detector_searches,
     }
 
 
@@ -635,19 +819,31 @@ def collect_moves_for_analysis(
     mode=DEFAULT_ANALYSIS_MODE,
     profile_difficulty_window=DEFAULT_PROFILE_DIFFICULTY_WINDOW,
     canonical_transform=None,
-    max_moves_per_technique=MAX_MOVES_PER_TECHNIQUE,
+    max_moves_per_technique=None,
+    search_limits="limited",
+    cancellation_check=None,
 ):
-    """Raccoglie mosse secondo i tre livelli di fallback del solver.
+    """Raccoglie mosse secondo policy, limiti e livelli di fallback P17.
 
-    ``deep`` interroga tutte le tecniche ordinarie. ``profile`` esplora la
-    finestra configurata sopra la difficolta' effettiva minima.
-    ``superficial`` conserva esclusivamente la frontiera minima.
+    ``mode`` seleziona la ``SearchPolicy`` (vedi docstring di modulo):
+    ``superficial``, ``smart_profile`` (default), ``full_profile``,
+    ``smart_deep`` o ``deep``. Nessuna policy cambia la mossa minima
+    certificata, solo quante alternative vengono raccolte attorno a essa.
 
     Nested viene interrogato solo senza mosse ordinarie; Complete Forcing Tree
-    solo senza mosse ordinarie e Nested. Il primo livello con risultati chiude
-    la raccolta.
+    solo senza mosse ordinarie e Nested, indipendentemente da ``mode``. Il
+    primo livello con risultati chiude la raccolta.
+
+    ``search_limits`` accetta ``limited``, ``unlimited`` oppure un oggetto
+    ``SearchLimits`` immutabile.
+
+    ``cancellation_check`` permette un arresto esterno esplicito del fallback
+    completo. Un arresto produce un detector ``TRUNCATED`` e nessuna mossa
+    parziale.
     """
     mode = _normalise_analysis_mode(mode)
+    limits = search_config.bind_search_limits(state, search_limits)
+    search_config.bind_cancellation_check(state, cancellation_check)
 
     if profile_difficulty_window is None:
         profile_difficulty_window = DEFAULT_PROFILE_DIFFICULTY_WINDOW
@@ -658,6 +854,9 @@ def collect_moves_for_analysis(
         raise ValueError(
             "profile_difficulty_window deve essere maggiore o uguale a 0."
         )
+
+    if max_moves_per_technique is None:
+        max_moves_per_technique = limits.presentation_results
 
     if (
         isinstance(max_moves_per_technique, bool)
@@ -689,6 +888,9 @@ def collect_moves_for_analysis(
             "stop_before_min_difficulty": None,
             "capped_techniques": [],
             "result_limit_reached": False,
+            "truncated_before_best_difficulty": False,
+            "truncated_detector_ids": [],
+            "detector_searches": [],
         }
 
     ordinary_moves_found = bool(moves)
@@ -707,7 +909,7 @@ def collect_moves_for_analysis(
             mode="deep",
             profile_difficulty_window=profile_difficulty_window,
             canonical_transform=canonical_transform,
-            max_results=MAX_NESTED_MOVES_PER_STEP,
+            max_results=limits.nested_presentation_results,
         )
         nested_fallback_used = bool(moves)
 
@@ -719,12 +921,13 @@ def collect_moves_for_analysis(
             mode="deep",
             profile_difficulty_window=profile_difficulty_window,
             canonical_transform=canonical_transform,
-            max_results=MAX_COMPLETE_TREE_MOVES_PER_STEP,
+            max_results=limits.complete_tree_presentation_results,
         )
         complete_tree_fallback_used = bool(moves)
 
     inventory_censored = (
         ordinary_metadata["result_limit_reached"]
+        or bool(ordinary_metadata["truncated_detector_ids"])
         or nested_fallback_attempted
         or complete_tree_fallback_attempted
     )
@@ -762,11 +965,40 @@ def collect_moves_for_analysis(
         + complete_tree_metadata["capped_techniques"]
     ))
 
+    # P17: la cascata ordinary -> Nested -> Complete Tree e' certificata solo
+    # se ogni stadio effettivamente interrogato (non soltanto quello vincente)
+    # non ha subito troncamenti che potrebbero nascondere una mossa piu'
+    # semplice o smentire un EXHAUSTED dichiarato. Uno stadio mai tentato non
+    # puo' compromettere la certificazione.
+    certified = not ordinary_metadata["truncated_before_best_difficulty"]
+    if nested_fallback_attempted:
+        certified = (
+            certified
+            and not nested_metadata["truncated_before_best_difficulty"]
+        )
+    if complete_tree_fallback_attempted:
+        certified = (
+            certified
+            and not complete_tree_metadata[
+                "truncated_before_best_difficulty"
+            ]
+        )
+    truncated_detector_ids = sorted(set(
+        ordinary_metadata["truncated_detector_ids"]
+        + nested_metadata["truncated_detector_ids"]
+        + complete_tree_metadata["truncated_detector_ids"]
+    ))
+    detector_searches = (
+        ordinary_metadata["detector_searches"]
+        + nested_metadata["detector_searches"]
+        + complete_tree_metadata["detector_searches"]
+    )
+
     metadata = {
         "mode": mode,
         "profile_difficulty_window": (
             profile_difficulty_window
-            if mode == "profile"
+            if mode in ("smart_profile", "full_profile")
             else None
         ),
         "best_difficulty": active_metadata["best_difficulty"],
@@ -818,8 +1050,17 @@ def collect_moves_for_analysis(
         "max_complete_tree_moves_per_step": (
             MAX_COMPLETE_TREE_MOVES_PER_STEP
         ),
-        "max_static_cycle_edges": st.logic_engine.MAX_STATIC_CYCLE_EDGES,
+        "max_static_cycle_edges": limits.static_cycle_edges,
+        "search_limits_mode": limits.mode,
+        "search_limits": limits.to_dict(),
+        "inference_profiles": {
+            profile_id: profile.to_dict()
+            for profile_id, profile in search_config.INFERENCE_PROFILES.items()
+        },
         "capped_techniques": capped_techniques,
+        "certified": certified,
+        "truncated_detector_ids": truncated_detector_ids,
+        "detector_searches": detector_searches,
     }
 
     return moves, metadata
@@ -968,6 +1209,8 @@ def solve_and_log(
     analysis_mode=DEFAULT_ANALYSIS_MODE,
     profile_difficulty_window=DEFAULT_PROFILE_DIFFICULTY_WINDOW,
     uniqueness_status=sds.UNIQUENESS_NOT_CHECKED,
+    search_limits="limited",
+    cancellation_check=None,
 ):
     """Risolve il Sudoku e registra l'inventario logico di ogni stato."""
     max_steps = _normalise_solver_step_limit(max_steps)
@@ -991,9 +1234,18 @@ def solve_and_log(
             mode=analysis_mode,
             profile_difficulty_window=profile_difficulty_window,
             canonical_transform=canonical_transform,
+            search_limits=search_limits,
+            cancellation_check=cancellation_check,
         )
 
         if not moves:
+            if any(
+                "external_cancellation" in search.get(
+                    "truncated_reasons", ()
+                )
+                for search in collection_metadata["detector_searches"]
+            ):
+                return state, chain, "cancelled"
             return state, chain, "stuck"
 
         moves.sort(
@@ -1146,6 +1398,15 @@ def solve_and_log(
         if collection_metadata.get("capped_techniques"):
             record["capped_techniques"] = collection_metadata[
                 "capped_techniques"
+            ]
+
+        # P17: la mossa scelta e' quella minima "conosciuta" finche' non e'
+        # certificata, cioe' finche' un detector potenzialmente piu' semplice
+        # ha risposto TRUNCATED invece di FOUND/EXHAUSTED.
+        record["certified"] = collection_metadata["certified"]
+        if collection_metadata.get("truncated_detector_ids"):
+            record["truncated_detector_ids"] = collection_metadata[
+                "truncated_detector_ids"
             ]
 
         chain.append(record)
@@ -1821,6 +2082,8 @@ def analyse_puzzle(
     profile_difficulty_window=DEFAULT_PROFILE_DIFFICULTY_WINDOW,
     max_steps=MAX_SOLVER_STEPS,
     verbose=False,
+    search_limits="limited",
+    cancellation_check=None,
 ):
     """Valida, risolve, valuta e confeziona l'analisi del puzzle."""
     max_steps = _normalise_solver_step_limit(max_steps)
@@ -1844,6 +2107,8 @@ def analyse_puzzle(
         verbose=verbose,
         analysis_mode=analysis_mode,
         profile_difficulty_window=profile_difficulty_window,
+        search_limits=search_limits,
+        cancellation_check=cancellation_check,
         uniqueness_status=sds.UNIQUENESS_VERIFIED,
     )
     grading = grade_difficulty(chain, status)
@@ -1858,9 +2123,12 @@ def analyse_puzzle(
         "status": status,
         "grading": grading,
         "analysis_mode": analysis_mode,
+        "search_limits_mode": search_config.search_limits(
+            search_limits
+        ).mode,
         "profile_difficulty_window": (
             float(profile_difficulty_window)
-            if analysis_mode == "profile"
+            if analysis_mode in ("smart_profile", "full_profile")
             else None
         ),
     }

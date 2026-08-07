@@ -21,8 +21,8 @@ import math
 
 
 TAXONOMY_SOURCE = "TASSIONOMIA.md"
-TAXONOMY_CONTRACT_VERSION = "P16"
-TECHNIQUE_CATALOG_VERSION = "2.1.0"
+TAXONOMY_CONTRACT_VERSION = "P17.2"
+TECHNIQUE_CATALOG_VERSION = "2.2.0"
 
 LEGACY_TECHNIQUE_ID_ALIASES = {
     "direct.hidden.2": "direct.hidden_pair",
@@ -51,6 +51,7 @@ INFERENCE_ENGINES = frozenset({
     "nested",
     "complete_tree",
     "template",
+    "exocet",
 })
 IMPLEMENTATION_STATUSES = frozenset({
     "implemented",
@@ -89,6 +90,7 @@ class TechniqueDefinition:
     engine_type: str
     inference_engine: str
     fallback_tier: int
+    search_tier: int
     priority: int
 
     detector_id: str | None
@@ -124,6 +126,7 @@ FAMILY_DISPLAY_NAMES_IT = {
     "exhaustive_forcing": "Exhaustive Forcing",
     "templates": "Templates",
     "forcing_nets": "Forcing Net",
+    "exocet": "Exocet",
 }
 
 STRATEGY_DISPLAY_NAMES_IT = {
@@ -140,6 +143,71 @@ STRATEGY_DISPLAY_NAMES_IT = {
     "nested_forcing": "Forcing annidati",
     "last_resort": "Last Resort",
 }
+
+# Scalini di ricerca P17 (vedi TASSIONOMIA.md, "Scalini di ricerca").
+# Un asse distinto da family_id/strategy_id: raggruppa le tecniche come le
+# cercherebbe un umano, non come sono implementate (inference_engine e'
+# meccanismo esecutivo, search_tier e' raggruppamento cognitivo).
+SEARCH_TIER_NAMES_IT = {
+    0: "Elementari",
+    1: "Pattern a cifra singola",
+    2: "Pattern multi-cifra",
+    3: "Catene statiche",
+    4: "Forcing avanzato",
+    5: "Nested forcing",
+    6: "Esaustivo",
+}
+SEARCH_TIERS = frozenset(SEARCH_TIER_NAMES_IT)
+
+# Tecniche il cui scalino non e' derivabile dalla sola strategy_id: il fish
+# incompleto/finned e' solo il guscio esterno, la dimostrazione vera passa
+# per catene/dynamic, quindi Kraken appartiene al forcing (tier 4) e non ai
+# pattern a cifra singola (tier 1) nonostante family_id == "fish".
+_SEARCH_TIER_ID_OVERRIDES = {
+    "kraken.fish.type1": 4,
+    "kraken.fish.type2": 4,
+}
+
+# Dentro "almost_locked_sets", gli ALS locali (RCC singolo/doppio, XY-Wing)
+# restano pattern multi-cifra; ALS Chain, Death Blossom e ALS-AIC sono catene
+# perche' la dimostrazione attraversa una sequenza di ALS/candidati.
+_ALS_CHAIN_SHAPED_IDS = frozenset({
+    "als.chain", "als.death_blossom", "chain.als_aic",
+})
+
+
+def _search_tier(technique_id, strategy_id, family_id, inference_engine):
+    """Deriva lo scalino di ricerca P17 da campi gia' autorevoli.
+
+    Lo scalino rispecchia come un umano raggruppa le tecniche durante la
+    ricerca, non il motore che le implementa: una X-Chain e uno Skyscraper
+    usano lo stesso motore ``chain`` ma appartengono a scalini diversi.
+    """
+    if technique_id in _SEARCH_TIER_ID_OVERRIDES:
+        return _SEARCH_TIER_ID_OVERRIDES[technique_id]
+    if strategy_id in ("elementary", "subsets_intersections"):
+        return 0
+    if strategy_id == "single_digit_patterns":
+        return 1
+    if strategy_id == "fish_wings":
+        return 1 if family_id == "fish" else 2
+    if strategy_id == "almost_locked_sets":
+        return 3 if technique_id in _ALS_CHAIN_SHAPED_IDS else 2
+    if strategy_id == "uniqueness_exclusion":
+        return 3 if inference_engine == "chain" else 2
+    if strategy_id == "static_chains":
+        return 3
+    if strategy_id in (
+        "assumption_logic", "multiple_forcing", "dynamic_forcing",
+    ):
+        return 4
+    if strategy_id == "nested_forcing":
+        return 5
+    if strategy_id == "last_resort":
+        return 6
+    raise CatalogValidationError(
+        f"Nessuno scalino di ricerca definito per strategy_id {strategy_id!r}."
+    )
 
 
 LOCAL_METRICS = (
@@ -274,6 +342,9 @@ def _entry(
         "engine_type": engine_type,
         "inference_engine": inference_engine,
         "fallback_tier": int(fallback_tier),
+        "search_tier": _search_tier(
+            technique_id, strategy_id, family_id, inference_engine,
+        ),
         "detector_id": detector_id,
         "implementation_status": implementation_status,
         "abstract": bool(abstract),
@@ -1045,10 +1116,68 @@ _CATALOG_ROWS = (
         aliases=_aliases("APE"), proof_metric_profile=FORCING_METRICS,
     ),
     _entry(
+        "exclusion.aligned_pair.type2",
+        "Aligned Pair Exclusion Type 2", 6.3,
+        "exclusion", "uniqueness_exclusion", "aligned_pair_exclusion",
+        aliases=_aliases("APE Type 2", "Non-Aligned Pair Exclusion"),
+        rating_kind="pseudo_se", proof_metric_profile=FORCING_METRICS,
+    ),
+    _entry(
         "exclusion.aligned_triple", "Aligned Triplet Exclusion", 7.5,
         "exclusion", "uniqueness_exclusion", "aligned_triplet_exclusion",
         aliases=_aliases("ATE"), rating_kind="pseudo_se",
         proof_metric_profile=FORCING_METRICS,
+    ),
+    _entry(
+        "exclusion.aligned_set", "Generalized Aligned Exclusion", 7.8,
+        "exclusion", "uniqueness_exclusion",
+        "generalized_aligned_exclusion",
+        aliases=_aliases("Generalized Subset Exclusion"),
+        rating_kind="pseudo_se", proof_metric_profile=FORCING_METRICS,
+    ),
+    _entry(
+        "pattern.jexocet", "Junior Exocet", 7.9,
+        "exocet", "uniqueness_exclusion", None,
+        aliases=_aliases("jExocet"), rating_kind="project",
+        inference_engine="exocet", implementation_status="planned",
+        abstract=True,
+    ),
+    _entry(
+        "pattern.jexocet.rule1", "Junior Exocet Rule 1", 7.9,
+        "exocet", "uniqueness_exclusion", "junior_exocet",
+        parent_id="pattern.jexocet", rating_kind="project",
+        inference_engine="exocet", proof_metric_profile=FORCING_METRICS,
+    ),
+    _entry(
+        "pattern.jexocet.compatible_digit",
+        "Junior Exocet Compatible Digit Check", 8.0,
+        "exocet", "uniqueness_exclusion", None,
+        parent_id="pattern.jexocet", rating_kind="project",
+        inference_engine="exocet", implementation_status="planned",
+    ),
+    _entry(
+        "pattern.jexocet.rule3", "Junior Exocet Rule 3", 8.0,
+        "exocet", "uniqueness_exclusion", None,
+        parent_id="pattern.jexocet", rating_kind="project",
+        inference_engine="exocet", implementation_status="planned",
+    ),
+    _entry(
+        "pattern.jexocet.rule4", "Junior Exocet Rule 4", 8.0,
+        "exocet", "uniqueness_exclusion", None,
+        parent_id="pattern.jexocet", rating_kind="project",
+        inference_engine="exocet", implementation_status="planned",
+    ),
+    _entry(
+        "pattern.jexocet.rule5", "Junior Exocet Rule 5", 8.0,
+        "exocet", "uniqueness_exclusion", None,
+        parent_id="pattern.jexocet", rating_kind="project",
+        inference_engine="exocet", implementation_status="planned",
+    ),
+    _entry(
+        "pattern.jexocet.rule8", "Junior Exocet Rule 8", 8.0,
+        "exocet", "uniqueness_exclusion", None,
+        parent_id="pattern.jexocet", rating_kind="project",
+        inference_engine="exocet", implementation_status="planned",
     ),
 
     # Forcing ordinary.
@@ -1187,6 +1316,13 @@ _CATALOG_ROWS = (
         "dynamic_forcing", "dynamic_forcing", "dynamic_forcing_chain_plus",
         engine_type="logic", abstract=True,
         proof_metric_profile=FORCING_METRICS,
+    ),
+    _entry(
+        "forcing.bowmans_bingo", "Bowman's Bingo", 9.4,
+        "forcing_nets", "multiple_forcing", "bowmans_bingo",
+        aliases=_aliases("Bowmans Bingo"), rating_kind="project",
+        engine_type="logic", inference_engine="dynamic",
+        proof_metric_profile=NET_METRICS,
     ),
 
     # Le vere Nested restano un livello distinto dalla ricerca esaustiva.
@@ -1328,6 +1464,10 @@ def validate_catalog(definitions=TECHNIQUE_DEFINITIONS):
         if definition.fallback_tier not in (0, 1, 2):
             raise CatalogValidationError(
                 f"Fallback tier non valido per {definition.id!r}."
+            )
+        if definition.search_tier not in SEARCH_TIERS:
+            raise CatalogValidationError(
+                f"Search tier non valido per {definition.id!r}."
             )
         if definition.implementation_status not in IMPLEMENTATION_STATUSES:
             raise CatalogValidationError(
@@ -1610,6 +1750,10 @@ TECHNIQUE_STRATEGY = {
     ]
     for definition in TECHNIQUE_DEFINITIONS
 }
+TECHNIQUE_SEARCH_TIER = {
+    definition.id: definition.search_tier
+    for definition in TECHNIQUE_DEFINITIONS
+}
 FAMILY_TO_STRATEGY = {
     FAMILY_DISPLAY_NAMES_IT[definition.family_id]: (
         STRATEGY_DISPLAY_NAMES_IT[definition.strategy_id]
@@ -1651,6 +1795,8 @@ __all__ = [
     "LEGACY_TECHNIQUE_ALIASES",
     "MODERN_TECHNIQUE_PARENT",
     "RATING_KINDS",
+    "SEARCH_TIERS",
+    "SEARCH_TIER_NAMES_IT",
     "STRATEGY_DISPLAY_NAMES_IT",
     "TECHNIQUE_BY_CANONICAL_NAME",
     "TECHNIQUE_BY_ID",
@@ -1664,6 +1810,7 @@ __all__ = [
     "TECHNIQUE_FAMILY_ORDER",
     "TECHNIQUE_IDS_BY_DETECTOR",
     "TECHNIQUE_ORDER",
+    "TECHNIQUE_SEARCH_TIER",
     "TECHNIQUE_STRATEGY",
     "TECHNIQUE_STRATEGY_ORDER",
     "TechniqueAlias",

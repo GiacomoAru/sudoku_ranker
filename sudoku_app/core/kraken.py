@@ -7,15 +7,20 @@ from dataclasses import dataclass, replace
 from . import fish as fish_engine
 from . import logic_engine
 from . import proof
+from . import search_config
 from .data_structure import UNITS
 
 
 Candidate = tuple[int, int, int]
 
-DEFAULT_MAX_KRAKEN_PATTERNS = 64
-DEFAULT_MAX_KRAKEN_PATH_ATTEMPTS = 512
-DEFAULT_MAX_KRAKEN_RESULTS = 16
-DEFAULT_MAX_KRAKEN_PATH_EDGES = 12
+DEFAULT_MAX_KRAKEN_PATTERNS = search_config.LIMITED_SEARCH_LIMITS.kraken_patterns
+DEFAULT_MAX_KRAKEN_PATH_ATTEMPTS = (
+    search_config.LIMITED_SEARCH_LIMITS.kraken_path_attempts
+)
+DEFAULT_MAX_KRAKEN_RESULTS = search_config.LIMITED_SEARCH_LIMITS.kraken_results
+DEFAULT_MAX_KRAKEN_PATH_EDGES = (
+    search_config.LIMITED_SEARCH_LIMITS.kraken_path_edges
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,7 +245,14 @@ class KrakenDeduction:
         )
 
 
-def _candidate_patterns(state, *, max_patterns):
+def _candidate_patterns(
+    state,
+    *,
+    max_patterns,
+    max_fins=3,
+    max_endo_fins=1,
+    max_fish_results=8,
+):
     seen = set()
     emitted = 0
     for size in (2, 3, 4):
@@ -256,9 +268,9 @@ def _candidate_patterns(state, *, max_patterns):
                     base_types,
                     cover_types,
                     accepted_classes=("basic",),
-                    max_fins=3,
-                    max_endo_fins=1,
-                    max_results=8,
+                    max_fins=max_fins,
+                    max_endo_fins=max_endo_fins,
+                    max_results=max_fish_results,
                     require_direct_elimination=False,
                 ):
                     pattern = deduction.pattern
@@ -276,7 +288,7 @@ def _candidate_patterns(state, *, max_patterns):
                     seen.add(signature)
                     yield deduction
                     emitted += 1
-                    if emitted >= max_patterns:
+                    if max_patterns is not None and emitted >= max_patterns:
                         return
 
 
@@ -286,35 +298,55 @@ def find_kraken(
     max_results: int = DEFAULT_MAX_KRAKEN_RESULTS,
     max_patterns: int = DEFAULT_MAX_KRAKEN_PATTERNS,
     max_path_attempts: int = DEFAULT_MAX_KRAKEN_PATH_ATTEMPTS,
+    max_path_edges: int | None = DEFAULT_MAX_KRAKEN_PATH_EDGES,
+    max_fins: int | None = 3,
+    max_endo_fins: int | None = 1,
+    max_fish_results: int | None = 8,
+    truncated_out: list | None = None,
 ) -> tuple[KrakenDeduction, ...]:
-    """Cerca Type 1 e Type 2 solo se ogni possibilità ha una prova AIC."""
-    max_results = max(1, int(max_results))
-    max_patterns = max(1, int(max_patterns))
-    max_path_attempts = max(1, int(max_path_attempts))
+    """Cerca Type 1 e Type 2 solo se ogni possibilità ha una prova AIC.
+
+    Se ``truncated_out`` e' una lista, vi vengono aggiunti i codici dei
+    budget che hanno interrotto la ricerca, anche quando non esiste alcuna
+    deduzione restituita.
+    """
+    if max_results is not None:
+        max_results = max(1, int(max_results))
+    if max_patterns is not None:
+        max_patterns = max(1, int(max_patterns))
+    if max_path_attempts is not None:
+        max_path_attempts = max(1, int(max_path_attempts))
     graph = logic_engine.static_implication_graph(state)
     results = []
     patterns = 0
     attempts = 0
-    truncated = False
+    truncated_reasons = set()
     seen = set()
 
     def prove(possibilities, target):
-        nonlocal attempts, truncated
+        nonlocal attempts
         paths = []
         reasons = []
         supports = []
         for possibility in possibilities:
-            if attempts >= max_path_attempts:
-                truncated = True
+            if (
+                max_path_attempts is not None
+                and attempts >= max_path_attempts
+            ):
+                truncated_reasons.add("kraken_max_path_attempts")
                 return None
             attempts += 1
+            path_truncated = []
             path_data = graph.shortest_path(
                 (*possibility, True),
                 (*target, False),
                 allowed=frozenset({"peer", "x", "y"}),
                 minimum_edges=3,
-                maximum_edges=DEFAULT_MAX_KRAKEN_PATH_EDGES,
+                maximum_edges=max_path_edges,
+                truncated_out=path_truncated,
             )
+            if path_truncated:
+                truncated_reasons.add("kraken_max_path_edges")
             if path_data is None:
                 return None
             path, path_reasons = path_data
@@ -323,7 +355,13 @@ def find_kraken(
             supports.append(tuple(graph.chain_supports(path, path_reasons)))
         return tuple(paths), tuple(reasons), tuple(supports)
 
-    for fish in _candidate_patterns(state, max_patterns=max_patterns):
+    for fish in _candidate_patterns(
+        state,
+        max_patterns=max_patterns,
+        max_fins=max_fins,
+        max_endo_fins=max_endo_fins,
+        max_fish_results=max_fish_results,
+    ):
         patterns += 1
         pattern = fish.pattern
         targets = tuple(sorted(
@@ -349,7 +387,10 @@ def find_kraken(
                         fins,
                         *path_data,
                     ))
-            if len(results) >= max_results or truncated:
+            if (
+                max_results is not None and len(results) >= max_results
+                or "kraken_max_path_attempts" in truncated_reasons
+            ):
                 break
 
             for cover_set in pattern.cover_sets:
@@ -387,15 +428,27 @@ def find_kraken(
                     *path_data,
                     cover_set=cover_set,
                 ))
-                if len(results) >= max_results:
+                if max_results is not None and len(results) >= max_results:
+                    truncated_reasons.add("kraken_result_limit")
                     break
-            if len(results) >= max_results or truncated:
+            if (
+                max_results is not None and len(results) >= max_results
+                or "kraken_max_path_attempts" in truncated_reasons
+            ):
                 break
-        if len(results) >= max_results or truncated:
+        if (
+            max_results is not None and len(results) >= max_results
+            or "kraken_max_path_attempts" in truncated_reasons
+        ):
             break
 
-    if patterns >= max_patterns:
-        truncated = True
+    if max_patterns is not None and patterns >= max_patterns:
+        truncated_reasons.add("kraken_max_patterns")
+    if max_results is not None and len(results) >= max_results:
+        truncated_reasons.add("kraken_result_limit")
+    if truncated_out is not None:
+        truncated_out.extend(sorted(truncated_reasons))
+    truncated = bool(truncated_reasons)
     return tuple(
         replace(
             deduction,

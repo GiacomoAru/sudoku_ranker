@@ -38,6 +38,25 @@ class AICEngineTests(unittest.TestCase):
         self.assertEqual(edge.support_candidates, ((0, 0, 1), (0, 1, 1)))
         self.assertEqual(edge.support_house_ids, (0, 18))
 
+    def test_static_path_limit_reports_a_typed_truncation(self):
+        state = synthetic_state({
+            (0, 0): {1},
+            (0, 1): {1},
+        })
+        graph = logic_engine.static_implication_graph(state)
+        truncated_out = []
+
+        path = graph.shortest_path(
+            (0, 0, 1, False),
+            (0, 1, 1, False),
+            allowed=frozenset({"x", "y", "peer"}),
+            maximum_edges=0,
+            truncated_out=truncated_out,
+        )
+
+        self.assertIsNone(path)
+        self.assertEqual(truncated_out, ["max_static_cycle_edges"])
+
     def test_edge_support_is_authoritative_and_chain_links_are_derived(self):
         state = synthetic_state({
             (0, 8): {1},
@@ -62,6 +81,48 @@ class AICEngineTests(unittest.TestCase):
 
         restored = proof.ProofDAG.from_dict(dag.to_dict())
         self.assertEqual(restored.signature(), dag.signature())
+
+    def test_logic_metadata_reaches_detector_adapter(self):
+        state = synthetic_state({
+            (0, 8): {1},
+            (0, 4): {1},
+            (3, 4): {1},
+            (3, 7): {1},
+            (1, 7): {1},
+        })
+
+        moves = techniques.forcing_x_chain(state)
+        metadata = techniques.detector_search_metadata(
+            state,
+            "forcing_x_chain",
+        )
+
+        self.assertIsInstance(moves, list)
+        self.assertIn("completion", metadata)
+        self.assertIn("truncated_reasons", metadata)
+
+    def test_logic_result_limit_has_a_typed_reason(self):
+        state = synthetic_state({
+            (0, 8): {1},
+            (0, 4): {1},
+            (3, 4): {1},
+            (3, 7): {1},
+            (1, 7): {1},
+        })
+
+        deductions = logic_engine.find_logic_deductions(
+            state,
+            "Forcing X-Chain",
+            max_results=1,
+        )
+        metadata = logic_engine.logic_search_metadata(
+            state,
+            "Forcing X-Chain",
+        )
+
+        self.assertEqual(len(deductions), 1)
+        self.assertEqual(metadata["completion"], "truncated")
+        self.assertIn("logic_result_limit", metadata["truncated_reasons"])
 
     def test_x_chain_is_classified_from_one_digit_endpoints(self):
         state = synthetic_state({

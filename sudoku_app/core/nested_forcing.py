@@ -9,22 +9,25 @@ puo' quindi essere classificata Nested.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from . import proof
+from . import search_config
 
 
 Candidate = tuple[int, int, int]
 Literal = tuple[int, int, int, bool]
 
-MAX_NESTED_DEPTH = 2
-MAX_NESTED_PROOF_NODES = 512
-MAX_NESTED_BRANCHES = 64
-MAX_NESTED_SUBPROOFS = 32
-MAX_NESTED_RESULTS = 2
-MAX_NESTED_PROOF_ATTEMPTS = 512
-MAX_NESTED_PREDECESSOR_EDGES = 4
-NESTED_RULE_PROFILE_ID = "p16-dynamic-subchain-v1"
+MAX_NESTED_DEPTH = search_config.LIMITED_SEARCH_LIMITS.nested_depth
+MAX_NESTED_PROOF_NODES = search_config.LIMITED_SEARCH_LIMITS.nested_proof_nodes
+MAX_NESTED_BRANCHES = search_config.LIMITED_SEARCH_LIMITS.nested_branches
+MAX_NESTED_SUBPROOFS = search_config.LIMITED_SEARCH_LIMITS.nested_subproofs
+MAX_NESTED_RESULTS = search_config.LIMITED_SEARCH_LIMITS.nested_results
+MAX_NESTED_PROOF_ATTEMPTS = search_config.LIMITED_SEARCH_LIMITS.nested_attempts
+MAX_NESTED_PREDECESSOR_EDGES = (
+    search_config.LIMITED_SEARCH_LIMITS.nested_predecessor_edges
+)
+NESTED_RULE_PROFILE_ID = search_config.NESTED_LEVEL_2_PROFILE.id
 
 
 def _literal_key(literal):
@@ -57,30 +60,44 @@ def _fingerprint(grid, candidates):
 
 @dataclass(slots=True)
 class NestedBudget:
+    rule_profile_id: str = NESTED_RULE_PROFILE_ID
     max_depth: int = MAX_NESTED_DEPTH
-    max_nodes: int = MAX_NESTED_PROOF_NODES
-    max_branches: int = MAX_NESTED_BRANCHES
-    max_subproofs: int = MAX_NESTED_SUBPROOFS
-    max_results: int = MAX_NESTED_RESULTS
-    max_attempts: int = MAX_NESTED_PROOF_ATTEMPTS
+    max_nodes: int | None = MAX_NESTED_PROOF_NODES
+    max_branches: int | None = MAX_NESTED_BRANCHES
+    max_subproofs: int | None = MAX_NESTED_SUBPROOFS
+    max_results: int | None = MAX_NESTED_RESULTS
+    max_attempts: int | None = MAX_NESTED_PROOF_ATTEMPTS
     branches_used: int = 0
     proof_nodes_used: int = 0
     subproofs_used: int = 0
     attempts_used: int = 0
     truncated: bool = False
+    halted: bool = False
+    truncated_reasons: set[str] = field(default_factory=set)
+
+    def truncate(self, reason, *, halt=False):
+        self.truncated = True
+        self.halted = self.halted or bool(halt)
+        self.truncated_reasons.add(str(reason))
 
     def take_attempt(self, count=1):
         count = max(0, int(count))
-        if self.attempts_used + count > self.max_attempts:
-            self.truncated = True
+        if (
+            self.max_attempts is not None
+            and self.attempts_used + count > self.max_attempts
+        ):
+            self.truncate("nested_max_attempts", halt=True)
             return False
         self.attempts_used += count
         return True
 
     def take_branch(self, count=1):
         count = max(0, int(count))
-        if self.branches_used + count > self.max_branches:
-            self.truncated = True
+        if (
+            self.max_branches is not None
+            and self.branches_used + count > self.max_branches
+        ):
+            self.truncate("nested_max_branches", halt=True)
             return False
         self.branches_used += count
         return True
@@ -90,10 +107,16 @@ class NestedBudget:
         proof_nodes = metrics["proof_node_count"]
         subproofs = 1 + metrics["nested_subproof_count"]
         if (
-            self.subproofs_used + subproofs > self.max_subproofs
-            or self.proof_nodes_used + proof_nodes > self.max_nodes
+            self.max_subproofs is not None
+            and self.subproofs_used + subproofs > self.max_subproofs
         ):
-            self.truncated = True
+            self.truncate("nested_max_subproofs", halt=True)
+            return False
+        if (
+            self.max_nodes is not None
+            and self.proof_nodes_used + proof_nodes > self.max_nodes
+        ):
+            self.truncate("nested_max_proof_nodes", halt=True)
             return False
         self.subproofs_used += subproofs
         self.proof_nodes_used += proof_nodes
@@ -112,7 +135,9 @@ class NestedBudget:
             "subproofs_used": self.subproofs_used,
             "attempts_used": self.attempts_used,
             "truncated": self.truncated,
-            "rule_profile_id": NESTED_RULE_PROFILE_ID,
+            "halted": self.halted,
+            "truncated_reasons": sorted(self.truncated_reasons),
+            "rule_profile_id": self.rule_profile_id,
         }
 
 
@@ -135,10 +160,11 @@ def _node_kind(reason, parents):
 
 
 class _DAGAssembler:
-    def __init__(self):
+    def __init__(self, rule_profile_id=NESTED_RULE_PROFILE_ID):
         self.nodes = {}
         self.nested_proofs = {}
         self.next_id = 0
+        self.rule_profile_id = str(rule_profile_id)
 
     def add(self, kind, conclusion, parents=(), reason="unspecified", payload=None):
         parents = tuple(dict.fromkeys(int(parent) for parent in parents))
@@ -201,7 +227,7 @@ class _DAGAssembler:
                     payload={
                         "branch_index": branch_index,
                         "node_type": "nested-inference",
-                        "rule_profile_id": NESTED_RULE_PROFILE_ID,
+                        "rule_profile_id": self.rule_profile_id,
                         "subproof_kind": substitute.proof_kind,
                         "chain_terminal": False,
                         "presentation": True,
@@ -267,7 +293,7 @@ class _DAGAssembler:
             payload={
                 "branch_index": branch_index,
                 "node_type": "nested-inference",
-                "rule_profile_id": NESTED_RULE_PROFILE_ID,
+                "rule_profile_id": self.rule_profile_id,
                 "subproof_kind": nested.proof_kind,
                 "chain_terminal": True,
                 "presentation": True,
@@ -290,12 +316,27 @@ class _DAGAssembler:
 class NestedForcingEngine:
     """Ricerca locale e limitata di forcing chain con vere sottoprove."""
 
-    def __init__(self, grid, candidates):
+    def __init__(
+        self,
+        grid,
+        candidates,
+        *,
+        inference_profile=None,
+        search_limits=None,
+    ):
         # Import tardivo: logic_engine crea questa classe soltanto dopo avere
         # completato il proprio import, evitando un modulo parallelo del DAG.
         from . import logic_engine
 
         self.logic_engine = logic_engine
+        self.inference_profile = search_config.inference_profile(
+            inference_profile or search_config.NESTED_LEVEL_2_PROFILE
+        )
+        if not self.inference_profile.allow_nested_subproofs:
+            raise ValueError(
+                "Il motore Nested richiede un profilo con sottoprove."
+            )
+        self.search_limits = search_config.search_limits(search_limits)
         self.grid = grid.copy()
         self.candidates = {
             cell: set(values) for cell, values in candidates.items()
@@ -337,13 +378,13 @@ class NestedForcingEngine:
 
     def _propagate(self, assumptions):
         assumptions = self._normalise_assumptions(assumptions)
-        key = assumptions, NESTED_RULE_PROFILE_ID
+        key = assumptions, self.inference_profile.id
         if key not in self._propagation_cache:
             self._propagation_cache[key] = (
                 self.propagator.propagate_assumptions(
                     assumptions,
                     mode="dynamic",
-                    advanced_level=0,
+                    inference_profile=self.inference_profile,
                 )
             )
         return self._propagation_cache[key]
@@ -354,7 +395,7 @@ class NestedForcingEngine:
         used = set(result.proof_literals(targets))
         return set(assumptions) <= used
 
-    def _logical_predecessors(self, target):
+    def _logical_predecessors(self, target, budget=None):
         """Letterali locali che possono concorrere direttamente al target.
 
         Non si scelgono celle residue arbitrarie. Si parte dai predecessori
@@ -402,7 +443,12 @@ class NestedForcingEngine:
 
         frontier = {target}
         visited = {target}
-        for _ in range(MAX_NESTED_PREDECESSOR_EDGES):
+        edge_limit = self.search_limits.nested_predecessor_edges
+        edge_count = 0
+        while frontier and (
+            edge_limit is None or edge_count < edge_limit
+        ):
+            edge_count += 1
             next_frontier = set()
             for literal in frontier:
                 for source in self._reverse_static.get(literal, ()):
@@ -414,6 +460,12 @@ class NestedForcingEngine:
             if not next_frontier:
                 break
             frontier = next_frontier
+        if edge_limit is not None and budget is not None and any(
+            source not in visited
+            for literal in frontier
+            for source in self._reverse_static.get(literal, ())
+        ):
+            budget.truncate("nested_max_predecessor_edges")
         return tuple(sorted(predecessors, key=_literal_key))
 
     @staticmethod
@@ -423,10 +475,17 @@ class NestedForcingEngine:
         metrics = value.dag.metrics()
         if (
             metrics["nested_depth"] > budget.max_depth - 1
-            or 1 + metrics["nested_subproof_count"] > budget.max_subproofs
-            or metrics["proof_node_count"] > budget.max_nodes
+            or (
+                budget.max_subproofs is not None
+                and 1 + metrics["nested_subproof_count"]
+                > budget.max_subproofs
+            )
+            or (
+                budget.max_nodes is not None
+                and metrics["proof_node_count"] > budget.max_nodes
+            )
         ):
-            budget.truncated = True
+            budget.truncate("nested_subproof_structure_limit", halt=True)
             return None
         return value
 
@@ -443,7 +502,7 @@ class NestedForcingEngine:
             assumptions,
             target,
             remaining_depth,
-            NESTED_RULE_PROFILE_ID,
+            self.inference_profile.id,
         )
         if key in self._proof_memo:
             cached = self._proof_memo[key]
@@ -499,9 +558,12 @@ class NestedForcingEngine:
 
             # Profondita' 2: una sottoprova puo' a sua volta giustificare
             # una singola inferenza intermedia usata per raggiungere target.
-            if remaining_depth > 1 and not budget.truncated:
+            if remaining_depth > 1 and not budget.halted:
                 base_literals = set(base.literals) | set(assumptions)
-                for intermediate in self._logical_predecessors(target):
+                for intermediate in self._logical_predecessors(
+                    target,
+                    budget,
+                ):
                     if (
                         intermediate in base_literals
                         or intermediate in {target, opposite}
@@ -524,7 +586,7 @@ class NestedForcingEngine:
                     )
                     if nested is None:
                         continue
-                    assembler = _DAGAssembler()
+                    assembler = _DAGAssembler(self.inference_profile.id)
                     terminal = assembler.add_result_path(
                         augmented,
                         (target,),
@@ -549,6 +611,11 @@ class NestedForcingEngine:
                     )
                     self._proof_memo[key] = result
                     return self._valid_subproof(result, budget)
+            elif remaining_depth == 1 and self._logical_predecessors(
+                target,
+                budget,
+            ):
+                budget.truncate("nested_max_depth")
 
             if natural_failure:
                 self._proof_memo[key] = None
@@ -571,8 +638,14 @@ class NestedForcingEngine:
             metrics["nested_depth"] < 1
             or metrics["nested_depth"] > budget.max_depth
             or metrics["nested_subproof_count"] < 1
-            or metrics["nested_subproof_count"] > budget.max_subproofs
-            or metrics["proof_node_count"] > budget.max_nodes
+            or (
+                budget.max_subproofs is not None
+                and metrics["nested_subproof_count"] > budget.max_subproofs
+            )
+            or (
+                budget.max_nodes is not None
+                and metrics["proof_node_count"] > budget.max_nodes
+            )
         ):
             return None
         return proof.logic_payload(
@@ -581,7 +654,12 @@ class NestedForcingEngine:
             reasons=(node.reason for node in dag.nodes.values()),
             extra={
                 "nested_search": budget.to_dict(),
-                "rule_profile_id": NESTED_RULE_PROFILE_ID,
+                "rule_profile_id": self.inference_profile.id,
+                "inference_profile_id": self.inference_profile.id,
+                "inference_rules_used": [
+                    "dynamic-singles",
+                    "nested-subproofs",
+                ],
                 "complete": False,
                 "exhaustive": False,
             },
@@ -601,7 +679,7 @@ class NestedForcingEngine:
         }
 
     def _common_dag(self, branches, target, *, action):
-        assembler = _DAGAssembler()
+        assembler = _DAGAssembler(self.inference_profile.id)
         terminals = []
         for branch_index, (result, nested) in enumerate(branches):
             if target in result.literals:
@@ -674,7 +752,7 @@ class NestedForcingEngine:
                     continue
                 branches = self._try_common(outcomes, target, budget)
                 if branches is None:
-                    if budget.truncated:
+                    if budget.halted:
                         return results
                     continue
                 action = "placement" if target[3] else "elimination"
@@ -690,7 +768,7 @@ class NestedForcingEngine:
                 )
                 if deduction is not None:
                     results.append(deduction)
-                if len(results) >= max_results or budget.truncated:
+                if len(results) >= max_results or budget.halted:
                     return results
         return results
 
@@ -717,14 +795,16 @@ class NestedForcingEngine:
                             budget=budget,
                         )
                         if nested is None:
-                            if budget.truncated:
+                            if budget.halted:
                                 return results
                             continue
                         if not budget.take_subproof(nested.dag):
                             return results
                         if not budget.take_branch():
                             return results
-                        assembler = _DAGAssembler()
+                        assembler = _DAGAssembler(
+                            self.inference_profile.id
+                        )
                         terminal = assembler.add_result_path(
                             augmented,
                             augmented.contradiction_literals,
@@ -755,7 +835,7 @@ class NestedForcingEngine:
                         )
                         if deduction is not None:
                             results.append(deduction)
-                        if len(results) >= max_results or budget.truncated:
+                        if len(results) >= max_results or budget.halted:
                             return results
         return results
 
@@ -804,7 +884,7 @@ class NestedForcingEngine:
                     continue
                 branches = self._try_common(outcomes, target, budget)
                 if branches is None:
-                    if budget.truncated:
+                    if budget.halted:
                         return results
                     continue
                 action = "placement" if target[3] else "elimination"
@@ -820,13 +900,40 @@ class NestedForcingEngine:
                 )
                 if deduction is not None:
                     results.append(deduction)
-                if len(results) >= max_results or budget.truncated:
+                if len(results) >= max_results or budget.halted:
                     return results
         return results
 
-    def find_deductions(self, max_results=MAX_NESTED_RESULTS):
-        max_results = min(max(1, int(max_results)), MAX_NESTED_RESULTS)
-        budget = NestedBudget(max_results=max_results)
+    def find_deductions(
+        self,
+        max_results=None,
+        truncated_out=None,
+    ):
+        configured_results = self.search_limits.nested_results
+        if max_results is None:
+            max_results = configured_results
+        elif configured_results is not None:
+            max_results = min(int(max_results), configured_results)
+        if max_results is None:
+            # Ogni candidato puo' produrre al massimo un placement e una
+            # eliminazione distinti. Questo e' il confine finito dello stato,
+            # non un budget di ricerca.
+            max_results = max(1, 2 * len(self.all_candidates))
+        max_results = max(1, int(max_results))
+
+        max_depth = self.inference_profile.max_nested_depth
+        configured_depth = self.search_limits.nested_depth
+        if configured_depth is not None:
+            max_depth = min(max_depth, configured_depth)
+        budget = NestedBudget(
+            rule_profile_id=self.inference_profile.id,
+            max_depth=max_depth,
+            max_nodes=self.search_limits.nested_proof_nodes,
+            max_branches=self.search_limits.nested_branches,
+            max_subproofs=self.search_limits.nested_subproofs,
+            max_results=configured_results,
+            max_attempts=self.search_limits.nested_attempts,
+        )
         results = []
         finders = (
             self._double_deductions,
@@ -840,7 +947,7 @@ class NestedForcingEngine:
         )
         seen = set()
         for finder in finders:
-            if len(results) >= max_results or budget.truncated:
+            if len(results) >= max_results or budget.halted:
                 break
             for deduction in finder(
                 budget,
@@ -855,7 +962,10 @@ class NestedForcingEngine:
                 seen.add(signature)
                 results.append(deduction)
                 if len(results) >= max_results:
+                    budget.truncate("nested_result_limit")
                     break
+        if truncated_out is not None:
+            truncated_out.extend(sorted(budget.truncated_reasons))
         return results
 
 

@@ -10,13 +10,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from . import proof
+from . import search_config
 
 
 Candidate = tuple[int, int, int]
 Cell = tuple[int, int]
 
-DEFAULT_MAX_TEMPLATES_PER_DIGIT = 100_000
-DEFAULT_MAX_TEMPLATE_RESULTS = 16
+DEFAULT_MAX_TEMPLATES_PER_DIGIT = (
+    search_config.LIMITED_SEARCH_LIMITS.templates_per_digit
+)
+DEFAULT_MAX_TEMPLATE_RESULTS = (
+    search_config.LIMITED_SEARCH_LIMITS.template_results
+)
 
 
 def _cell_bit(row: int, column: int) -> int:
@@ -180,10 +185,11 @@ def enumerate_digit_templates(
 ) -> TemplateEnumeration:
     """Enumera configurazioni riga/colonna/box compatibili per una cifra."""
     digit = int(digit)
-    max_templates = int(max_templates)
+    if max_templates is not None:
+        max_templates = int(max_templates)
     if digit not in range(1, 10):
         raise ValueError("digit deve essere compreso tra 1 e 9.")
-    if max_templates < 1:
+    if max_templates is not None and max_templates < 1:
         raise ValueError("max_templates deve essere positivo.")
 
     candidate_mask = 0
@@ -229,7 +235,10 @@ def enumerate_digit_templates(
         if truncated:
             return
         if row == 9:
-            if template_count >= max_templates:
+            if (
+                max_templates is not None
+                and template_count >= max_templates
+            ):
                 truncated = True
                 return
             template_count += 1
@@ -269,14 +278,24 @@ def find_templates(
     *,
     max_results: int = DEFAULT_MAX_TEMPLATE_RESULTS,
     max_templates: int = DEFAULT_MAX_TEMPLATES_PER_DIGIT,
+    truncated_out: list | None = None,
 ) -> tuple[TemplateDeduction, ...]:
-    """Restituisce soltanto deduzioni basate su enumerazioni complete."""
-    max_results = max(1, int(max_results))
+    """Restituisce soltanto deduzioni basate su enumerazioni complete.
+
+    Se ``truncated_out`` e' una lista, vi vengono aggiunti codici stabili
+    per ogni budget che ha impedito di completare l'inventario.
+    """
+    if max_results is not None:
+        max_results = max(1, int(max_results))
     deductions = []
     for digit in range(1, 10):
         enumeration = enumerate_digit_templates(
             state, digit, max_templates=max_templates
         )
+        if enumeration.truncated and truncated_out is not None:
+            truncated_out.append(
+                f"templates_max_configurations_digit_{digit}"
+            )
         if (
             enumeration.truncated
             or not enumeration.template_count
@@ -284,7 +303,9 @@ def find_templates(
         ):
             continue
         deductions.append(TemplateDeduction(enumeration))
-        if len(deductions) >= max_results:
+        if max_results is not None and len(deductions) >= max_results:
+            if digit < 9 and truncated_out is not None:
+                truncated_out.append("templates_result_limit")
             break
     return tuple(deductions)
 
